@@ -91,7 +91,6 @@ static inline void add_send_req(HMPI_Request *req, int tid) {
       next = req->next = reqinfo->reqs;
   } while(!CAS_PTR_BOOL(&reqinfo->reqs, next, req));
 
-
 #if 0
   send_req_info_t* reqinfo = &g_send_reqs[tid];
 
@@ -1314,6 +1313,8 @@ int HMPI_Gather(void* sendbuf, int sendcount, MPI_Datatype sendtype, void* recvb
 }
 
 
+#define HMPI_ALLTOALL_TAG 7546347
+
 int HMPI_Alltoall(void* sendbuf, int sendcount, MPI_Datatype sendtype, void* recvbuf, int recvcount, MPI_Datatype recvtype, HMPI_Comm comm) 
 {
   MPI_Aint send_extent, recv_extent, lb;
@@ -1321,6 +1322,10 @@ int HMPI_Alltoall(void* sendbuf, int sendcount, MPI_Datatype sendtype, void* rec
   int32_t send_size;
   int32_t recv_size;
   uint64_t size;
+  MPI_Request* send_reqs;
+  MPI_Request* recv_reqs;
+  MPI_Datatype dt_send;
+  MPI_Datatype dt_recv;
 
   MPI_Type_size(sendtype, &send_size);
   MPI_Type_size(recvtype, &recv_size);
@@ -1344,16 +1349,48 @@ int HMPI_Alltoall(void* sendbuf, int sendcount, MPI_Datatype sendtype, void* rec
   //TODO how do I change this to have each thread do local copies?
   // Maybe I should even just use a bunch of sends and receives.
   //  Then we do P*T sends and receives
-  // Could go in between and build a data structure to allow one send/recv
+  // Could go in between and build a MPI datatype to allow one send/recv
   //  per other process.
+
+  //Each thread memcpy's into a single send buffer
+  //Root thread creates contiguous datatypes to span each thread, then does alltoall
+  //Each thread memcpy's out of a single receive buffer
+
+  //Can use alltoallv, or replace it with sends/receives.
+  //Either way:
+  // Thread 0 mallocs shared buffer?
 
   uint64_t comm_size = g_nthreads * g_size;
   uint64_t data_size = send_size * sendcount;
 
+  comm->sbuf[g_tl_tid] = sendbuf;
+
   //Alloc a temp buffer
   if(g_tl_tid == 0) {
-      comm->sbuf[0] = memalign(4096, data_size * g_nthreads * comm_size);
-      comm->rbuf[0] = memalign(4096, data_size * g_nthreads * comm_size);
+      comm->mpi_sbuf = memalign(4096, data_size * g_nthreads * comm_size);
+      comm->mpi_rbuf = memalign(4096, data_size * g_nthreads * comm_size);
+
+      send_reqs = (MPI_Request*)malloc(sizeof(MPI_Request) * g_size);
+      recv_reqs = (MPI_Request*)malloc(sizeof(MPI_Request) * g_size);
+
+      //Seems like we should multiply by comm_size, but alltoall already
+      // assumes one element per process.  We do have g_nthreads per process
+      // though, so we multiply by that.
+      MPI_Type_contiguous(sendcount * g_nthreads * g_nthreads, sendtype, &dt_send);
+      MPI_Type_commit(&dt_send);
+
+      MPI_Type_contiguous(recvcount * g_nthreads * g_nthreads, recvtype, &dt_recv);
+      MPI_Type_commit(&dt_recv);
+
+      //Post receives
+      int len = data_size * g_nthreads * g_nthreads;
+      for(int i = 0; i < g_size; i++) {
+          if(i != g_rank) {
+              MPI_Irecv((void*)((uintptr_t)comm->mpi_rbuf + (len * i)), 1,
+                      dt_recv, i, HMPI_ALLTOALL_TAG, comm->mpicomm, &recv_reqs[i]);
+          }
+      }
+      recv_reqs[g_rank] = MPI_REQUEST_NULL;
   }
 
   barrier(&comm->barr);
@@ -1365,19 +1402,58 @@ int HMPI_Alltoall(void* sendbuf, int sendcount, MPI_Datatype sendtype, void* rec
   uintptr_t scale = data_size * g_nthreads;
 
   //Verified from (now missing) prints, this is correct
+  //TODO - try staggering
+  // Data is pushed here -- remote thread can't read it
   for(uintptr_t i = 0; i < comm_size; i++) {
-      memcpy((void*)((uintptr_t)(comm->sbuf[0]) + (scale * i) + offset),
-              (void*)((uintptr_t)sendbuf + data_size * i), data_size);
+      if(!HMPI_Comm_local(comm, i)) {
+          //Copy to send buffer to go out over network
+          memcpy((void*)((uintptr_t)(comm->mpi_sbuf) + (scale * i) + offset),
+                  (void*)((uintptr_t)sendbuf + data_size * i), data_size);
+      }
+  }
+
+  //Start sends to each other rank
+  barrier(&comm->barr);
+  barrier_wait(&comm->barr);
+
+  if(g_tl_tid == 0) {
+      int len = data_size * g_nthreads * g_nthreads;
+      for(int i = 1; i < g_size; i++) {
+          int r = (g_rank + i) % g_size;
+          if(r != g_rank) {
+              MPI_Isend((void*)((uintptr_t)comm->mpi_sbuf + (len * r)), 1,
+                      dt_send, r, HMPI_ALLTOALL_TAG, comm->mpicomm, &send_reqs[r]);
+          }
+      }
+
+      send_reqs[g_rank] = MPI_REQUEST_NULL;
+  }
+
+  //Pull local data from other threads' send buffers.
+  //For each thread, memcpy from their send buffer into my receive buffer.
+  int r = g_rank * g_nthreads; //Base rank
+  for(uintptr_t thr = 0; thr < g_nthreads; thr++) {
+      //Note careful use of addition by r to get the right offsets
+      int t = (g_tl_tid + thr) % g_nthreads;
+      memcpy((void*)((uintptr_t)recvbuf + ((r + t) * data_size)),
+             (void*)((uintptr_t)comm->sbuf[t] + ((r + g_tl_tid) * data_size)),
+             data_size);
+  }
+
+  //Wait on sends and receives to complete
+  if(g_tl_tid == 0) {
+      MPI_Waitall(g_size, recv_reqs, MPI_STATUSES_IGNORE);
+      MPI_Waitall(g_size, send_reqs, MPI_STATUSES_IGNORE);
+      MPI_Type_free(&dt_send);
+      MPI_Type_free(&dt_recv);
   }
 
   barrier(&comm->barr);
   barrier_wait(&comm->barr);
 
   //Do the MPI alltoall
+#if 0
   if(g_tl_tid == 0) {
-      MPI_Datatype dt_send;
-      MPI_Datatype dt_recv;
-
       //Seems like we should multiply by comm_size, but alltoall already
       // assumes one element per process.  We do have g_nthreads per process
       // though, so we multiply by that.
@@ -1387,8 +1463,10 @@ int HMPI_Alltoall(void* sendbuf, int sendcount, MPI_Datatype sendtype, void* rec
       MPI_Type_contiguous(recvcount * g_nthreads * g_nthreads, recvtype, &dt_recv);
       MPI_Type_commit(&dt_recv);
 
-      MPI_Alltoall((void*)comm->sbuf[0], 1, dt_send,
-              (void*)comm->rbuf[0], 1, dt_recv, comm->mpicomm);
+      //This should now be alltoallv, with my mpi rank being 0 data,
+      // and 1 for all other ranks... or can i stick with alltoall?  try both
+      MPI_Alltoall((void*)comm->mpi_sbuf, 1, dt_send,
+              (void*)comm->mpi_rbuf, 1, dt_recv, comm->mpicomm);
 
       MPI_Type_free(&dt_send);
       MPI_Type_free(&dt_recv);
@@ -1396,6 +1474,7 @@ int HMPI_Alltoall(void* sendbuf, int sendcount, MPI_Datatype sendtype, void* rec
 
   barrier(&comm->barr);
   barrier_wait(&comm->barr);
+#endif
 
   //Need to do g_size memcpy's -- one block of data per MPI process.
   // We copy g_nthreads * data_size at a time.
@@ -1404,21 +1483,28 @@ int HMPI_Alltoall(void* sendbuf, int sendcount, MPI_Datatype sendtype, void* rec
   size = g_nthreads * data_size;
 
   for(uint64_t i = 0; i < g_size; i++) {
-      memcpy((void*)((uintptr_t)recvbuf + size * i),
-              (void*)((uintptr_t)comm->rbuf[0] + (scale * i) + offset),
-              size);
+      if(i != g_rank) {
+          memcpy((void*)((uintptr_t)recvbuf + size * i),
+                  (void*)((uintptr_t)comm->mpi_rbuf + (scale * i) + offset),
+                  size);
+      }
   }
 
   barrier(&comm->barr);
   barrier_wait(&comm->barr);
 
   if(g_tl_tid == 0) {
-      free((void*)comm->sbuf[0]);
-      free((void*)comm->rbuf[0]);
+      free((void*)comm->mpi_sbuf);
+      free((void*)comm->mpi_rbuf);
+      free(send_reqs);
+      free(recv_reqs);
   }
+
+  return MPI_SUCCESS;
 }
 
 
+#if 0
 int HMPI_Alltoall(void* sendbuf, int sendcount, MPI_Datatype sendtype, void* recvbuf, int recvcount, MPI_Datatype recvtype, HMPI_Comm comm) 
 {
   MPI_Aint send_extent, recv_extent, lb;
@@ -1524,6 +1610,8 @@ int HMPI_Alltoall(void* sendbuf, int sendcount, MPI_Datatype sendtype, void* rec
 //  PROFILE_STOP(g_profile_info[g_tl_tid], alltoall);
   return MPI_SUCCESS;
 }
+#endif
+
 
 int HMPI_Abort( HMPI_Comm comm, int errorcode ) {
   printf("HMPI: user code called MPI_Abort!\n");

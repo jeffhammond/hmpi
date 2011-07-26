@@ -59,13 +59,6 @@ typedef struct {
 typedef pthread_barrier_t barrier_t;
 #endif
 
-#if 0
-typedef struct {
-    volatile void* buf;
-    volatile int count;
-    volatile MPI_Datatype type;
-} HMPI_Data_info;
-#endif
 
 typedef struct {
 /*  volatile void *rootsbuf;
@@ -75,8 +68,6 @@ typedef struct {
   volatile MPI_Datatype rootstype;
   volatile MPI_Datatype rootrtype;
   */
-  //HMPI_Data_info* sinfo;
-  //HMPI_Data_info* rinfo;
   volatile void** sbuf;
   volatile int* scount;
   volatile MPI_Datatype* stype;
@@ -177,7 +168,9 @@ int HMPI_Test(HMPI_Request *request, int *flag, MPI_Status *status);
 int HMPI_Wait(HMPI_Request *request, MPI_Status *status);
 
 int HMPI_Barrier(HMPI_Comm comm);
+
 int HMPI_Allreduce(void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype, MPI_Op op, HMPI_Comm comm);
+
 int HMPI_Bcast(void *buffer, int count, MPI_Datatype datatype, int root, HMPI_Comm comm);
 
 int HMPI_Scatter(void* sendbuf, int sendcount, MPI_Datatype sendtype, void* recvbuf, int recvcount, MPI_Datatype recvtype, int root, HMPI_Comm comm);
