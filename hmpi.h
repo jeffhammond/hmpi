@@ -5,10 +5,11 @@
 #include <stdio.h>
 #include <assert.h>
 #include <string.h>
+#include "barrier.h"
 //#include "opa_primitives.h"
 
 //#define PTHREAD_BARRIER
-#define COUNTER_BARRIER
+//#define COUNTER_BARRIER
 //#define ANDY_BARRIER
 //#define DEBUG
 
@@ -23,41 +24,6 @@ typedef struct {
   int32_t val;
   int32_t padding[15]; 
 } cache_line_t;
-
-#ifdef ANDY_BARRIER
-typedef struct {
-  //Centralized barrier
-  int* local_sense;
-  volatile int global_sense;
-  int count;
-
-
-#if 0
-  //Dissemination
-  int* flags[2];
-  //int* partnerflags[2];
-
-  int* parity;
-  int* sense;
-  int localflags;
-
-  //int* allnodes;
-
-  int log;
-#endif
-} barrier_t;
-#endif
-
-#ifdef COUNTER_BARRIER
-typedef struct {
-  int *counter;
-  int *expected;
-  pthread_mutex_t lock;
-} barrier_t;
-#endif 
-#ifdef PTHREAD_BARRIER
-typedef pthread_barrier_t barrier_t;
-#endif
 
 
 typedef struct {

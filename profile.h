@@ -76,6 +76,12 @@ static inline void PROFILE_INIT(void)
 #endif
 
 
+#define PROFILE_SHOW(var) { \
+    printf("%10s cnt %-7llu time %-10.3lf us total %08.3lf avg\n", \
+            #var, _profile_info.count_ ## var, \
+            rt / (double)size, ra / (double)size); \
+}
+
 #define PROFILE_SHOW_REDUCE(var, r) { \
     double rt, ra; \
     double t = (double)_profile_info.time_ ## var; \
@@ -85,7 +91,7 @@ static inline void PROFILE_INIT(void)
     int size; \
     HMPI_Comm_size(HMPI_COMM_WORLD, &size); \
     if(r == 0) { \
-        printf("%8s cnt %-7llu time %-8.3lf us total %08.3lf avg\n", \
+        printf("%10s cnt %-7llu time %-10.3lf us total %08.3lf avg\n", \
                 #var, _profile_info.count_ ## var, \
                 rt / (double)size, ra / (double)size); \
     } \
@@ -118,7 +124,7 @@ static inline void PROFILE_INIT(void) {}
 #define PROFILE_VAR(var)
 #define PROFILE_START(var)
 #define PROFILE_STOP(var)
-#define PROFILE_SHOW(var, r)
+#define PROFILE_SHOW(var)
 #define PROFILE_SHOW_REDUCE(var, r)
 #warning "PROFILING OFF"
 #endif
