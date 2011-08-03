@@ -238,10 +238,6 @@ static inline int get_reqstat(HMPI_Request *req) {
 }
 
 
-//int barrier(barrier_t *barrier);
-//int barrier_test(barrier_t *barrier);
-
-
 // this is called by pthread create and then calls the real function!
 void* trampoline(void* tid) {
   // save thread-id in thread-local storage
@@ -253,164 +249,12 @@ void* trampoline(void* tid) {
   barrier(&HMPI_COMM_WORLD->barr, g_tl_tid);
   //while(!barrier_test(&HMPI_COMM_WORLD->barr));
 
-//  printf("%d:%d g_entry now\n", g_rank, g_tl_tid); fflush(stdout);
+  printf("%d:%d g_entry now\n", g_rank, g_tl_tid); fflush(stdout);
   // call user function
   g_entry();
 
   return NULL;
 }
-
-
-#ifdef ANDY_BARRIER
-static inline int mylog2(int v) {
-    int l = 0;
-
-    while(v >>= 1) l++;
-    return l;
-}
-
-int barrier_init(barrier_t *barrier,int needed) {
-  barrier->local_sense = (int*)calloc(sizeof(int), g_nthreads);
-  barrier->count = g_nthreads;
-  barrier->global_sense = 0;
-#if 0
-  int i;
-
-  //Compute log2 of nthreads
-  //barrier->log = ceil(log2(g_nthreads));
-  barrier->log = mylog2(g_nthreads);
-
-  barrier->flags[0] = (int*)calloc(sizeof(int), barrier->log * g_nthreads);
-  barrier->flags[1] = (int*)calloc(sizeof(int), barrier->log * g_nthreads);
-
-  //barrier->partnerflags[0] = calloc(sizeof(int), g_nthreads);
-  //barrier->partnerflags[1] = calloc(sizeof(int), g_nthreads);
-
-  barrier->parity = (int*)calloc(sizeof(int), g_nthreads);
-  barrier->sense = (int*)calloc(sizeof(int), g_nthreads);
-
-  for(i = 0; i < g_nthreads; i++) {
-      barrier->sense[i] = ~0;
-  }
-
-  //barrier->allnodes = calloc(sizeof(int), g_nthreads);
-#endif
-  return 0;
-}
-
-int barrier_destroy(barrier_t *barrier) {
-  free(barrier->local_sense);
-  return 0;
-}
-
-//Enter barrier
-static inline int barrier(barrier_t *barrier) {
-//  printf("%d enter barrier\n", g_tl_tid); fflush(stdout);
-  int local_sense = barrier->local_sense[g_tl_tid] = ~barrier->local_sense[g_tl_tid];
-
-  //if(__sync_fetch_and_sub(&barrier->count, (int)1) == 1) {
-  int val = __sync_fetch_and_sub(&barrier->count, (int)1);
-  if(val == 1) {
-      barrier->count = g_nthreads;
-      barrier->global_sense = local_sense;
-//      printf("%d toggle barrier\n", g_tl_tid); fflush(stdout);
-      return 1;
-  }
-
-//  printf("%d barrier val %d\n", g_tl_tid, val); fflush(stdout);
-  return 0;
-}
-
-//Test barrier completion
-static inline int barrier_test(barrier_t *barrier) {
-    return barrier->global_sense == barrier->local_sense[g_tl_tid];
-    //return 0;
-}
-
-static inline int barrier_wait(barrier_t *barrier) {
-#if 0
-  int instance;
-  int parity = barrier->parity[g_tl_tid];
-  int sense = barrier->parity[g_tl_tid];
-
-  //printf("%d barrier wait\n", g_tl_tid); fflush(stdout);
-
-  for(instance = 0; instance < barrier->log; instance++) {
-    //Set flag i on thread g_tl_tid + 1 << instance % g_nthreads  
-    int thr = (g_tl_tid + (1 << instance)) % g_nthreads;
-    barrier->flags[parity][thr * barrier->log + instance] = sense;
-    while(barrier->flags[parity][g_tl_tid * barrier->log + instance] != sense);
-  }
-
-  barrier->parity[g_tl_tid] = 1 - parity;
-  barrier->sense[g_tl_tid] = ~sense;
-#endif
-  //printf("%d barrier finished\n", g_tl_tid); fflush(stdout);
-  while(!barrier_test(barrier));
-  //    printf("%d finish barrier\n", g_tl_tid); fflush(stdout);
-
-  return 0;
-}
-
-#endif
-
-#ifdef COUNTER_BARRIER
-int barrier_init(barrier_t *barrier,int needed) {
-  barrier->counter=(int*)calloc(1,needed*sizeof(int));
-  barrier->expected=(int*)calloc(1,needed*sizeof(int));
-  pthread_mutex_init(&barrier->lock, NULL);
-  return 0;
-}
-
-int barrier_destroy(barrier_t *barrier) {
-  free(barrier->counter);
-  free(barrier->expected);
-  return 0;
-}
-
-int barrier(barrier_t *barrier) {
-  pthread_mutex_lock(&barrier->lock);
-  barrier->expected[g_tl_tid]++;
-  barrier->counter[g_tl_tid]++;
-  pthread_mutex_unlock(&barrier->lock);
-  return 0;
-}
-
-int barrier_test(barrier_t *barrier) {
-  int done=1;
-  int i;
-
-  pthread_mutex_lock(&barrier->lock);
-  for(i=0; i<g_nthreads; i++) {
-    if(barrier->expected[g_tl_tid] > barrier->counter[i]) done=0;
-  }
-  pthread_mutex_unlock(&barrier->lock);
-  if(done==1) return 1;
-  else return 0;
-}
-
-static inline void HMPI_Progress();
-int barrier_wait(barrier_t *barrier) {
-  while(!barrier_test(barrier)) {HMPI_Progress();};
-  return 0;
-}
-#endif
-#ifdef PTHREAD_BARRIER
-int barrier_init(barrier_t *barrier,int needed) {
-  pthread_barrier_init(barrier, NULL, needed);
-}
-int barrier_destroy(barrier_t *barrier) {
-  pthread_barrier_destroy(barrier);
-}
-int barrier(barrier_t *barrier) {
-  pthread_barrier_wait(barrier);
-}
-int barrier_test(barrier_t *barrier) {
-  //printf("barrier_test doesn't work in pthread ...\n");
-  return 1;
-}
-int barrier_wait(barrier_t *barrier) {}
-#endif
 
 
 int HMPI_Init(int *argc, char ***argv, int nthreads, void (*start_routine)())
@@ -519,6 +363,7 @@ int HMPI_Init(int *argc, char ***argv, int nthreads, void (*start_routine)())
   return 0;
 }
 
+
 int HMPI_Comm_rank(HMPI_Comm comm, int *rank) {
   
   //printf("[%i] HMPI_Comm_rank()\n", g_rank*g_nthreads+g_tl_tid);
@@ -530,6 +375,7 @@ int HMPI_Comm_rank(HMPI_Comm comm, int *rank) {
   *rank = g_nthreads*g_rank+g_tl_tid;
   return 0;
 }
+
 
 int HMPI_Comm_size ( HMPI_Comm comm, int *size ) {
   
@@ -543,10 +389,19 @@ int HMPI_Comm_size ( HMPI_Comm comm, int *size ) {
 }
 
 
+static inline void barrier_iprobe(void)
+{
+    int flag;
+    MPI_Status st;
+
+    MPI_Iprobe(MPI_ANY_SOURCE, MPI_ANY_TAG, MPI_COMM_WORLD, &flag, &st);
+}
+
+
 // AWF new function - barrier only among local threads
 void HMPI_Barrier_local(HMPI_Comm comm)
 {
-  barrier(&comm->barr, g_tl_tid);
+  barrier_cb(&comm->barr, g_tl_tid, barrier_iprobe);
   //barrier_wait(&comm->barr);
 }
 
@@ -564,7 +419,7 @@ int HMPI_Finalize() {
   PROFILE_SHOW_REDUCE(barrier, r);
   PROFILE_SHOW_REDUCE(alltoall, r);
 
-  barrier_noprobe(&HMPI_COMM_WORLD->barr, g_tl_tid);
+  barrier(&HMPI_COMM_WORLD->barr, g_tl_tid);
 
   if(g_tl_tid == 0) {
     MPI_Finalize();
@@ -651,15 +506,10 @@ static inline int HMPI_Progress_request(HMPI_Request *req) {
   //fflush(stdout);
 
   if(req->type == HMPI_SEND) {
-      //int flag=0;
-      //MPI_Status st;
-      //MPI_Iprobe(0, 0, MPI_COMM_WORLD, &flag, &st);
       return HMPI_Progress_send(req);
   } else if(req->type == HMPI_RECV) {
-      //int flag=0;
-      //MPI_Status st;
-      //MPI_Iprobe(0, 0, MPI_COMM_WORLD, &flag, &st);
       return HMPI_Progress_recv(req);
+
 #if 0
     //TODO - Try to match from the local send reqs list
 
@@ -748,6 +598,7 @@ static inline int HMPI_Progress_request(HMPI_Request *req) {
       remove_recv_req(req);
       return 1;
     }
+    
   } //HMPI_RECV_ANY_SOURCE
   return 0;
 }
@@ -791,6 +642,7 @@ static inline void HMPI_Progress() {
   }
 #endif
 }
+
 
 int HMPI_Test(HMPI_Request *req, int *flag, MPI_Status *status)
 {
@@ -1022,7 +874,7 @@ int HMPI_Barrier(HMPI_Comm comm) {
   printf("in HMPI_Barrier\n"); fflush(stdout);
 #endif
 
-  barrier(&comm->barr, g_tl_tid);
+  barrier_cb(&comm->barr, g_tl_tid, barrier_iprobe);
   //barrier_wait(&comm->barr);
 
   // all root-threads perform MPI_Barrier 
@@ -1032,7 +884,7 @@ int HMPI_Barrier(HMPI_Comm comm) {
       MPI_Barrier(comm->mpicomm);
   }
 
-  barrier(&comm->barr, g_tl_tid);
+  barrier_cb(&comm->barr, g_tl_tid, barrier_iprobe);
   //barrier_wait(&comm->barr);
   return MPI_SUCCESS;
 }
@@ -1075,7 +927,7 @@ int HMPI_Allreduce(void *sendbuf, void *recvbuf, int count, MPI_Datatype datatyp
     comm->rbuf[0] = recvbuf;
   }
 
-  barrier(&comm->barr, g_tl_tid);
+  barrier_cb(&comm->barr, g_tl_tid, barrier_iprobe);
   //barrier_wait(&comm->barr);
 
   for(i=1; i<g_nthreads; ++i) {
@@ -1083,7 +935,7 @@ int HMPI_Allreduce(void *sendbuf, void *recvbuf, int count, MPI_Datatype datatyp
          NBC_Operation((void*)comm->sbuf[0], (void*)comm->sbuf[0], sendbuf, op, datatype, count);
      }
 
-    barrier(&comm->barr, g_tl_tid);
+    barrier_cb(&comm->barr, g_tl_tid, barrier_iprobe);
     //barrier_wait(&comm->barr);
   }
 
@@ -1091,13 +943,13 @@ int HMPI_Allreduce(void *sendbuf, void *recvbuf, int count, MPI_Datatype datatyp
     MPI_Allreduce((void*)comm->sbuf[0], (void*)comm->rbuf[0], count, datatype, op, comm->mpicomm);
   }
 
-  barrier(&comm->barr, g_tl_tid);
+  barrier_cb(&comm->barr, g_tl_tid, barrier_iprobe);
   //barrier_wait(&comm->barr);
 
   if(g_tl_tid != 0) memcpy(recvbuf, (void*)comm->rbuf[0], count*size);
 
   // protect from early leave (rootrbuf)
-  barrier(&comm->barr, g_tl_tid);
+  barrier_cb(&comm->barr, g_tl_tid, barrier_iprobe);
   //barrier_wait(&comm->barr);
 
   if(g_tl_tid == 0) {
@@ -1132,21 +984,21 @@ int HMPI_Bcast(void *buffer, int count, MPI_Datatype datatype, int root, HMPI_Co
       comm->sbuf[0] = buffer;
   }
 
-  barrier(&comm->barr, g_tl_tid);
+  barrier_cb(&comm->barr, g_tl_tid, barrier_iprobe);
   //barrier_wait(&comm->barr);
 
   if(g_tl_tid == 0) {
     MPI_Bcast((void*)comm->sbuf[0], count, datatype, root, comm->mpicomm);
   }
 
-  barrier(&comm->barr, g_tl_tid);
+  barrier_cb(&comm->barr, g_tl_tid, barrier_iprobe);
   //barrier_wait(&comm->barr);
 
   if(root % g_nthreads != g_tl_tid) {
     memcpy(buffer, (void*)comm->sbuf[0], count*size);
   }
 
-  barrier(&comm->barr, g_tl_tid);
+  barrier_cb(&comm->barr, g_tl_tid, barrier_iprobe);
   //barrier_wait(&comm->barr);
 
 #if 0
@@ -1214,7 +1066,7 @@ int HMPI_Scatter(void* sendbuf, int sendcount, MPI_Datatype sendtype, void* recv
     }
   }
 
-  barrier(&comm->barr, g_tl_tid);
+  barrier_cb(&comm->barr, g_tl_tid, barrier_iprobe);
   //barrier_wait(&comm->barr);
 
   //Just do a scatter!
@@ -1224,7 +1076,7 @@ int HMPI_Scatter(void* sendbuf, int sendcount, MPI_Datatype sendtype, void* recv
             recvcount * g_nthreads, recvtype, root / g_nthreads, comm->mpicomm);
   }
 
-  barrier(&comm->barr, g_tl_tid);
+  barrier_cb(&comm->barr, g_tl_tid, barrier_iprobe);
   //barrier_wait(&comm->barr);
 
   //Each thread copies out of the root buffer
@@ -1235,7 +1087,7 @@ int HMPI_Scatter(void* sendbuf, int sendcount, MPI_Datatype sendtype, void* recv
     memcpy(recvbuf, (void*)((uintptr_t)comm->rbuf[0] + size * g_tl_tid), size);
   }
 
-  barrier(&comm->barr, g_tl_tid);
+  barrier_cb(&comm->barr, g_tl_tid, barrier_iprobe);
   //barrier_wait(&comm->barr);
 
   if(g_tl_tid == 0) {
@@ -1295,13 +1147,13 @@ int HMPI_Gather(void* sendbuf, int sendcount, MPI_Datatype sendtype, void* recvb
     }
   }
 
-  barrier(&comm->barr, g_tl_tid);
+  barrier_cb(&comm->barr, g_tl_tid, barrier_iprobe);
   //barrier_wait(&comm->barr);
 
   //Each thread copies into the send buffer
   memcpy((void*)((uintptr_t)comm->sbuf[0] + size * g_tl_tid), sendbuf, size);
 
-  barrier(&comm->barr, g_tl_tid);
+  barrier_cb(&comm->barr, g_tl_tid, barrier_iprobe);
   //barrier_wait(&comm->barr);
 
   if(g_tl_tid == 0) {
@@ -1311,6 +1163,7 @@ int HMPI_Gather(void* sendbuf, int sendcount, MPI_Datatype sendtype, void* recvb
     free((void*)comm->sbuf[0]);
   }
 
+  barrier_cb(&comm->barr, g_tl_tid, barrier_iprobe);
   return MPI_SUCCESS;
 }
 
@@ -1344,9 +1197,10 @@ int HMPI_Alltoall(void* sendbuf, int sendcount, MPI_Datatype sendtype, void* rec
     MPI_Abort(comm->mpicomm, 0);
   }
 
-#ifdef DEBUG
+//#ifdef DEBUG
   printf("[%i] HMPI_Alltoall(%p, %i, %p, %p, %i, %p, %p)\n", g_rank*g_nthreads+g_tl_tid, sendbuf, sendcount, sendtype, recvbuf, recvcount, recvtype, comm);
-#endif
+  fflush(stdout);
+//#endif
 
   //TODO how do I change this to have each thread do local copies?
   // Maybe I should even just use a bunch of sends and receives.
@@ -1395,7 +1249,7 @@ int HMPI_Alltoall(void* sendbuf, int sendcount, MPI_Datatype sendtype, void* rec
       recv_reqs[g_rank] = MPI_REQUEST_NULL;
   }
 
-  barrier(&comm->barr, g_tl_tid);
+  barrier_cb(&comm->barr, g_tl_tid, barrier_iprobe);
   //barrier_wait(&comm->barr);
 
   //Copy into the shared send buffer on a stride by g_nthreads
@@ -1415,7 +1269,7 @@ int HMPI_Alltoall(void* sendbuf, int sendcount, MPI_Datatype sendtype, void* rec
   }
 
   //Start sends to each other rank
-  barrier(&comm->barr, g_tl_tid);
+  barrier_cb(&comm->barr, g_tl_tid, barrier_iprobe);
   //barrier_wait(&comm->barr);
 
   if(g_tl_tid == 0) {
@@ -1450,7 +1304,7 @@ int HMPI_Alltoall(void* sendbuf, int sendcount, MPI_Datatype sendtype, void* rec
       MPI_Type_free(&dt_recv);
   }
 
-  barrier(&comm->barr, g_tl_tid);
+  barrier_cb(&comm->barr, g_tl_tid, barrier_iprobe);
   //barrier_wait(&comm->barr);
 
   //Do the MPI alltoall
@@ -1492,7 +1346,7 @@ int HMPI_Alltoall(void* sendbuf, int sendcount, MPI_Datatype sendtype, void* rec
       }
   }
 
-  barrier(&comm->barr, g_tl_tid);
+  barrier_cb(&comm->barr, g_tl_tid, barrier_iprobe);
   //barrier_wait(&comm->barr);
 
   if(g_tl_tid == 0) {
@@ -1661,7 +1515,7 @@ int HMPI_Alltoall_local(void* sendbuf, int sendcount, MPI_Datatype sendtype, voi
   memcpy((void*)((uintptr_t)recvbuf + (g_tl_tid * copy_len)),
          (void*)((uintptr_t)sendbuf + (g_tl_tid * copy_len)) , copy_len);
 
-  barrier(&comm->barr, g_tl_tid);
+  barrier_cb(&comm->barr, g_tl_tid, barrier_iprobe);
   //barrier_wait(&comm->barr);
 
   //Push local data to each other thread's receive buffer.
@@ -1677,7 +1531,7 @@ int HMPI_Alltoall_local(void* sendbuf, int sendcount, MPI_Datatype sendtype, voi
   }
 
   PROFILE_START(barrier);
-  barrier(&comm->barr, g_tl_tid);
+  barrier_cb(&comm->barr, g_tl_tid, barrier_iprobe);
   //barrier_wait(&comm->barr);
   PROFILE_STOP(barrier);
   PROFILE_STOP(alltoall);

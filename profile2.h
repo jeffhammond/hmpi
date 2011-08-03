@@ -23,16 +23,16 @@ static int _profile_events[NUM_EVENTS] =
     uint64_t time_ ## var; \
     uint64_t count_ ## var; \
     uint64_t tmp_ ## var; \
-    uint64_t ctrs_ ## var [NUM_EVENTS]; \
-    uint64_t rec_ ## var [NUM_RECORDS][NUM_EVENTS + 1]; \
+    uint64_t ctrs_ ## var[NUM_EVENTS]; \
+    uint64_t rec_ ## var[NUM_RECORDS][NUM_EVENTS + 1];
 
-struct profile_vars_t {
+typedef struct profile_vars_t {
     uint64_t time;
     uint64_t count;
     uint64_t start;
-    uint64_t ctrs;
-    uint64_t rec[NUM_RECORDS][NUM_EVENTS + 1]; //Last event is time
-}
+    uint64_t ctrs[NUM_EVENTS];
+    //uint64_t rec[NUM_RECORDS][NUM_EVENTS + 1]; //Last event is time
+} profile_vars_t;
 
 
 struct profile_info_t {
@@ -49,7 +49,7 @@ struct profile_info_t {
 
 //This needs to be declared once in a C file somewhere
 extern /*__thread*/ struct profile_info_t _profile_info;
-
+extern FILE* _profile_fd;
 
 #define PROFILE_DECLARE() \
   /*__thread*/ struct profile_info_t _profile_info; \
@@ -78,6 +78,13 @@ static inline void PROFILE_INIT(void)
         printf("ERROR PAPI reported < %d events available\n", NUM_EVENTS);
     }
 
+    _profile_fd = fopen("profile.out", "w+");
+    if(_profile_fd == NULL) {
+        printf("ERROR opening profile data file\n");
+        exit(-1);
+    }
+
+    fprintf(_profile_fd, "VAR TIME");
     for(i = 0; i < NUM_EVENTS; i++) {
         PAPI_event_info_t info;
         if(PAPI_get_event_info(_profile_events[i], &info) != PAPI_OK) {
@@ -87,22 +94,34 @@ static inline void PROFILE_INIT(void)
 
         printf("PAPI event %16s %s\n", info.symbol, info.long_descr);
         fflush(stdout);
+
+        fprintf(_profile_fd, " %s", info.symbol);
     }
+    fprintf(_profile_fd, "\n");
 }
 
 
+static inline void PROFILE_FINALIZE()
+{
+    fclose(_profile_fd);
+}
+
+
+#if 0
 #define PROFILE_START(var) { \
     PAPI_start_counters(_profile_events, NUM_EVENTS); \
     _profile_info.tmp_ ## var = PAPI_get_real_usec(); \
 }
+#endif
 
-static inline void _profile_start_fn(struct profile_vars_t* v)
+static inline void PROFILE_START(struct profile_vars_t* v)
 {
     PAPI_start_counters(_profile_events, NUM_EVENTS);
-    v->start = PAPI_get_real_usec();
+    v->start = PAPI_get_real_cyc();
 }
 
 
+#if 0
 #define PROFILE_STOP(var) { \
     uint64_t t = PAPI_get_real_usec() - _profile_info.tmp_ ## var; \
     int ind = _profile_info.count_ ## var % NUM_RECORDS; \
@@ -114,32 +133,36 @@ static inline void _profile_start_fn(struct profile_vars_t* v)
         _profile_info.ctrs_ ## var[i] += _profile_info.rec_ ## var[ind][i]; \
     _profile_info.count_ ## var ++; \
 }
+#endif
 
 
-static inline void _profile_stop_fn(struct profile_vars_t* v)
+#define PROFILE_STOP(v) __PROFILE_STOP(#v, v)
+
+static inline void __PROFILE_STOP(char* name, struct profile_vars_t* v)
 {
     //Grab the time right away
-    uint64_t t = PAPI_get_real_usec() - v->start;
-    int ind = v->count % NUM_RECORDS;
+    uint64_t t = PAPI_get_real_cyc() - v->start;
 
     //Grab counter values
-    PAPI_read_counters((long long*)v->rec[ind], NUM_EVENTS);
+    uint64_t ctrs[NUM_EVENTS];
+    PAPI_read_counters((long long*)ctrs, NUM_EVENTS);
 
-    //Accumulate and record the time
+    //Accumulate the time
     v->time += t;
-    v->rec[ind][NUM_EVENTS] = t;
+    v->count++;
 
     //Accumulate the counter values
-    for(int i = 0; i < NUM_EVENTS; i++)
-        v->ctrs[i] += v->rec[ind][i];
-
-    if(ind == NUM_RECORDS - 1) {
-        //Write to file
+    fprintf(_profile_fd, "%s %lu", name, t);
+    for(int i = 0; i < NUM_EVENTS; i++) {
+        v->ctrs[i] += ctrs[i];
+        fprintf(_profile_fd, " %lu", ctrs[i]);
     }
-    v->count++;
+
+    fprintf(_profile_fd, "\n");
 }
 
 
+#if 0
 #define PROFILE_SHOW(var) { \
     printf("%12s cnt %-7lu time %-10.3lf us total %08.3lf avg\n", \
             #var, _profile_info.count_ ## var, \
@@ -157,6 +180,26 @@ static inline void _profile_stop_fn(struct profile_vars_t* v)
                 _profile_info.ctrs_ ## var[i], \
                 (double)_profile_info.ctrs_ ## var[i] / _profile_info.count_ ## var); \
     } \
+}
+#endif
+
+#define PROFILE_SHOW(v) __PROFILE_SHOW(#v, v)
+
+static inline void __PROFILE_SHOW(char* name, struct profile_vars_t* v)
+{
+    printf("%12s cnt %-7lu time %lu us total %08.3lf avg\n",
+            name, v->count, v->time, (double)v->time / v->count);
+
+    for(int i = 0; i < NUM_EVENTS; i++) {
+        PAPI_event_info_t info;
+        if(PAPI_get_event_info(_profile_events[i], &info) != PAPI_OK) {
+            printf("ERROR PAPI_get_event_info %d\n", i);
+            continue;
+        }
+
+        printf("    %20s %lu total %8.3lf avg\n", info.symbol,
+                v->ctrs[i], (double)v->ctrs[i] / v->count);
+    }
 }
 
 

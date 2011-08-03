@@ -3,7 +3,7 @@
 #include <pthread.h>
 
 //#define CACHE_LINE 64
-#define CACHE_LINE 1
+//#define CACHE_LINE 1
 
 typedef struct {
   //Centralized barrier
@@ -15,7 +15,7 @@ typedef struct {
 
 
 static int barrier_init(barrier_t *barrier, int threads) {
-  barrier->local_sense = (int*)calloc(sizeof(int) * CACHE_LINE, threads);
+  barrier->local_sense = (int*)calloc(sizeof(int) /** CACHE_LINE*/, threads);
   barrier->global_sense = 0;
   barrier->count = threads;
   barrier->threads = threads;
@@ -30,7 +30,7 @@ static int barrier_destroy(barrier_t *barrier) {
 
 
 static inline void barrier(barrier_t *barrier, int tid) {
-  int local_sense = barrier->local_sense[tid * CACHE_LINE] = ~barrier->local_sense[tid * CACHE_LINE];
+  int local_sense = barrier->local_sense[tid/* * CACHE_LINE*/] = ~barrier->local_sense[tid/* * CACHE_LINE*/];
 
   //if(__sync_fetch_and_sub(&barrier->count, (int)1) == 1) {
   int val = __sync_fetch_and_sub(&barrier->count, (int)1);
@@ -42,16 +42,18 @@ static inline void barrier(barrier_t *barrier, int tid) {
 
   //while(barrier->global_sense != barrier->local_sense[tid]) {
   while(barrier->global_sense != local_sense) {
+#if 0
         int flag;
         MPI_Status st;
         MPI_Iprobe(MPI_ANY_SOURCE, MPI_ANY_TAG, MPI_COMM_WORLD, &flag, &st);
+#endif
   }
   return;
 }
 
 
-static inline void barrier_noprobe(barrier_t *barrier, int tid) {
-  int local_sense = barrier->local_sense[tid * CACHE_LINE] = ~barrier->local_sense[tid * CACHE_LINE];
+static inline void barrier_cb(barrier_t *barrier, int tid, void (*cbfn)(void)) {
+  int local_sense = barrier->local_sense[tid /** CACHE_LINE*/] = ~barrier->local_sense[tid /** CACHE_LINE*/];
 
   //if(__sync_fetch_and_sub(&barrier->count, (int)1) == 1) {
   int val = __sync_fetch_and_sub(&barrier->count, (int)1);
@@ -62,8 +64,11 @@ static inline void barrier_noprobe(barrier_t *barrier, int tid) {
   }
 
   //while(barrier->global_sense != barrier->local_sense[tid]) {
-  while(barrier->global_sense != local_sense);
+  while(barrier->global_sense != local_sense) {
+      cbfn();
+  }
   return;
 }
+
 
 #endif
