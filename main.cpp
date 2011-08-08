@@ -1,4 +1,4 @@
-#include "hmpi.hpp"
+#include "hmpi.h"
 
 void tmain(){
 
