@@ -12,7 +12,9 @@
 #endif
 
 
-#include "profile.h"
+//#define _PROFILE 1
+//#define _PROFILE_HMPI 1
+#include "profile2.h"
 #include <sched.h>
 #include <malloc.h>
 #include <stdlib.h>
@@ -33,7 +35,8 @@
           (uintptr_t)(oldval), (uintptr_t)(newval))
 
 
-PROFILE_DECLARE();
+//PROFILE_DECLARE();
+//PROFILE_VAR(mpi);
 
 
 int g_nthreads=-1;
@@ -79,8 +82,6 @@ static inline void add_recv_req(HMPI_Request *req) {
 
 
 static inline void add_send_req(HMPI_Request *req, int tid) {
-  PROFILE_START(add_send_req);
-
   send_req_info_t* reqinfo = &g_send_reqs[tid];
 
   //Set req->next = head
@@ -104,8 +105,6 @@ static inline void add_send_req(HMPI_Request *req, int tid) {
   reqinfo->reqs = req;
   pthread_mutex_unlock(&reqinfo->mut);
 #endif
-
-  PROFILE_STOP(add_send_req);
 }
 
 
@@ -166,7 +165,6 @@ static inline int match_recv(HMPI_Request* recv_req, HMPI_Request** send_req) {
     HMPI_Request* cur;
     HMPI_Request* prev;
 
-    PROFILE_START(match);
     //pthread_mutex_lock(&g_send_reqs[g_tl_tid].mut);
     //for(cur = g_send_reqs[g_tl_tid]; cur != NULL; cur = cur->next) {
     for(prev = NULL, cur = g_send_reqs[g_tl_tid].reqs;
@@ -208,14 +206,12 @@ static inline int match_recv(HMPI_Request* recv_req, HMPI_Request** send_req) {
                 pthread_mutex_unlock(&g_send_reqs[g_tl_tid].mut);
 #endif
                 *send_req = cur;
-                PROFILE_STOP(match);
                 return 1;
             }
         }
     }
 
     //pthread_mutex_unlock(&g_send_reqs[g_tl_tid].mut);
-    PROFILE_STOP(match);
     return 0;
 }
 
@@ -270,7 +266,7 @@ int HMPI_Init(int *argc, char ***argv, int nthreads, void (*start_routine)())
   printf("after MPI_Init\n"); fflush(stdout);
 #endif
 
-  PROFILE_INIT();
+  //PROFILE_INIT();
   
   g_nthreads = nthreads;
   g_entry = start_routine;
@@ -394,7 +390,9 @@ static inline void barrier_iprobe(void)
     int flag;
     MPI_Status st;
 
+    //PROFILE_START(mpi);
     MPI_Iprobe(MPI_ANY_SOURCE, MPI_ANY_TAG, MPI_COMM_WORLD, &flag, &st);
+    //PROFILE_STOP(mpi);
 }
 
 
@@ -412,12 +410,12 @@ int HMPI_Finalize() {
 
   int r;
   HMPI_Comm_rank(HMPI_COMM_WORLD, &r);
-  PROFILE_SHOW_REDUCE(match, r);
-  PROFILE_SHOW_REDUCE(copy, r);
-  PROFILE_SHOW_REDUCE(send, r);
-  PROFILE_SHOW_REDUCE(add_send_req, r);
-  PROFILE_SHOW_REDUCE(barrier, r);
-  PROFILE_SHOW_REDUCE(alltoall, r);
+  //PROFILE_SHOW_REDUCE(mpi);
+  //PROFILE_SHOW_REDUCE(copy, r);
+  //PROFILE_SHOW_REDUCE(send, r);
+  //PROFILE_SHOW_REDUCE(add_send_req, r);
+  //PROFILE_SHOW_REDUCE(barrier, r);
+  //PROFILE_SHOW_REDUCE(alltoall, r);
 
   barrier(&HMPI_COMM_WORLD->barr, g_tl_tid);
 
@@ -482,11 +480,9 @@ static inline int HMPI_Progress_recv(HMPI_Request *recv_req) {
       //        g_rank*g_nthreads+g_tl_tid, send_req->buf, recv_req->buf, sendsize);
       //fflush(stdout);
 
-      PROFILE_START(copy);
       //printf("%d memcpy %p %p\n", g_tl_tid, recv_req->buf, send_req->buf);
       //fflush(stdout);
       memcpy(recv_req->buf, send_req->buf, sendsize);
-      PROFILE_STOP(copy);
 
       //Mark send and receive requests done
       update_reqstat(send_req, 1);
@@ -550,7 +546,9 @@ static inline int HMPI_Progress_request(HMPI_Request *req) {
     //HMPI_Progress();
 
     //printf("%d testi req %d\n", g_rank*g_nthreads+g_tl_tid, req->type);
+    PROFILE_START(mpi);
     MPI_Test(&req->req, &flag, req->status);
+    PROFILE_STOP(mpi);
 
     update_reqstat(req, flag);
 //    if(flag && req->type == MPI_RECV) {
@@ -592,9 +590,13 @@ static inline int HMPI_Progress_request(HMPI_Request *req) {
 
     // check if we can get something via the MPI library
     int flag=0;
+    PROFILE_START(mpi);
     MPI_Iprobe(MPI_ANY_SOURCE, req->tag, req->comm, &flag, req->status);
+    PROFILE_STOP(mpi);
     if(flag) {
+      PROFILE_START(mpi);
       MPI_Recv(req->buf, req->size, req->datatype, req->status->MPI_SOURCE, req->tag, req->comm, req->status);
+      PROFILE_STOP(mpi);
       remove_recv_req(req);
       return 1;
     }
@@ -760,9 +762,7 @@ int HMPI_Isend(void* buf, int count, MPI_Datatype datatype, int dest, int tag, H
 
 int HMPI_Send(void* buf, int count, MPI_Datatype datatype, int dest, int tag, HMPI_Comm comm) {
   HMPI_Request req;
-  PROFILE_START(send);
   HMPI_Isend(buf, count, datatype, dest, tag, comm, &req);
-  PROFILE_STOP(send);
   HMPI_Wait(&req, MPI_STATUS_IGNORE);
   return MPI_SUCCESS;
 }
@@ -833,7 +833,9 @@ int HMPI_Irecv(void* buf, int count, MPI_Datatype datatype, int source, int tag,
     req->size = size*count;
     req->buf = buf;
 
+    PROFILE_START(mpi);
     MPI_Irecv(buf, count, datatype, source_mpi_rank, tag, g_tcomms[source_mpi_thread], &req->req);
+    PROFILE_STOP(mpi);
 
     req->type = MPI_RECV;
   } else if(source == MPI_ANY_SOURCE) {
@@ -897,12 +899,13 @@ int NBC_Operation(void *buf3, void *buf1, void *buf2, MPI_Op op, MPI_Datatype ty
 
 int HMPI_Allreduce(void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype, MPI_Op op, HMPI_Comm comm) {
 
-  MPI_Aint extent, lb;
+  MPI_Aint extent/*, lb*/;
   int size;
   int i;
 
   MPI_Type_size(datatype, &size);
-  MPI_Type_get_extent(datatype, &lb, &extent);
+  //MPI_Type_get_extent(datatype, &lb, &extent);
+  MPI_Type_extent(datatype, &extent);
 
   if(extent != size) {
     printf("allreduce non-contiguous derived datatypes are not supported yet!\n");
@@ -961,11 +964,12 @@ int HMPI_Allreduce(void *sendbuf, void *recvbuf, int count, MPI_Datatype datatyp
 
 
 int HMPI_Bcast(void *buffer, int count, MPI_Datatype datatype, int root, HMPI_Comm comm) {
-  MPI_Aint extent, lb;
+  MPI_Aint extent/*, lb*/;
   int size;
 
   MPI_Type_size(datatype, &size);
-  MPI_Type_get_extent(datatype, &lb, &extent);
+  //MPI_Type_get_extent(datatype, &lb, &extent);
+  MPI_Type_extent(datatype, &extent);
 
 #ifdef HMPI_SAFE
   if(extent != size) {
@@ -1023,15 +1027,17 @@ int HMPI_Bcast(void *buffer, int count, MPI_Datatype datatype, int root, HMPI_Co
 // TODO - scatter and gather may not work right for count > 1
 
 int HMPI_Scatter(void* sendbuf, int sendcount, MPI_Datatype sendtype, void* recvbuf, int recvcount, MPI_Datatype recvtype, int root, HMPI_Comm comm) {
-  MPI_Aint send_extent, recv_extent, lb;
+  MPI_Aint send_extent, recv_extent/*, lb*/;
   int send_size;
   int recv_size;
   int size;
 
   MPI_Type_size(sendtype, &send_size);
   MPI_Type_size(recvtype, &recv_size);
-  MPI_Type_get_extent(sendtype, &lb, &send_extent);
-  MPI_Type_get_extent(recvtype, &lb, &recv_extent);
+  //MPI_Type_get_extent(sendtype, &lb, &send_extent);
+  //MPI_Type_get_extent(recvtype, &lb, &recv_extent);
+  MPI_Type_extent(sendtype, &send_extent);
+  MPI_Type_extent(recvtype, &recv_extent);
   size = recv_size * recvcount;
 
   if(send_extent != send_size || recv_extent != recv_size) {
@@ -1102,15 +1108,17 @@ int HMPI_Scatter(void* sendbuf, int sendcount, MPI_Datatype sendtype, void* recv
 
 int HMPI_Gather(void* sendbuf, int sendcount, MPI_Datatype sendtype, void* recvbuf, int recvcount, MPI_Datatype recvtype, int root, HMPI_Comm comm)
 {
-  MPI_Aint send_extent, recv_extent, lb;
+  MPI_Aint send_extent, recv_extent/*, lb*/;
   int send_size;
   int recv_size;
   int size;
 
   MPI_Type_size(sendtype, &send_size);
   MPI_Type_size(recvtype, &recv_size);
-  MPI_Type_get_extent(sendtype, &lb, &send_extent);
-  MPI_Type_get_extent(recvtype, &lb, &recv_extent);
+  //MPI_Type_get_extent(sendtype, &lb, &send_extent);
+  //MPI_Type_get_extent(recvtype, &lb, &recv_extent);
+  MPI_Type_extent(sendtype, &send_extent);
+  MPI_Type_extent(recvtype, &recv_extent);
   size = send_size * sendcount;
 
   if(send_extent != send_size || recv_extent != recv_size) {
@@ -1172,7 +1180,7 @@ int HMPI_Gather(void* sendbuf, int sendcount, MPI_Datatype sendtype, void* recvb
 
 int HMPI_Alltoall(void* sendbuf, int sendcount, MPI_Datatype sendtype, void* recvbuf, int recvcount, MPI_Datatype recvtype, HMPI_Comm comm) 
 {
-  MPI_Aint send_extent, recv_extent, lb;
+  MPI_Aint send_extent, recv_extent/*, lb*/;
   void* rbuf;
   int32_t send_size;
   int32_t recv_size;
@@ -1184,8 +1192,10 @@ int HMPI_Alltoall(void* sendbuf, int sendcount, MPI_Datatype sendtype, void* rec
 
   MPI_Type_size(sendtype, &send_size);
   MPI_Type_size(recvtype, &recv_size);
-  MPI_Type_get_extent(sendtype, &lb, &send_extent);
-  MPI_Type_get_extent(recvtype, &lb, &recv_extent);
+  //MPI_Type_get_extent(sendtype, &lb, &send_extent);
+  //MPI_Type_get_extent(recvtype, &lb, &recv_extent);
+  MPI_Type_extent(sendtype, &send_extent);
+  MPI_Type_extent(recvtype, &recv_extent);
 
   if(send_extent != send_size || recv_extent != recv_size) {
     printf("alltoall non-contiguous derived datatypes are not supported yet!\n");
@@ -1197,10 +1207,10 @@ int HMPI_Alltoall(void* sendbuf, int sendcount, MPI_Datatype sendtype, void* rec
     MPI_Abort(comm->mpicomm, 0);
   }
 
-//#ifdef DEBUG
+#ifdef DEBUG
   printf("[%i] HMPI_Alltoall(%p, %i, %p, %p, %i, %p, %p)\n", g_rank*g_nthreads+g_tl_tid, sendbuf, sendcount, sendtype, recvbuf, recvcount, recvtype, comm);
   fflush(stdout);
-//#endif
+#endif
 
   //TODO how do I change this to have each thread do local copies?
   // Maybe I should even just use a bunch of sends and receives.
@@ -1477,18 +1487,19 @@ int HMPI_Abort( HMPI_Comm comm, int errorcode ) {
 
 int HMPI_Alltoall_local(void* sendbuf, int sendcount, MPI_Datatype sendtype, void* recvbuf, int recvcount, MPI_Datatype recvtype, HMPI_Comm comm) 
 {
-    MPI_Aint send_extent, recv_extent, lb;
+    MPI_Aint send_extent, recv_extent/*, lb*/;
     int32_t send_size;
     int32_t recv_size;
     int thr, i;
 
-    PROFILE_START(alltoall);
     MPI_Type_size(sendtype, &send_size);
     MPI_Type_size(recvtype, &recv_size);
 
 #if HMPI_SAFE
-    MPI_Type_get_extent(sendtype, &lb, &send_extent);
-    MPI_Type_get_extent(recvtype, &lb, &recv_extent);
+    //MPI_Type_get_extent(sendtype, &lb, &send_extent);
+    //MPI_Type_get_extent(recvtype, &lb, &recv_extent);
+    MPI_Type_extent(sendtype, &send_extent);
+    MPI_Type_extent(recvtype, &recv_extent);
 
     if(send_extent != send_size || recv_extent != recv_size) {
         printf("alltoall non-contiguous derived datatypes are not supported yet!\n");
@@ -1530,11 +1541,8 @@ int HMPI_Alltoall_local(void* sendbuf, int sendcount, MPI_Datatype sendtype, voi
       //       (void*)((uintptr_t)sendbuf + (thr * copy_len)) , copy_len);
   }
 
-  PROFILE_START(barrier);
   barrier_cb(&comm->barr, g_tl_tid, barrier_iprobe);
   //barrier_wait(&comm->barr);
-  PROFILE_STOP(barrier);
-  PROFILE_STOP(alltoall);
   return MPI_SUCCESS;
 }
 

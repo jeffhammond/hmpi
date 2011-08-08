@@ -1,3 +1,5 @@
+#ifndef _HMPI_H_
+#define _HMPI_H_
 #include <stdint.h>
 #include <mpi.h>
 #include <pthread.h>
@@ -153,4 +155,5 @@ int HMPI_Finalize();
 
 #ifdef __cplusplus
 }
+#endif
 #endif
