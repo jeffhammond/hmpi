@@ -245,7 +245,7 @@ void* trampoline(void* tid) {
   barrier(&HMPI_COMM_WORLD->barr, g_tl_tid);
   //while(!barrier_test(&HMPI_COMM_WORLD->barr));
 
-  printf("%d:%d g_entry now\n", g_rank, g_tl_tid); fflush(stdout);
+  //printf("%d:%d g_entry now\n", g_rank, g_tl_tid); fflush(stdout);
   // call user function
   g_entry();
 
@@ -899,13 +899,13 @@ int NBC_Operation(void *buf3, void *buf1, void *buf2, MPI_Op op, MPI_Datatype ty
 
 int HMPI_Allreduce(void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype, MPI_Op op, HMPI_Comm comm) {
 
-  MPI_Aint extent/*, lb*/;
+  MPI_Aint extent, lb;
   int size;
   int i;
 
   MPI_Type_size(datatype, &size);
-  //MPI_Type_get_extent(datatype, &lb, &extent);
-  MPI_Type_extent(datatype, &extent);
+  MPI_Type_get_extent(datatype, &lb, &extent);
+  //MPI_Type_extent(datatype, &extent);
 
   if(extent != size) {
     printf("allreduce non-contiguous derived datatypes are not supported yet!\n");
@@ -964,12 +964,12 @@ int HMPI_Allreduce(void *sendbuf, void *recvbuf, int count, MPI_Datatype datatyp
 
 
 int HMPI_Bcast(void *buffer, int count, MPI_Datatype datatype, int root, HMPI_Comm comm) {
-  MPI_Aint extent/*, lb*/;
+  MPI_Aint extent, lb;
   int size;
 
   MPI_Type_size(datatype, &size);
-  //MPI_Type_get_extent(datatype, &lb, &extent);
-  MPI_Type_extent(datatype, &extent);
+  MPI_Type_get_extent(datatype, &lb, &extent);
+  //MPI_Type_extent(datatype, &extent);
 
 #ifdef HMPI_SAFE
   if(extent != size) {
@@ -1027,17 +1027,17 @@ int HMPI_Bcast(void *buffer, int count, MPI_Datatype datatype, int root, HMPI_Co
 // TODO - scatter and gather may not work right for count > 1
 
 int HMPI_Scatter(void* sendbuf, int sendcount, MPI_Datatype sendtype, void* recvbuf, int recvcount, MPI_Datatype recvtype, int root, HMPI_Comm comm) {
-  MPI_Aint send_extent, recv_extent/*, lb*/;
+  MPI_Aint send_extent, recv_extent, lb;
   int send_size;
   int recv_size;
   int size;
 
   MPI_Type_size(sendtype, &send_size);
   MPI_Type_size(recvtype, &recv_size);
-  //MPI_Type_get_extent(sendtype, &lb, &send_extent);
-  //MPI_Type_get_extent(recvtype, &lb, &recv_extent);
-  MPI_Type_extent(sendtype, &send_extent);
-  MPI_Type_extent(recvtype, &recv_extent);
+  MPI_Type_get_extent(sendtype, &lb, &send_extent);
+  MPI_Type_get_extent(recvtype, &lb, &recv_extent);
+  //MPI_Type_extent(sendtype, &send_extent);
+  //MPI_Type_extent(recvtype, &recv_extent);
   size = recv_size * recvcount;
 
   if(send_extent != send_size || recv_extent != recv_size) {
@@ -1108,17 +1108,17 @@ int HMPI_Scatter(void* sendbuf, int sendcount, MPI_Datatype sendtype, void* recv
 
 int HMPI_Gather(void* sendbuf, int sendcount, MPI_Datatype sendtype, void* recvbuf, int recvcount, MPI_Datatype recvtype, int root, HMPI_Comm comm)
 {
-  MPI_Aint send_extent, recv_extent/*, lb*/;
+  MPI_Aint send_extent, recv_extent, lb;
   int send_size;
   int recv_size;
   int size;
 
   MPI_Type_size(sendtype, &send_size);
   MPI_Type_size(recvtype, &recv_size);
-  //MPI_Type_get_extent(sendtype, &lb, &send_extent);
-  //MPI_Type_get_extent(recvtype, &lb, &recv_extent);
-  MPI_Type_extent(sendtype, &send_extent);
-  MPI_Type_extent(recvtype, &recv_extent);
+  MPI_Type_get_extent(sendtype, &lb, &send_extent);
+  MPI_Type_get_extent(recvtype, &lb, &recv_extent);
+  //MPI_Type_extent(sendtype, &send_extent);
+  //MPI_Type_extent(recvtype, &recv_extent);
   size = send_size * sendcount;
 
   if(send_extent != send_size || recv_extent != recv_size) {
@@ -1180,7 +1180,7 @@ int HMPI_Gather(void* sendbuf, int sendcount, MPI_Datatype sendtype, void* recvb
 
 int HMPI_Alltoall(void* sendbuf, int sendcount, MPI_Datatype sendtype, void* recvbuf, int recvcount, MPI_Datatype recvtype, HMPI_Comm comm) 
 {
-  MPI_Aint send_extent, recv_extent/*, lb*/;
+  MPI_Aint send_extent, recv_extent, lb;
   void* rbuf;
   int32_t send_size;
   int32_t recv_size;
@@ -1192,10 +1192,10 @@ int HMPI_Alltoall(void* sendbuf, int sendcount, MPI_Datatype sendtype, void* rec
 
   MPI_Type_size(sendtype, &send_size);
   MPI_Type_size(recvtype, &recv_size);
-  //MPI_Type_get_extent(sendtype, &lb, &send_extent);
-  //MPI_Type_get_extent(recvtype, &lb, &recv_extent);
-  MPI_Type_extent(sendtype, &send_extent);
-  MPI_Type_extent(recvtype, &recv_extent);
+  MPI_Type_get_extent(sendtype, &lb, &send_extent);
+  MPI_Type_get_extent(recvtype, &lb, &recv_extent);
+  //MPI_Type_extent(sendtype, &send_extent);
+  //MPI_Type_extent(recvtype, &recv_extent);
 
   if(send_extent != send_size || recv_extent != recv_size) {
     printf("alltoall non-contiguous derived datatypes are not supported yet!\n");
@@ -1487,7 +1487,7 @@ int HMPI_Abort( HMPI_Comm comm, int errorcode ) {
 
 int HMPI_Alltoall_local(void* sendbuf, int sendcount, MPI_Datatype sendtype, void* recvbuf, int recvcount, MPI_Datatype recvtype, HMPI_Comm comm) 
 {
-    MPI_Aint send_extent, recv_extent/*, lb*/;
+    MPI_Aint send_extent, recv_extent, lb;
     int32_t send_size;
     int32_t recv_size;
     int thr, i;
@@ -1496,10 +1496,10 @@ int HMPI_Alltoall_local(void* sendbuf, int sendcount, MPI_Datatype sendtype, voi
     MPI_Type_size(recvtype, &recv_size);
 
 #if HMPI_SAFE
-    //MPI_Type_get_extent(sendtype, &lb, &send_extent);
-    //MPI_Type_get_extent(recvtype, &lb, &recv_extent);
-    MPI_Type_extent(sendtype, &send_extent);
-    MPI_Type_extent(recvtype, &recv_extent);
+    MPI_Type_get_extent(sendtype, &lb, &send_extent);
+    MPI_Type_get_extent(recvtype, &lb, &recv_extent);
+    //MPI_Type_extent(sendtype, &send_extent);
+    //MPI_Type_extent(recvtype, &recv_extent);
 
     if(send_extent != send_size || recv_extent != recv_size) {
         printf("alltoall non-contiguous derived datatypes are not supported yet!\n");
