@@ -127,6 +127,8 @@ static inline void HMPI_Comm_thread(HMPI_Comm comm, int rank, int* tid)
 // AWF new function - barrier only among local threads
 void HMPI_Barrier_local(HMPI_Comm comm);
 
+// AWF new function - poll the network
+void HMPI_Poll(void);
 
 int HMPI_Send(void *buf, int count, MPI_Datatype datatype, int dest, int tag, HMPI_Comm comm );
 int HMPI_Recv(void *buf, int count, MPI_Datatype datatype, int source, int tag, HMPI_Comm comm, MPI_Status *status );

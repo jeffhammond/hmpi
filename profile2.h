@@ -94,7 +94,7 @@ static inline void PROFILE_INIT(int tid)
         exit(-1);
     }
 
-    PAPI_thread_init(pthread_self);
+    PAPI_thread_init((long unsigned int (*)())pthread_self);
 
 #if _PROFILE_PAPI_EVENTS == 1
     int num_hwcntrs = 0;

@@ -418,6 +418,14 @@ void HMPI_Barrier_local(HMPI_Comm comm)
   //barrier_wait(&comm->barr);
 }
 
+void HMPI_Poll(void)
+{
+    if(LOCK_TRY(&g_psm_lock)) {
+        poll();
+        LOCK_CLEAR(&g_psm_lock);
+    }
+}
+
 
 int HMPI_Finalize() {
 
@@ -528,10 +536,11 @@ static inline int HMPI_Progress_request(HMPI_Request *req) {
 
     //printf("%d testi req %d\n", g_rank*g_nthreads+g_tl_tid, req->type);
     //MPI_Test(&req->req, &flag, req->status);
-    //LOCK_SET(&g_psm_lock);
-    //flag = test(&req->req);
-    //LOCK_CLEAR(&g_psm_lock);
+    LOCK_SET(&g_psm_lock);
+    flag = test(&req->req);
+    LOCK_CLEAR(&g_psm_lock);
 
+#if 0
     if(LOCK_TRY(&g_psm_lock)) {
         flag = test(&req->req);
         LOCK_CLEAR(&g_psm_lock);
@@ -539,6 +548,7 @@ static inline int HMPI_Progress_request(HMPI_Request *req) {
     } else {
         flag = 0;
     }
+#endif
 
 
 //    if(flag && req->type == MPI_RECV) {
@@ -1205,6 +1215,7 @@ int HMPI_Alltoall(void* sendbuf, int sendcount, MPI_Datatype sendtype, void* rec
                       HMPI_ALLTOALL_TAG, 100, &recv_reqs[i]);
           }
       }
+
       //recv_reqs[g_rank] = MPI_REQUEST_NULL;
       LOCK_CLEAR(&g_psm_lock);
   }
@@ -1232,6 +1243,7 @@ int HMPI_Alltoall(void* sendbuf, int sendcount, MPI_Datatype sendtype, void* rec
 
   //Start sends to each other rank
   //barrier_cb(&comm->barr, g_tl_tid, barrier_iprobe);
+
   barrier(&comm->barr, g_tl_tid);
   //barrier_wait(&comm->barr);
 
@@ -1518,5 +1530,4 @@ int HMPI_Alltoall_local(void* sendbuf, int sendcount, MPI_Datatype sendtype, voi
   //barrier_wait(&comm->barr);
   return MPI_SUCCESS;
 }
-
 

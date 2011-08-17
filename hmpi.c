@@ -942,19 +942,24 @@ int HMPI_Allreduce(void *sendbuf, void *recvbuf, int count, MPI_Datatype datatyp
     //barrier_wait(&comm->barr);
   }
 
+
   if(g_tl_tid == 0) {
+    //printf("%d before mpi allreduce\n", g_rank); fflush(stdout);
     MPI_Allreduce((void*)comm->sbuf[0], (void*)comm->rbuf[0], count, datatype, op, comm->mpicomm);
+    //printf("%d after mpi allreduce\n", g_rank); fflush(stdout);
   }
 
   barrier_cb(&comm->barr, g_tl_tid, barrier_iprobe);
   //barrier_wait(&comm->barr);
 
+  //printf("%d doing allreduce copy\n", g_tl_tid); fflush(stdout);
   if(g_tl_tid != 0) memcpy(recvbuf, (void*)comm->rbuf[0], count*size);
 
   // protect from early leave (rootrbuf)
   barrier_cb(&comm->barr, g_tl_tid, barrier_iprobe);
   //barrier_wait(&comm->barr);
 
+  //printf("%d done with allreduce\n", g_tl_tid); fflush(stdout);
   if(g_tl_tid == 0) {
     free(localbuf);
   }
@@ -1526,7 +1531,8 @@ int HMPI_Alltoall_local(void* sendbuf, int sendcount, MPI_Datatype sendtype, voi
   memcpy((void*)((uintptr_t)recvbuf + (g_tl_tid * copy_len)),
          (void*)((uintptr_t)sendbuf + (g_tl_tid * copy_len)) , copy_len);
 
-  barrier_cb(&comm->barr, g_tl_tid, barrier_iprobe);
+  //barrier_cb(&comm->barr, g_tl_tid, barrier_iprobe);
+  barrier(&comm->barr, g_tl_tid);
   //barrier_wait(&comm->barr);
 
   //Push local data to each other thread's receive buffer.
@@ -1541,7 +1547,8 @@ int HMPI_Alltoall_local(void* sendbuf, int sendcount, MPI_Datatype sendtype, voi
       //       (void*)((uintptr_t)sendbuf + (thr * copy_len)) , copy_len);
   }
 
-  barrier_cb(&comm->barr, g_tl_tid, barrier_iprobe);
+  //barrier_cb(&comm->barr, g_tl_tid, barrier_iprobe);
+  barrier(&comm->barr, g_tl_tid);
   //barrier_wait(&comm->barr);
   return MPI_SUCCESS;
 }
