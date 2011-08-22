@@ -45,8 +45,6 @@ static inline void barrier(barrier_t *barrier, int tid) {
       STORE_FENCE();
       barrier->global_sense = local_sense;
       return;
-  } else if(val < 1) {
-    printf("%d val %d\n", tid, val); fflush(stdout);
   }
 
   //while(barrier->global_sense != barrier->local_sense[tid]) {

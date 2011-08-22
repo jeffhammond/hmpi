@@ -149,6 +149,8 @@ int HMPI_Alltoall(void* sendbuf, int sendcount, MPI_Datatype sendtype, void* rec
 
 int HMPI_Alltoall_local(void* sendbuf, int sendcount, MPI_Datatype sendtype, void* recvbuf, int recvcount, MPI_Datatype recvtype, HMPI_Comm comm);
 
+int HMPI_Alltoall_local2(void* sendbuf, void* recvbuf, size_t len, HMPI_Comm comm);
+
 int HMPI_Abort( HMPI_Comm comm, int errorcode );
 
 int HMPI_Finalize();

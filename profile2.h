@@ -75,11 +75,13 @@ typedef struct profile_vars_t {
 
 
 #define PROFILE_VAR(v) \
-    THREAD profile_vars_t _profile_ ## v = {0};
+    THREAD profile_vars_t _profile_ ## v = {0}
 
 #define PROFILE_EXTERN(v) \
-    extern THREAD profile_vars_t _profile_ ## v;
+    extern THREAD profile_vars_t _profile_ ## v
 
+#define PROFILE_RESET(v) \
+    memset(&_profile_ ## v, 0, sizeof(profile_vars_t))
 
 //This needs to be declared once in a C file somewhere
 //extern /*__thread*/ struct profile_info_t _profile_info;

@@ -20,6 +20,7 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
+#include "pipelinecopy.h"
 
 //Wrappers to GCC/ICC extensions
 
@@ -37,6 +38,16 @@
 
 //PROFILE_DECLARE();
 //PROFILE_VAR(mpi);
+
+
+//Use the pipelined messaging approach, first just for alltoall.
+//Allocate a table of buffers, g_nthreads^2.  makes synchronization easy.
+//Start just by using send_msg/recv_msg
+//Next try a more nonblocking approach, progressing each write until
+// it cant anymore, then checking the next transfer.
+
+
+buffer_t** g_buffers = NULL;
 
 
 int g_nthreads=-1;
@@ -241,6 +252,10 @@ void* trampoline(void* tid) {
 
 //  printf("%d:%d entered trampoline\n", g_rank, g_tl_tid); fflush(stdout);
 
+  g_buffers[(unsigned long)tid] = (buffer_t*)memalign(4096, sizeof(buffer_t) * g_nthreads);
+  memset(g_buffers[(unsigned long)tid], 0, sizeof(buffer_t) * g_nthreads);
+
+
   // barrier to avoid race in tid ...
   barrier(&HMPI_COMM_WORLD->barr, g_tl_tid);
   //while(!barrier_test(&HMPI_COMM_WORLD->barr));
@@ -270,6 +285,8 @@ int HMPI_Init(int *argc, char ***argv, int nthreads, void (*start_routine)())
   
   g_nthreads = nthreads;
   g_entry = start_routine;
+
+  g_buffers = (buffer_t**)malloc(sizeof(buffer_t*) * nthreads * nthreads);
 
   HMPI_COMM_WORLD = (HMPI_Comm_info*)malloc(sizeof(HMPI_Comm_info));
   HMPI_COMM_WORLD->mpicomm = MPI_COMM_WORLD;
@@ -1496,6 +1513,7 @@ int HMPI_Alltoall_local(void* sendbuf, int sendcount, MPI_Datatype sendtype, voi
     int32_t send_size;
     int32_t recv_size;
     int thr, i;
+    int tid = g_tl_tid;
 
     MPI_Type_size(sendtype, &send_size);
     MPI_Type_size(recvtype, &recv_size);
@@ -1517,7 +1535,7 @@ int HMPI_Alltoall_local(void* sendbuf, int sendcount, MPI_Datatype sendtype, voi
     }
 #endif
 
-  comm->sbuf[g_tl_tid] = sendbuf;
+  comm->sbuf[tid] = sendbuf;
   //comm->scount[g_tl_tid] = sendcount;
   //comm->stype[g_tl_tid] = sendtype;
 
@@ -1528,29 +1546,193 @@ int HMPI_Alltoall_local(void* sendbuf, int sendcount, MPI_Datatype sendtype, voi
 
   //Do the self copy
   int copy_len = send_size * sendcount;
-  memcpy((void*)((uintptr_t)recvbuf + (g_tl_tid * copy_len)),
-         (void*)((uintptr_t)sendbuf + (g_tl_tid * copy_len)) , copy_len);
+  memcpy((void*)((uintptr_t)recvbuf + (tid * copy_len)),
+         (void*)((uintptr_t)sendbuf + (tid * copy_len)) , copy_len);
 
   //barrier_cb(&comm->barr, g_tl_tid, barrier_iprobe);
-  barrier(&comm->barr, g_tl_tid);
-  //barrier_wait(&comm->barr);
+  barrier(&comm->barr, tid);
 
   //Push local data to each other thread's receive buffer.
   //For each thread, memcpy from my send buffer into their receive buffer.
 
   //TODO - try staggering
   for(thr = 1; thr < g_nthreads; thr++) {
-      int t = (g_tl_tid + thr) % g_nthreads;
+      int t = (tid + thr) % g_nthreads;
       memcpy((void*)((uintptr_t)recvbuf + (t * copy_len)),
-             (void*)((uintptr_t)comm->sbuf[t] + (g_tl_tid * copy_len)) , copy_len);
+             (void*)((uintptr_t)comm->sbuf[t] + (tid * copy_len)) , copy_len);
       //memcpy((void*)((uintptr_t)comm->rbuf[thr] + (g_tl_tid * copy_len)),
       //       (void*)((uintptr_t)sendbuf + (thr * copy_len)) , copy_len);
   }
 
   //barrier_cb(&comm->barr, g_tl_tid, barrier_iprobe);
-  barrier(&comm->barr, g_tl_tid);
-  //barrier_wait(&comm->barr);
+  barrier(&comm->barr, tid);
   return MPI_SUCCESS;
 }
+
+
+int HMPI_Alltoall_local2(void* sendbuf, void* recvbuf, size_t copy_len, HMPI_Comm comm)
+{
+    int thr, i;
+    int tid = g_tl_tid;
+
+  comm->sbuf[tid] = sendbuf;
+  comm->rbuf[tid] = recvbuf;
+
+
+  //Do the self copy
+  //int copy_len = len;
+  memcpy((void*)((uintptr_t)recvbuf + (tid * copy_len)),
+         (void*)((uintptr_t)sendbuf + (tid * copy_len)) , copy_len);
+
+  //barrier_cb(&comm->barr, g_tl_tid, barrier_iprobe);
+  barrier(&comm->barr, tid);
+
+  //Push local data to each other thread's receive buffer.
+  //For each thread, memcpy from my send buffer into their receive buffer.
+
+  //TODO - try staggering
+  for(thr = 1; thr < g_nthreads; thr++) {
+      int t = (tid + thr) % g_nthreads;
+      memcpy((void*)((uintptr_t)recvbuf + (t * copy_len)),
+             (void*)((uintptr_t)comm->sbuf[t] + (tid * copy_len)) , copy_len);
+      //memcpy((void*)((uintptr_t)comm->rbuf[t] + (tid * copy_len)),
+      //       (void*)((uintptr_t)sendbuf + (t * copy_len)) , copy_len);
+  }
+
+
+//for alltoall, i can set bufs, barrier, all threads copy, barrier
+//easy checks -- if < 16k recver copies the whole thing
+//if more, lower rank copies lower half, upper rank copies upper half
+
+//do two for loops.. one up to tid, one from tid onward
+#if 0
+#define COPY_LIMIT 16384
+
+  //int copy_len = len;
+  int half_len = copy_len >> 1;
+
+  //Do the self copy
+  memcpy((void*)((uintptr_t)recvbuf + (tid * copy_len)),
+         (void*)((uintptr_t)sendbuf + (tid * copy_len)), copy_len);
+
+
+  if(copy_len < COPY_LIMIT) {
+      for(thr = 1; thr < g_nthreads; thr++) {
+          int t = (tid + thr) % g_nthreads;
+          memcpy((void*)((uintptr_t)recvbuf + (t * copy_len)),
+                 (void*)((uintptr_t)comm->sbuf[t] + (tid * copy_len)) , copy_len);
+          //memcpy((void*)((uintptr_t)comm->rbuf[t] + (tid * copy_len)),
+          //       (void*)((uintptr_t)sendbuf + (t * copy_len)) , copy_len);
+      }
+  } else {
+      half_len = copy_len >> 1;
+
+      //Double-copy path
+
+      for(int t = tid + 1; t < g_nthreads; t++) {
+          memcpy((void*)((uintptr_t)recvbuf + (t * copy_len)),
+                 (void*)((uintptr_t)comm->sbuf[t] + (tid * copy_len)), half_len);
+      //}
+
+      //for(int t = tid + 1; t < g_nthreads; t++) {
+          memcpy((void*)((uintptr_t)comm->rbuf[t] + (tid * copy_len)),
+                 (void*)((uintptr_t)sendbuf + (t * copy_len)), half_len);
+      }
+
+      for(int t = 0; t < tid; t++) {
+          //Also need to memcpy the other way!
+          memcpy((void*)((uintptr_t)recvbuf + (t * copy_len)+half_len),
+                 (void*)((uintptr_t)comm->sbuf[t] + (tid * copy_len) + half_len),
+                 copy_len - half_len);
+      //}
+
+      //for(int t = 0; t < tid; t++) {
+          memcpy((void*)((uintptr_t)comm->rbuf[t] + (tid * copy_len)+half_len),
+                 (void*)((uintptr_t)sendbuf + (t * copy_len) + half_len),
+                 copy_len - half_len);
+      }
+
+
+  }
+#endif
+
+  //barrier_cb(&comm->barr, g_tl_tid, barrier_iprobe);
+  barrier(&comm->barr, tid);
+  return MPI_SUCCESS;
+}
+
+
+#if 0
+int HMPI_Alltoall_local2(void* sendbuf, void* recvbuf, size_t copy_len, HMPI_Comm comm)
+{
+    int thr, i;
+    int tid = g_tl_tid;
+
+    //Do the self copy
+    memcpy((void*)((uintptr_t)recvbuf + (tid * copy_len)),
+           (void*)((uintptr_t)sendbuf + (tid * copy_len)), copy_len);
+
+    //Need to avoid deadlocking here.
+    //Have a priority -- lower tid sends first, then higher tid
+
+    for(int t = 1; t < g_nthreads; t++) {
+        //Send to tid - t, recv from tid + t
+        int send_tid = (tid + g_nthreads - t) % g_nthreads;
+        int recv_tid = (tid + t) % g_nthreads;
+
+        int send_len = copy_len;
+        int recv_len = copy_len;
+        char* sendptr = (char*)((uintptr_t)sendbuf + (send_tid * copy_len));
+        char* recvptr = (char*)((uintptr_t)recvbuf + (recv_tid * copy_len));
+        //printf("%d send tid %d recv tid %d\n", tid, send_tid, recv_tid);
+        //fflush(stdout);
+
+        //Index is [sender][receiver]
+        buffer_t* send_buf = &g_buffers[tid][recv_tid];
+        buffer_t* recv_buf = &g_buffers[send_tid][tid];
+
+        //printf("%d sendbuf %p head %llu tail %llu\n", tid, send_buf, send_buf->head, send_buf->tail);
+        //printf("%d recvbuf %p head %llu tail %llu\n", tid, recv_buf, recv_buf->head, recv_buf->tail);
+        //fflush(stdout);
+
+        while(send_len > 0 || recv_len > 0) {
+            int head = send_buf->head;
+
+            // Send until we have to wait for a free block
+            while(send_len > 0 && head - send_buf->tail < NUM_BLOCKS) {
+                int len = (send_len < BLOCK_SIZE ? send_len : BLOCK_SIZE);
+
+                memcpy(&send_buf->data[(head % NUM_BLOCKS) * BLOCK_SIZE],
+                        sendptr, len);
+
+                //TODO - maybe use sfence and non-atomic add
+                head = __sync_fetch_and_add(&send_buf->head, 1) + 1;
+
+                send_len -= len;
+                sendptr += len;
+            }
+
+
+            int tail = recv_buf->tail;
+
+            // Recv until we have to wait for a free block
+            while(recv_len > 0 && tail < recv_buf->head) {
+                int len = (recv_len < BLOCK_SIZE ? recv_len : BLOCK_SIZE);
+
+                memcpy(recvptr,
+                       &recv_buf->data[(tail % NUM_BLOCKS) * BLOCK_SIZE], len);
+
+                //TODO - maybe use sfence and non-atomic add
+                tail = __sync_fetch_and_add(&recv_buf->tail, 1) + 1;
+
+                recv_len -= len;
+                recvptr += len;
+            }
+        }
+    }
+
+    return MPI_SUCCESS;
+}
+#endif
 
 
