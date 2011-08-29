@@ -20,7 +20,9 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
-#include "pipelinecopy.h"
+//#include "pipelinecopy.h"
+
+#define BLOCK_SIZE 4096
 
 //Wrappers to GCC/ICC extensions
 
@@ -35,6 +37,9 @@
   __sync_bool_compare_and_swap((uintptr_t*)(ptr), \
           (uintptr_t)(oldval), (uintptr_t)(newval))
 
+#define FETCH_ADD(ptr, val) \
+    __sync_fetch_and_add(ptr, val)
+
 
 //PROFILE_DECLARE();
 //PROFILE_VAR(mpi);
@@ -47,7 +52,7 @@
 // it cant anymore, then checking the next transfer.
 
 
-buffer_t** g_buffers = NULL;
+//buffer_t** g_buffers = NULL;
 
 
 int g_nthreads=-1;
@@ -252,8 +257,8 @@ void* trampoline(void* tid) {
 
 //  printf("%d:%d entered trampoline\n", g_rank, g_tl_tid); fflush(stdout);
 
-  g_buffers[(unsigned long)tid] = (buffer_t*)memalign(4096, sizeof(buffer_t) * g_nthreads);
-  memset(g_buffers[(unsigned long)tid], 0, sizeof(buffer_t) * g_nthreads);
+  //g_buffers[(unsigned long)tid] = (buffer_t*)memalign(4096, sizeof(buffer_t) * g_nthreads);
+  //memset(g_buffers[(unsigned long)tid], 0, sizeof(buffer_t) * g_nthreads);
 
 
   // barrier to avoid race in tid ...
@@ -286,7 +291,7 @@ int HMPI_Init(int *argc, char ***argv, int nthreads, void (*start_routine)())
   g_nthreads = nthreads;
   g_entry = start_routine;
 
-  g_buffers = (buffer_t**)malloc(sizeof(buffer_t*) * nthreads * nthreads);
+  //g_buffers = (buffer_t**)malloc(sizeof(buffer_t*) * nthreads * nthreads);
 
   HMPI_COMM_WORLD = (HMPI_Comm_info*)malloc(sizeof(HMPI_Comm_info));
   HMPI_COMM_WORLD->mpicomm = MPI_COMM_WORLD;
@@ -472,6 +477,31 @@ static inline int HMPI_Progress_send(HMPI_Request *req) {
         HMPI_Progress_recv(cur);
     }
 
+    //Write blocks on this send req if receiver has matched it.
+    //If mesage is short, receiver won't bother setting recv_buf, and instead
+    // just does the copy and moves on.
+    uintptr_t rbuf = (uintptr_t)req->recv_buf;
+    if((void*)rbuf != NULL) {
+        //We know the receiver has arrived, so work on copying.
+        size_t size = req->size;
+        uintptr_t sbuf = (uintptr_t)req->send_buf;
+        size_t offset;
+
+        //length to copy is min of len - offset and BLOCK_SIZE
+        while((offset = FETCH_ADD(&req->offset, BLOCK_SIZE)) < size) {
+            req->sender_done = 0;
+            int left = size - offset;
+            memcpy((void*)(rbuf + offset), (void*)(sbuf + offset),
+                    (left < BLOCK_SIZE ? left : BLOCK_SIZE));
+        }
+
+        STORE_FENCE();
+        req->sender_done = 1;
+        //Possible for the receiver to still be copying here.
+        //But, not always.  How do I handle completion?
+        //TODO - for now just return whatever stat is; receiver marks done.
+    }
+
     return get_reqstat(req);
 }
 
@@ -499,7 +529,25 @@ static inline int HMPI_Progress_recv(HMPI_Request *recv_req) {
 
       //printf("%d memcpy %p %p\n", g_tl_tid, recv_req->buf, send_req->buf);
       //fflush(stdout);
-      memcpy(recv_req->buf, send_req->buf, sendsize);
+      if(sendsize < BLOCK_SIZE * 2) {
+        memcpy((void*)recv_req->recv_buf, send_req->send_buf, sendsize);
+      } else {
+        //The setting of send_req->recv_buf signals to sender that they can
+        // start doing copying as well, if they are testing the req.
+        uintptr_t rbuf = (uintptr_t)(send_req->recv_buf = recv_req->recv_buf);
+        uintptr_t sbuf = (uintptr_t)send_req->send_buf;
+        size_t offset;
+
+        //length to copy is min of len - offset and BLOCK_SIZE
+        while((offset = FETCH_ADD(&send_req->offset, BLOCK_SIZE)) < sendsize) {
+            int left = sendsize - offset;
+            memcpy((void*)(rbuf + offset), (void*)(sbuf + offset),
+                    (left < BLOCK_SIZE ? left : BLOCK_SIZE));
+        }
+
+        //Wait if the sender is copying.
+        while(send_req->sender_done == 0);
+      }
 
       //Mark send and receive requests done
       update_reqstat(send_req, 1);
@@ -612,7 +660,7 @@ static inline int HMPI_Progress_request(HMPI_Request *req) {
     PROFILE_STOP(mpi);
     if(flag) {
       PROFILE_START(mpi);
-      MPI_Recv(req->buf, req->size, req->datatype, req->status->MPI_SOURCE, req->tag, req->comm, req->status);
+      MPI_Recv((void*)req->recv_buf, req->size, req->datatype, req->status->MPI_SOURCE, req->tag, req->comm, req->status);
       PROFILE_STOP(mpi);
       remove_recv_req(req);
       return 1;
@@ -752,7 +800,10 @@ int HMPI_Isend(void* buf, int count, MPI_Datatype datatype, int dest, int tag, H
     req->proc = g_nthreads*g_rank+g_tl_tid; // my local rank
     req->tag = tag;
     req->size = size*count;
-    req->buf = buf;
+    req->send_buf = buf;
+    req->recv_buf = NULL;
+    req->offset = 0;
+    req->sender_done = 1;
 
     int target_mpi_thread = dest % g_nthreads;
 
@@ -767,7 +818,7 @@ int HMPI_Isend(void* buf, int count, MPI_Datatype datatype, int dest, int tag, H
     req->proc = g_nthreads*g_rank+g_tl_tid; // my local rank
     req->tag = tag;
     req->size = size*count;
-    req->buf = buf;
+    req->send_buf = buf;
 
     MPI_Isend(buf, count, datatype, target_mpi_rank, tag, g_tcomms[g_tl_tid], &req->req);
   }
@@ -833,7 +884,9 @@ int HMPI_Irecv(void* buf, int count, MPI_Datatype datatype, int source, int tag,
     req->proc = source;
     req->tag = tag;
     req->size = size*count;
-    req->buf = buf;
+    req->send_buf = NULL;
+    req->recv_buf = buf;
+    //req->offset = 0;
 
     //int tests=0;
     //while(HMPI_Progress_request(req) != 1 && ++tests<10);
@@ -848,7 +901,7 @@ int HMPI_Irecv(void* buf, int count, MPI_Datatype datatype, int source, int tag,
     req->proc = source;
     req->tag = tag;
     req->size = size*count;
-    req->buf = buf;
+    req->recv_buf = buf;
 
     PROFILE_START(mpi);
     MPI_Irecv(buf, count, datatype, source_mpi_rank, tag, g_tcomms[source_mpi_thread], &req->req);
@@ -864,7 +917,7 @@ int HMPI_Irecv(void* buf, int count, MPI_Datatype datatype, int source, int tag,
     req->proc = source;
     req->tag = tag;
     req->size = size*count;
-    req->buf = buf;
+    req->recv_buf = buf;
 
     req->comm = g_tcomms[g_tl_tid]; // not 100% sure -- this doesn't catch all messages -- Probe would need to loop over all thread comms and lock :-(
     req->datatype = datatype;
@@ -1570,6 +1623,7 @@ int HMPI_Alltoall_local(void* sendbuf, int sendcount, MPI_Datatype sendtype, voi
 }
 
 
+#if 0
 int HMPI_Alltoall_local2(void* sendbuf, void* recvbuf, size_t copy_len, HMPI_Comm comm)
 {
     int thr, i;
@@ -1660,6 +1714,52 @@ int HMPI_Alltoall_local2(void* sendbuf, void* recvbuf, size_t copy_len, HMPI_Com
   barrier(&comm->barr, tid);
   return MPI_SUCCESS;
 }
+#endif
+
+
+//Can I sync smarter?
+//Two threads join up and swap data -- combine the sync for the two transfers.
+//each thread sets send/recv buffer, when those are set, we know to go
+
+int HMPI_Alltoall_local2(void* sendbuf, void* recvbuf, size_t copy_len, HMPI_Comm comm)
+{
+    int comm_size = g_size * g_nthreads;
+    uintptr_t sbuf = (uintptr_t)sendbuf;
+    uintptr_t rbuf = (uintptr_t)recvbuf;
+    int tid = g_tl_tid;
+    int rank = g_nthreads*g_rank + tid;
+
+    //Dumb alltoall -- send to everybody, then receive.
+    //HMPI_Request* sreqs = (HMPI_Request*)malloc(sizeof(MPI_Request) * comm_size);
+    HMPI_Request* sreqs = (HMPI_Request*)alloca(sizeof(MPI_Request) * comm_size);
+
+    //Do the self copy
+    memcpy((void*)(rbuf + (tid * copy_len)),
+           (void*)(sbuf + (tid * copy_len)), copy_len);
+
+    //Post sends
+    for(int i = 1; i < g_size; i++) {
+        int r = (rank + i) % g_size;
+        HMPI_Isend((void*)(sbuf + copy_len * r), copy_len, MPI_BYTE, r, 4317194,
+                HMPI_COMM_WORLD, &sreqs[i]);
+    }
+
+    //Do blocking receives
+    for(int i = 1; i < g_size; i++) {
+        int r = (rank + g_size - i) % g_size;
+        HMPI_Recv((void*)(rbuf + copy_len * r), copy_len, MPI_BYTE, r, 4317194,
+                HMPI_COMM_WORLD, MPI_STATUS_IGNORE);
+        HMPI_Wait(&sreqs[i], MPI_STATUS_IGNORE);
+    }
+
+    //Complete sends
+    //for(int i = 1; i < g_size; i++) {
+        //HMPI_Wait(&sreqs[i], MPI_STATUS_IGNORE);
+   // }
+
+    //free(sreqs);
+}
+
 
 
 #if 0

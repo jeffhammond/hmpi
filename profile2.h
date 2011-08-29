@@ -115,7 +115,13 @@ static inline void PROFILE_INIT(int tid)
 #if _PROFILE_PAPI_FILE == 1
     char filename[128];
 
+#if _PROFILE_MPI
+    int rank;
+    MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+    sprintf(filename, "profile-%d-%d.out", tid, rank);
+#else
     sprintf(filename, "profile-%d.out", tid);
+#endif
     _profile_fd = fopen(filename, "w+");
     if(_profile_fd == NULL) {
         printf("ERROR opening profile data file\n");
@@ -167,7 +173,7 @@ static inline void __PROFILE_START(struct profile_vars_t* v)
 
 #define PROFILE_STOP(v) __PROFILE_STOP(#v, &_profile_ ## v)
 
-static inline void __PROFILE_STOP(char* name, struct profile_vars_t* v)
+static inline void __PROFILE_STOP(const char* name, struct profile_vars_t* v)
 {
     //Grab the time right away
     //uint64_t t = PAPI_get_real_usec() - v->start;
@@ -230,7 +236,7 @@ static void __PROFILE_SHOW(char* name, struct profile_vars_t* v)
 
 #define PROFILE_SHOW_REDUCE(v) __PROFILE_SHOW_REDUCE(#v, &_profile_ ## v)
 
-static void __PROFILE_SHOW_REDUCE(char* name, struct profile_vars_t* v)
+static void __PROFILE_SHOW_REDUCE(const char* name, struct profile_vars_t* v)
 {
     uint64_t rt;
     double ra;

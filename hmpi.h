@@ -68,8 +68,12 @@ typedef struct ruqelem_t {
   int proc;
   int tag;
   int size;
-  void *buf;
+  void *send_buf;
+  volatile void *recv_buf;
+  volatile size_t offset;
 
+  volatile uint8_t sender_done;
+  //volatile uint8_t recver_done;
   //OPA_int_t stat;
   //int stat;
   volatile uint8_t stat;
