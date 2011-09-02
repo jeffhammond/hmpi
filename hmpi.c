@@ -29,6 +29,7 @@
 #define likely(x)       __builtin_expect((x),1)
 #define unlikely(x)     __builtin_expect((x),0)
 
+//if *ptr == oldval, then write *newval
 #define CAS_PTR(ptr, oldval, newval) \
   __sync_val_compare_and_swap((uintptr_t*)(ptr), \
           (uintptr_t)(oldval), (uintptr_t)(newval))
@@ -529,7 +530,7 @@ static inline int HMPI_Progress_recv(HMPI_Request *recv_req) {
 
       //printf("%d memcpy %p %p\n", g_tl_tid, recv_req->buf, send_req->buf);
       //fflush(stdout);
-      if(sendsize < BLOCK_SIZE * 2) {
+      if(sendsize < /*BLOCK_SIZE * 2*/ 128) {
         memcpy((void*)recv_req->recv_buf, send_req->send_buf, sendsize);
       } else {
         //The setting of send_req->recv_buf signals to sender that they can
@@ -540,9 +541,34 @@ static inline int HMPI_Progress_recv(HMPI_Request *recv_req) {
 
         //length to copy is min of len - offset and BLOCK_SIZE
         while((offset = FETCH_ADD(&send_req->offset, BLOCK_SIZE)) < sendsize) {
-            int left = sendsize - offset;
-            memcpy((void*)(rbuf + offset), (void*)(sbuf + offset),
-                    (left < BLOCK_SIZE ? left : BLOCK_SIZE));
+            int length = BLOCK_SIZE;
+            int next = offset + BLOCK_SIZE;
+            //Try to keep grabbing more blocks
+            int i;
+            for(i = 0; i < 8 && offset + length < sendsize; i++) {
+                if(!CAS_PTR_BOOL(&send_req->offset, next, next + BLOCK_SIZE)) {
+                    //Sender jumped in, break and copy.
+                    break;
+                }
+
+                length += BLOCK_SIZE;
+                next += BLOCK_SIZE;
+            }
+
+#if 0
+            if(i > 0) {
+                printf("extended %d\n", i);
+            }
+#endif
+
+            //int left = sendsize - offset;
+            if(offset + length > sendsize) {
+                length = sendsize - offset;
+            }
+
+            //memcpy((void*)(rbuf + offset), (void*)(sbuf + offset),
+            //        (left < BLOCK_SIZE ? left : BLOCK_SIZE));
+            memcpy((void*)(rbuf + offset), (void*)(sbuf + offset), length);
         }
 
         //Wait if the sender is copying.
