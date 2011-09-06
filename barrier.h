@@ -8,6 +8,7 @@
 
 //GCC only provides a builtin for mfence, not sfence or lfence.
 #define STORE_FENCE() __asm__("sfence")
+#define LOAD_FENCE() __asm__("lfence")
 
 typedef struct {
   //Centralized barrier
