@@ -8,12 +8,8 @@
 #include <assert.h>
 #include <string.h>
 #include "barrier.h"
+#include "lock.h"
 //#include "opa_primitives.h"
-
-//#define PTHREAD_BARRIER
-//#define COUNTER_BARRIER
-//#define ANDY_BARRIER
-//#define DEBUG
 
 #ifdef __cplusplus
 extern "C" {
@@ -63,23 +59,21 @@ extern HMPI_Comm HMPI_COMM_WORLD;
 //#define HMPI_ANY_TAG -55
 
 /* this identifies a message for matching and also acts as request */
-typedef struct ruqelem_t {
+typedef struct HMPI_Request {
   int type;
   int proc;
   int tag;
-  int size;
-  void *send_buf;
-  volatile void *recv_buf;
-  volatile size_t offset;
+  size_t size;
 
-  volatile uint8_t sender_done;
-  //volatile uint8_t recver_done;
-  //OPA_int_t stat;
-  //int stat;
+  void* buf;
+  struct HMPI_Request* match_req;
+
+  size_t offset;
+  lock_t recver_match;
   volatile uint8_t stat;
 
-  struct ruqelem_t* next;
-  struct ruqelem_t* prev;
+  struct HMPI_Request* next;
+  struct HMPI_Request* prev;
 
   //pthread_mutex_t statlock;
   MPI_Request req;
@@ -87,11 +81,9 @@ typedef struct ruqelem_t {
   // following only for HMPI_RECV_ANY_SOURCE
   MPI_Comm comm;
   MPI_Datatype datatype;
-} ruqelem_t;
+} HMPI_Request;
 
-typedef ruqelem_t HMPI_Request;
-
-int HMPI_Init(int *argc, char ***argv, int nthreads, void (*start_routine)());
+int HMPI_Init(int *argc, char ***argv, int nthreads, void (*start_routine)(int argc, char** argv));
 
 int HMPI_Comm_rank ( HMPI_Comm comm, int *rank );
 int HMPI_Comm_size ( HMPI_Comm comm, int *size );

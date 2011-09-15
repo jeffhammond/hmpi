@@ -33,16 +33,28 @@
 #include <time.h>
 #include <papi.h>
 
+#if _PROFILE_MPI == 1
+#include <mpi.h>
+#endif
+
+#if _PROFILE_HMPI == 1
+#include "hmpi.h"
+#endif
+
+
 
 #if _PROFILE_PAPI_EVENTS == 1
 
-#define NUM_EVENTS 4
+#define NUM_EVENTS 1
 
 static int _profile_events[NUM_EVENTS] =
+          { PAPI_L2_TCM};
         //{ PAPI_TOT_CYC, PAPI_TOT_INS, PAPI_L2_TCM, PAPI_HW_INT };
-        { PAPI_TOT_CYC, PAPI_TOT_INS, PAPI_L2_TCM, PAPI_RES_STL };
+//        { PAPI_TOT_CYC, PAPI_TOT_INS, PAPI_L2_TCM, PAPI_RES_STL };
 //        { PAPI_TOT_CYC, PAPI_TOT_INS, 1073741862, 1073741935 };
         //{ PAPI_TOT_CYC, PAPI_TOT_INS, PAPI_HW_INT, 1073741935 };
+
+static __thread int _profile_eventset = PAPI_NULL;
 
 extern THREAD FILE* _profile_fd;
 
@@ -70,6 +82,7 @@ typedef struct profile_vars_t {
     uint64_t start;
 #if _PROFILE_PAPI_EVENTS == 1
     uint64_t ctrs[NUM_EVENTS];
+    uint64_t ctr_max[NUM_EVENTS];
 #endif
 } profile_vars_t;
 
@@ -91,7 +104,7 @@ static inline void PROFILE_INIT(int tid)
   if(tid == 0) {
     int ret = PAPI_library_init(PAPI_VER_CURRENT);
     if(ret < 0) {
-        printf("PAPI init failure\n");
+        printf("PAPI init failure %s\n", PAPI_strerror(ret));
         fflush(stdout);
         exit(-1);
     }
@@ -109,9 +122,36 @@ static inline void PROFILE_INIT(int tid)
     if(num_hwcntrs < NUM_EVENTS) {
         printf("ERROR PAPI reported < %d events available\n", NUM_EVENTS);
     }
+
+    ret = PAPI_create_eventset(&_profile_eventset);
+    if(ret != PAPI_OK) {
+        printf("PAPI create eventset error %s\n", PAPI_strerror(ret));
+        fflush(stdout);
+        exit(-1);
+    }
+
+    for(int i = 0; i < NUM_EVENTS; i++) {
+        PAPI_event_info_t info;
+        if(PAPI_get_event_info(_profile_events[i], &info) != PAPI_OK) {
+            printf("ERROR PAPI_get_event_info %d\n", i);
+            continue;
+        }
+
+        printf("PAPI event %16s %s\n", info.symbol, info.long_descr);
+        fflush(stdout);
+
+        ret = PAPI_add_event(_profile_eventset, _profile_events[i]);
+        if(ret != PAPI_OK) {
+            printf("PAPI add event %d failed %s\n", i, PAPI_strerror(ret));
+            fflush(stdout);
+            exit(-1);
+        }
+    }
+
 #endif
   }
 #if _PROFILE_PAPI_EVENTS == 1
+
 #if _PROFILE_PAPI_FILE == 1
     char filename[128];
 
@@ -162,7 +202,12 @@ static inline void PROFILE_FINALIZE()
 static inline void __PROFILE_START(struct profile_vars_t* v)
 {
 #if _PROFILE_PAPI_EVENTS == 1
-    PAPI_start_counters(_profile_events, NUM_EVENTS);
+    //int rc = PAPI_start_counters(_profile_events, NUM_EVENTS);
+    int rc = PAPI_start(_profile_eventset);
+    if(rc != PAPI_OK) {
+        printf("papi start error %s\n", PAPI_strerror(rc)); fflush(stdout);
+        exit(-1);
+    }
 #endif
     //v->start = PAPI_get_real_usec();
     struct timespec ts;
@@ -184,7 +229,12 @@ static inline void __PROFILE_STOP(const char* name, struct profile_vars_t* v)
 #if _PROFILE_PAPI_EVENTS == 1
     //Grab counter values
     uint64_t ctrs[NUM_EVENTS] = {0};
-    PAPI_read_counters((long long*)ctrs, NUM_EVENTS);
+    //int rc = PAPI_read_counters((long long*)ctrs, NUM_EVENTS);
+    int rc = PAPI_stop(_profile_eventset, (long long*)ctrs);
+    if(rc != PAPI_OK) {
+        printf("papi read error %s\n", PAPI_strerror(rc)); fflush(stdout);
+        exit(-1);
+    }
 #endif
 
     //Accumulate the time
@@ -195,6 +245,9 @@ static inline void __PROFILE_STOP(const char* name, struct profile_vars_t* v)
     //Accumulate the counter values
     for(int i = 0; i < NUM_EVENTS; i++) {
         v->ctrs[i] += ctrs[i];
+        if(v->ctr_max[i] < ctrs[i]) {
+            v->ctr_max[i] = ctrs[i];
+        }
     }
 
 #if _PROFILE_PAPI_FILE == 1
@@ -224,15 +277,21 @@ static void __PROFILE_SHOW(char* name, struct profile_vars_t* v)
             continue;
         }
 
-        printf("    %20s %lu total %8.3lf avg\n", info.symbol,
-                v->ctrs[i], (double)v->ctrs[i] / v->count);
+#if _PROFILE_HMPI == 1
+        int rank;
+        HMPI_Comm_rank(HMPI_COMM_WORLD, &rank);
+        printf("%3d %20s %lu total %8.3lf avg %lu max\n", rank, info.symbol,
+                v->ctrs[i], (double)v->ctrs[i] / v->count, v->ctr_max[i]);
+#else
+        printf("    %20s %lu total %8.3lf avg %lu max\n", info.symbol,
+                v->ctrs[i], (double)v->ctrs[i] / v->count, v->ctr_max[i]);
+#endif
     }
 #endif
 }
 
 
 #if _PROFILE_MPI == 1
-#include <mpi.h>
 
 #define PROFILE_SHOW_REDUCE(v) __PROFILE_SHOW_REDUCE(#v, &_profile_ ## v)
 
@@ -286,7 +345,6 @@ static void __PROFILE_SHOW_REDUCE(const char* name, struct profile_vars_t* v)
 }
 
 #elif _PROFILE_HMPI == 1
-#include "hmpi.h"
 
 #define PROFILE_SHOW_REDUCE(v) __PROFILE_SHOW_REDUCE(#v, &_profile_ ## v)
 
@@ -304,6 +362,7 @@ static void __PROFILE_SHOW_REDUCE(char* name, struct profile_vars_t* v)
     uint64_t rtc[NUM_EVENTS];
     double rac[NUM_EVENTS];
     double ac[NUM_EVENTS];
+    uint64_t mc[NUM_EVENTS];
 
     for(int i = 0; i < NUM_EVENTS; i++) {
         ac[i] = (double)v->ctrs[i] / v->count;
@@ -313,6 +372,8 @@ static void __PROFILE_SHOW_REDUCE(char* name, struct profile_vars_t* v)
             MPI_LONG_LONG, MPI_SUM, HMPI_COMM_WORLD);
     HMPI_Allreduce(&ac, rac, NUM_EVENTS,
             MPI_DOUBLE, MPI_SUM, HMPI_COMM_WORLD);
+    HMPI_Allreduce(v->ctr_max, mc, NUM_EVENTS,
+            MPI_LONG_LONG, MPI_MAX, HMPI_COMM_WORLD);
 
 #endif
 
@@ -330,7 +391,7 @@ static void __PROFILE_SHOW_REDUCE(char* name, struct profile_vars_t* v)
                 continue;
             }
 
-            printf("PAPI %20s %lu total %8.3lf avg\n", info.symbol, rtc[i], rac[i]);
+            printf("PAPI %20s %lu total %8.3lf avg %lu max\n", info.symbol, rtc[i], rac[i], mc[i]);
         }
     }
 }
