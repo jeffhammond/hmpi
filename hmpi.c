@@ -65,6 +65,8 @@ static int g_argc;
 static char** g_argv;
 static void (*g_entry)(int argc, char** argv);
 
+static __thread uint32_t g_sendmatches = 0;
+static __thread uint32_t g_recvmatches = 0;
 
 //Each thread has a list of send and receive requests.
 //The receive requests are managed only by the owning thread.
@@ -72,20 +74,18 @@ static void (*g_entry)(int argc, char** argv);
 // that thread.  Other threads place their send requests on this list, and the
 // thread owning the list matches receives against them.
 
-static __thread HMPI_Request* g_recv_reqs = NULL;
+//Each thread has a globally visible list of posted receives.
+//Sender iterates over this and tries to match.
+// If a match is found, matching send_req's lock is set and recv_req->match_req
+// points to the send req.
+// Sender copies data, completes the send, but does not complete the receive.
+// Receiver progresses the recv:
+//  If match is locked, that means the sender matched.  need to sort this better
+// 
+//static __thread HMPI_Request* g_recv_reqs = NULL;
+static HMPI_Request** g_recv_reqs = NULL;
 
 static HMPI_Request** g_send_reqs = NULL;
-
-
-static inline void add_recv_req(HMPI_Request *req) {
-  req->next = g_recv_reqs;
-  req->prev = NULL;
-  if(req->next != NULL) {
-    req->next->prev = req;
-  }
-
-  g_recv_reqs = req;
-}
 
 
 static inline void add_send_req(HMPI_Request *req, int tid) {
@@ -99,20 +99,53 @@ static inline void add_send_req(HMPI_Request *req, int tid) {
 }
 
 
-static inline void remove_recv_req(HMPI_Request *req) {
-  if(req->prev == NULL) {
-      //Head of list
-      g_recv_reqs = req->next;
-  } else {
-      req->prev->next = req->next;
-  }
+static inline void add_recv_req(HMPI_Request *req) {
+  int tid = g_tl_tid;
 
+  req->next = g_recv_reqs[tid];
+  req->prev = NULL;
   if(req->next != NULL) {
-      req->next->prev = req->prev;
+    req->next->prev = req;
   }
 
+  g_recv_reqs[tid] = req;
 }
 
+
+static inline void remove_recv_req(HMPI_Request *req) {
+    int tid = g_tl_tid;
+
+    if(req->prev == NULL) {
+        //Head of list
+        g_recv_reqs[tid] = req->next;
+    } else {
+        req->prev->next = req->next;
+    }
+
+    if(req->next != NULL) {
+        req->next->prev = req->prev;
+    }
+}
+
+
+static inline int match_send(int dest, int tag, HMPI_Request** recv_req) {
+    int rank = g_hmpi_rank;
+    HMPI_Request* cur;
+    HMPI_Request* prev;
+
+    //wrong list!  need the rank of the receiver
+    for(cur = g_recv_reqs[dest]; cur != NULL; cur = cur->next) {
+        if((cur->proc == rank || cur->proc == MPI_ANY_SOURCE) &&
+                (cur->tag == tag || cur->tag == MPI_ANY_TAG)) {
+            //Match!
+            g_sendmatches += 1;
+            *recv_req = cur;
+            return 1;
+        }
+    }
+
+    return 0;
+}
 
 static inline int match_recv(HMPI_Request* recv_req, HMPI_Request** send_req) {
     HMPI_Request* cur;
@@ -142,6 +175,7 @@ static inline int match_recv(HMPI_Request* recv_req, HMPI_Request** send_req) {
                 prev->next = cur->next;
             }
 
+            g_recvmatches += 1;
             *send_req = cur;
             return 1;
         }
@@ -218,6 +252,7 @@ int HMPI_Init(int *argc, char ***argv, int nthreads, void (*start_routine)(int a
 
   threads = (pthread_t*)malloc(sizeof(pthread_t) * nthreads);
 
+  g_recv_reqs = (HMPI_Request**)malloc(sizeof(HMPI_Request*) * nthreads);
   g_send_reqs = (HMPI_Request**)malloc(sizeof(HMPI_Request*) * nthreads);
 
   g_tcomms = (MPI_Comm*)malloc(sizeof(MPI_Comm) * nthreads);
@@ -274,6 +309,7 @@ int HMPI_Init(int *argc, char ***argv, int nthreads, void (*start_routine)(int a
     pthread_join(threads[thr], NULL);
   }
 
+  free(g_recv_reqs);
   free(g_send_reqs);
   free(threads);
   free(g_tcomms);
@@ -328,6 +364,7 @@ int HMPI_Finalize() {
 
   HMPI_Barrier(HMPI_COMM_WORLD);
 
+  printf("%d send %d recv %d\n", g_hmpi_rank, g_sendmatches, g_recvmatches);
   int r;
   HMPI_Comm_rank(HMPI_COMM_WORLD, &r);
   PROFILE_SHOW(memcpy);
@@ -368,14 +405,14 @@ static inline int HMPI_Progress_send(HMPI_Request* send_req) {
     // to progress oldest receives first?
     HMPI_Request* cur;
 
-    for(cur = g_recv_reqs; cur != NULL; cur = cur->next) {
+    for(cur = g_recv_reqs[g_tl_tid]; cur != NULL; cur = cur->next) {
         HMPI_Progress_recv(cur);
     }
 
     //Write blocks on this send req if receiver has matched it.
     //If mesage is short, receiver won't bother setting recv_buf, and instead
     // just does the copy and moves on.
-    if(LOCK_TRY(&send_req->recver_match)) {
+    if(LOCK_TRY(&send_req->match)) {
         //PROFILE_START(cpy_send);
         HMPI_Request* recv_req = (HMPI_Request*)send_req->match_req;
         uintptr_t rbuf = (uintptr_t)recv_req->buf;
@@ -395,7 +432,7 @@ static inline int HMPI_Progress_send(HMPI_Request* send_req) {
         //PROFILE_STOP(cpy_send);
 
         //Possible for the receiver to still be copying here.
-        LOCK_CLEAR(&send_req->recver_match);
+        LOCK_CLEAR(&send_req->match);
 
         //Receiver will set completion soon, wait rather than running off.
         while(get_reqstat(send_req) != 1);
@@ -410,9 +447,26 @@ static inline int HMPI_Progress_recv(HMPI_Request *recv_req) {
     //Try to match from the local send reqs list
     HMPI_Request* send_req = NULL;
 
+#if 0
+    if(get_reqstat(recv_req) == HMPI_REQ_RECV_COMPLETE) {
+        //Sender matched and completed this receive.. finish up and return.
+        remove_recv_req(recv_req);
+        update_reqstat(recv_req, HMPI_REQ_COMPLETE);
+        return 1;
+    }
+#endif
+
+
     if(!match_recv(recv_req, &send_req)) {
         return 0;
     }
+
+    remove_recv_req(recv_req);
+
+    //TODO - move this into match_recv?
+    //LOCK_SET(&send_req->match);
+    //recv_req->match_req = send_req;
+
 
 #ifdef DEBUG
     printf("[%i] [recv] found send from %i (%x) for buf %x in uq (tag: %i, size: %i, status: %x)\n",
@@ -421,7 +475,7 @@ static inline int HMPI_Progress_recv(HMPI_Request *recv_req) {
 #endif
 
     //Remove the recv from the request list
-    remove_recv_req(recv_req);
+    //remove_recv_req(recv_req);
 
     size_t size = send_req->size;
     if(unlikely(size > recv_req->size)) {
@@ -434,9 +488,9 @@ static inline int HMPI_Progress_recv(HMPI_Request *recv_req) {
     //fflush(stdout);
 
 
-    //if(size < BLOCK_SIZE * 2) {
+    if(size < BLOCK_SIZE * 2) {
     //if(size < 128) {
-    if(size < 1024 * 1024) {
+    //if(size < 1024 * 1024) {
         PROFILE_START(memcpy);
         memcpy((void*)recv_req->buf, send_req->buf, size);
         PROFILE_STOP(memcpy);
@@ -447,7 +501,7 @@ static inline int HMPI_Progress_recv(HMPI_Request *recv_req) {
 
         //recv_req->match_req = send_req; //TODO - keep this here?
         send_req->match_req = recv_req;
-        LOCK_CLEAR(&send_req->recver_match);
+        LOCK_CLEAR(&send_req->match);
 
         uintptr_t rbuf = (uintptr_t)recv_req->buf;
         uintptr_t sbuf = (uintptr_t)send_req->buf;
@@ -465,12 +519,12 @@ static inline int HMPI_Progress_recv(HMPI_Request *recv_req) {
         //PROFILE_STOP(cpy_recv);
 
         //Wait if the sender is copying.
-        LOCK_SET(&send_req->recver_match);
+        LOCK_SET(&send_req->match);
     }
 
     //Mark send and receive requests done
-    update_reqstat(send_req, 1);
-    update_reqstat(recv_req, 1);
+    update_reqstat(send_req, HMPI_REQ_COMPLETE);
+    update_reqstat(recv_req, HMPI_REQ_COMPLETE);
 
     return 1;
 }
@@ -489,6 +543,7 @@ static inline int HMPI_Progress_request(HMPI_Request *req) {
     MPI_Test(&req->req, &flag, req->status);
     //PROFILE_STOP(mpi);
 
+    //TODO - is this right?
     update_reqstat(req, flag);
     return flag;
   } else if(req->type == HMPI_RECV_ANY_SOURCE) {
@@ -518,7 +573,7 @@ static inline void HMPI_Progress() {
     //TODO - this visits most rescent receives first.  maybe iterate backwards
     // to progress oldest receives first?
     HMPI_Request* cur;
-    for(cur = g_recv_reqs; cur != NULL; cur = cur->next) {
+    for(cur = g_recv_reqs[g_tl_tid]; cur != NULL; cur = cur->next) {
         HMPI_Progress_recv(cur);
     }
 }
@@ -526,7 +581,7 @@ static inline void HMPI_Progress() {
 
 int HMPI_Test(HMPI_Request *req, int *flag, MPI_Status *status)
 {
-  if(get_reqstat(req) == 0) {
+  if(get_reqstat(req) != HMPI_REQ_COMPLETE) {
       //req->status = status;
       *flag = HMPI_Progress_request(req);
   } else {
@@ -554,16 +609,16 @@ int HMPI_Wait(HMPI_Request *request, MPI_Status *status) {
 int HMPI_Isend(void* buf, int count, MPI_Datatype datatype, int dest, int tag, HMPI_Comm comm, HMPI_Request *req) {
   
 #ifdef DEBUG
-  printf("[%i] HMPI_Isend(%p, %i, %p, %i, %i, %p, %p) (proc null: %i)\n", g_hmpi_rank, buf, count, datatype, dest, tag, comm, req, MPI_PROC_NULL);
-  fflush(stdout);
+    printf("[%i] HMPI_Isend(%p, %i, %p, %i, %i, %p, %p) (proc null: %i)\n", g_hmpi_rank, buf, count, datatype, dest, tag, comm, req, MPI_PROC_NULL);
+    fflush(stdout);
 #endif
 
-  if(unlikely(dest == MPI_PROC_NULL)) { 
-    update_reqstat(req, 1);
-    return MPI_SUCCESS;
-  }
+    if(unlikely(dest == MPI_PROC_NULL)) { 
+        update_reqstat(req, HMPI_REQ_COMPLETE);
+        return MPI_SUCCESS;
+    }
 
-  req->status = MPI_STATUS_IGNORE;
+    req->status = MPI_STATUS_IGNORE;
 #if 0
   int size;
   MPI_Type_size(datatype, &size);
@@ -582,43 +637,85 @@ int HMPI_Isend(void* buf, int count, MPI_Datatype datatype, int dest, int tag, H
 #endif
 #endif
 
-  update_reqstat(req, 0);
-  
 
-  int target_mpi_rank = dest / g_nthreads;
-  if(target_mpi_rank == g_rank) {
-    int size;
-    MPI_Type_size(datatype, &size);
+    int target_mpi_rank = dest / g_nthreads;
+    if(target_mpi_rank == g_rank) {
+        int size;
+        MPI_Type_size(datatype, &size);
 
-    // send to other thread in my process
-    req->type = HMPI_SEND;
-    req->proc = g_hmpi_rank; // my local rank
-    req->tag = tag;
-    req->size = size*count;
-    req->buf = buf;
-    req->match_req = NULL;
-    req->offset = 0;
-    LOCK_INIT(&req->recver_match, 1);
+        // send to other thread in my process
+        //TODO - delay filling this stuff in until we know theres no match
+        //Try to match the send
+#if 0
+        HMPI_Request* recv_req;
+        if(match_send(dest, tag, &recv_req)) {
 
-    int target_mpi_thread = dest % g_nthreads;
+            //Match! just do the copy right here.
+            size_t len = size*count;
+            if(unlikely(len > recv_req->size)) {
+                len = recv_req->size;
+            }
 
-    //printf("[%i] LOCAL sending to thread %i at rank %i\n", g_nthreads*g_rank+g_tl_tid, target_mpi_thread, target_mpi_rank);
-    add_send_req(req, target_mpi_thread);
-  } else {
-    //int target_mpi_thread = dest % g_nthreads;
-    //printf("[%i] MPI sending to thread %i at rank %i\n", g_nthreads*g_rank+g_tl_tid, target_mpi_thread, target_mpi_rank);
-    int size;
-    MPI_Type_size(datatype, &size);
-    req->type = MPI_SEND;
-    req->proc = g_hmpi_rank; // my local rank
-    req->tag = tag;
-    req->size = size*count;
-    req->buf = buf;
+            //if(len < BLOCK_SIZE * 2) {
+                memcpy((void*)recv_req->buf, buf, len);
+#if 0
+            } else {
+                req->type = HMPI_SEND;
+                req->proc = g_hmpi_rank; // my local rank
+                req->tag = tag;
+                req->size = size*count;
+                req->buf = buf;
+                //req->match_req = NULL;
+                //req->offset = 0;
+                LOCK_INIT(&req->match, 1);
+                //LOCK_INIT(&req->match, 0);
 
-    MPI_Isend(buf, count, datatype, target_mpi_rank, tag, g_tcomms[g_tl_tid], &req->req);
-  }
+                update_reqstat(req, HMPI_REQ_ACTIVE);
+                int target_mpi_thread = dest % g_nthreads;
+                add_send_req(req, target_mpi_thread);
 
-  return MPI_SUCCESS;
+                //Do fancy block loop
+
+            }
+#endif
+
+            //Mark completion.  Receive req goes into a special state indicating
+            //it is complete, but needs to be removed from recv req list.
+            update_reqstat(recv_req, HMPI_REQ_RECV_COMPLETE);
+            update_reqstat(req, HMPI_REQ_COMPLETE);
+        } else {
+#endif
+            req->type = HMPI_SEND;
+            req->proc = g_hmpi_rank; // my local rank
+            req->tag = tag;
+            req->size = size*count;
+            req->buf = buf;
+            req->match_req = NULL;
+            req->offset = 0;
+            //LOCK_INIT(&req->recver_match, 1);
+            LOCK_INIT(&req->match, 1);
+
+            update_reqstat(req, HMPI_REQ_ACTIVE);
+            int target_mpi_thread = dest % g_nthreads;
+            //printf("[%i] LOCAL sending to thread %i at rank %i\n", g_nthreads*g_rank+g_tl_tid, target_mpi_thread, target_mpi_rank);
+            add_send_req(req, target_mpi_thread);
+     //   }
+    } else {
+        //int target_mpi_thread = dest % g_nthreads;
+        //printf("[%i] MPI sending to thread %i at rank %i\n", g_nthreads*g_rank+g_tl_tid, target_mpi_thread, target_mpi_rank);
+        int size;
+        MPI_Type_size(datatype, &size);
+        req->type = MPI_SEND;
+        req->proc = g_hmpi_rank; // my local rank
+        req->tag = tag;
+        req->size = size*count;
+        req->buf = buf;
+        update_reqstat(req, HMPI_REQ_ACTIVE);
+
+        MPI_Isend(buf, count, datatype, target_mpi_rank, tag, g_tcomms[g_tl_tid], &req->req);
+    }
+
+    return MPI_SUCCESS;
 }
 
 
@@ -642,7 +739,7 @@ int HMPI_Irecv(void* buf, int count, MPI_Datatype datatype, int source, int tag,
 
 
   if(unlikely(source == MPI_PROC_NULL)) { 
-    update_reqstat(req, 1);
+    update_reqstat(req, HMPI_REQ_COMPLETE);
     return MPI_SUCCESS;
   }
 
@@ -666,7 +763,7 @@ int HMPI_Irecv(void* buf, int count, MPI_Datatype datatype, int source, int tag,
 #endif 
 #endif
 
-  update_reqstat(req, 0);
+  update_reqstat(req, HMPI_REQ_ACTIVE);
   
   int source_mpi_rank = source / g_nthreads;
   if(source_mpi_rank == g_rank) {

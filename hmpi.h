@@ -58,6 +58,10 @@ extern HMPI_Comm HMPI_COMM_WORLD;
 //#define HMPI_ANY_SOURCE -55
 //#define HMPI_ANY_TAG -55
 
+#define HMPI_REQ_ACTIVE 0
+#define HMPI_REQ_COMPLETE 1
+#define HMPI_REQ_RECV_COMPLETE 2
+
 /* this identifies a message for matching and also acts as request */
 typedef struct HMPI_Request {
   int type;
@@ -69,7 +73,7 @@ typedef struct HMPI_Request {
   struct HMPI_Request* match_req;
 
   size_t offset;
-  lock_t recver_match;
+  lock_t match;
   volatile uint8_t stat;
 
   struct HMPI_Request* next;
