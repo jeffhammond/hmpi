@@ -384,6 +384,7 @@ static void __PROFILE_SHOW_REDUCE(char* name, struct profile_vars_t* v)
         printf("TIME %12s cnt %-7lu time %lf us total %8.3lf avg\n", name,
                 v->count, (double)v->time / 1000.0, (double)v->time / v->count);
 
+#if _PROFILE_PAPI_EVENTS == 1
         for(int i = 0; i < NUM_EVENTS; i++) {
             PAPI_event_info_t info;
             if(PAPI_get_event_info(_profile_events[i], &info) != PAPI_OK) {
@@ -393,6 +394,7 @@ static void __PROFILE_SHOW_REDUCE(char* name, struct profile_vars_t* v)
 
             printf("PAPI %20s %lu total %8.3lf avg %lu max\n", info.symbol, rtc[i], rac[i], mc[i]);
         }
+#endif
     }
 }
 

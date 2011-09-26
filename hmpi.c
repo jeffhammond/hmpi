@@ -65,8 +65,8 @@ static int g_argc;
 static char** g_argv;
 static void (*g_entry)(int argc, char** argv);
 
-static __thread uint32_t g_sendmatches = 0;
-static __thread uint32_t g_recvmatches = 0;
+//static __thread uint32_t g_sendmatches = 0;
+//static __thread uint32_t g_recvmatches = 0;
 
 //Each thread has a list of send and receive requests.
 //The receive requests are managed only by the owning thread.
@@ -138,7 +138,7 @@ static inline int match_send(int dest, int tag, HMPI_Request** recv_req) {
         if((cur->proc == rank || cur->proc == MPI_ANY_SOURCE) &&
                 (cur->tag == tag || cur->tag == MPI_ANY_TAG)) {
             //Match!
-            g_sendmatches += 1;
+            //g_sendmatches += 1;
             *recv_req = cur;
             return 1;
         }
@@ -175,7 +175,7 @@ static inline int match_recv(HMPI_Request* recv_req, HMPI_Request** send_req) {
                 prev->next = cur->next;
             }
 
-            g_recvmatches += 1;
+            //g_recvmatches += 1;
             *send_req = cur;
             return 1;
         }
@@ -364,7 +364,7 @@ int HMPI_Finalize() {
 
   HMPI_Barrier(HMPI_COMM_WORLD);
 
-  printf("%d send %d recv %d\n", g_hmpi_rank, g_sendmatches, g_recvmatches);
+  //printf("%d send %d recv %d\n", g_hmpi_rank, g_sendmatches, g_recvmatches);
   int r;
   HMPI_Comm_rank(HMPI_COMM_WORLD, &r);
   PROFILE_SHOW(memcpy);
