@@ -38,7 +38,7 @@ typedef struct {
   volatile void** rbuf;
   volatile int* rcount;
   volatile MPI_Datatype* rtype;
-  volatile void* mpi_sbuf;
+  volatile void* mpi_sbuf; //Used by alltoall
   volatile void* mpi_rbuf;
   barrier_t barr;
   MPI_Comm mpicomm;
@@ -81,7 +81,7 @@ typedef struct HMPI_Request {
 
   //pthread_mutex_t statlock;
   MPI_Request req;
-  MPI_Status* status;
+  //MPI_Status* status;
   // following only for HMPI_RECV_ANY_SOURCE
   MPI_Comm comm;
   MPI_Datatype datatype;
