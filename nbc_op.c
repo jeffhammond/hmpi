@@ -8,8 +8,10 @@
  * Author(s): Torsten Hoefler <htor@cs.indiana.edu>
  *
  */
+//#include "nbc.h"
+#include <stdint.h>
 #include <mpi.h>
-
+ 
 /* Function return codes  */
 #define NBC_OK 0 /* everything went fine */
 #define NBC_SUCCESS 0 /* everything went fine (MPI compliant :) */
@@ -111,6 +113,90 @@ int NBC_Operation(void *buf3, void *buf1, void *buf2, MPI_Op op, MPI_Datatype ty
     } else if(op == MPI_BXOR) {
       for(i=0; i<count; i++) {
         *(((long*)buf3) + i) = ((*(((long*)buf1) + i)) ^ (*(((long*)buf2) + i))); 
+      }
+    } else return NBC_OP_NOT_SUPPORTED; 
+  } else if(type == MPI_LONG_LONG) { 
+    if(op == MPI_MIN) {
+      for(i=0; i<count; i++) {
+        if(*(((long long*)buf1) + i) > *(((long long*)buf2) + i)) *(((long long*)buf3) + i) = *(((long long*)buf2) + i); else *(((long long*)buf3) + i) = *(((long long*)buf1) + i); 
+      }
+    } else if(op == MPI_MAX) {
+      for(i=0; i<count; i++) {
+        if(*(((long long*)buf1) + i) < *(((long long*)buf2) + i)) *(((long long*)buf3) + i) = *(((long long*)buf2) + i); else *(((long long*)buf3) + i) = *(((long long*)buf1) + i); 
+      }
+    } else if(op == MPI_SUM) {
+      for(i=0; i<count; i++) {
+        *(((long long*)buf3) + i) = *(((long long*)buf1) + i) + *(((long long*)buf2) + i); 
+      }
+    } else if(op == MPI_PROD) {
+      for(i=0; i<count; i++) {
+        *(((long long*)buf3) + i) = *(((long long*)buf1) + i) * *(((long long*)buf2) + i); 
+      }
+    } else if(op == MPI_LAND) {
+      for(i=0; i<count; i++) {
+        *(((long long*)buf3) + i) = *(((long long*)buf1) + i) && *(((long long*)buf2) + i); 
+      }
+    } else if(op == MPI_BAND) {
+      for(i=0; i<count; i++) {
+        *(((long long*)buf3) + i) = *(((long long*)buf1) + i) & *(((long long*)buf2) + i); 
+      }
+    } else if(op == MPI_LOR) {
+      for(i=0; i<count; i++) {
+        *(((long long*)buf3) + i) = *(((long long*)buf1) + i) || *(((long long*)buf2) + i); 
+      }
+    } else if(op == MPI_BOR) {
+      for(i=0; i<count; i++) {
+        *(((long long*)buf3) + i) = *(((long long*)buf1) + i) | *(((long long*)buf2) + i); 
+      }
+    } else if(op == MPI_LXOR) {
+      for(i=0; i<count; i++) {
+        *(((long long*)buf3) + i) = ((*(((long long*)buf1) + i) ? 1 : 0) ^ (*(((long long*)buf2) + i) ?  1 : 0)); 
+      }
+    } else if(op == MPI_BXOR) {
+      for(i=0; i<count; i++) {
+        *(((long long*)buf3) + i) = ((*(((long long*)buf1) + i)) ^ (*(((long long*)buf2) + i))); 
+      }
+    } else return NBC_OP_NOT_SUPPORTED; 
+  } else if(type == MPI_LONG_LONG_INT) { 
+    if(op == MPI_MIN) {
+      for(i=0; i<count; i++) {
+        if(*(((long long int*)buf1) + i) > *(((long long int*)buf2) + i)) *(((long long int*)buf3) + i) = *(((long long int*)buf2) + i); else *(((long long int*)buf3) + i) = *(((long long int*)buf1) + i); 
+      }
+    } else if(op == MPI_MAX) {
+      for(i=0; i<count; i++) {
+        if(*(((long long int*)buf1) + i) < *(((long long int*)buf2) + i)) *(((long long int*)buf3) + i) = *(((long long int*)buf2) + i); else *(((long long int*)buf3) + i) = *(((long long int*)buf1) + i); 
+      }
+    } else if(op == MPI_SUM) {
+      for(i=0; i<count; i++) {
+        *(((long long int*)buf3) + i) = *(((long long int*)buf1) + i) + *(((long long int*)buf2) + i); 
+      }
+    } else if(op == MPI_PROD) {
+      for(i=0; i<count; i++) {
+        *(((long long int*)buf3) + i) = *(((long long int*)buf1) + i) * *(((long long int*)buf2) + i); 
+      }
+    } else if(op == MPI_LAND) {
+      for(i=0; i<count; i++) {
+        *(((long long int*)buf3) + i) = *(((long long int*)buf1) + i) && *(((long long int*)buf2) + i); 
+      }
+    } else if(op == MPI_BAND) {
+      for(i=0; i<count; i++) {
+        *(((long long int*)buf3) + i) = *(((long long int*)buf1) + i) & *(((long long int*)buf2) + i); 
+      }
+    } else if(op == MPI_LOR) {
+      for(i=0; i<count; i++) {
+        *(((long long int*)buf3) + i) = *(((long long int*)buf1) + i) || *(((long long int*)buf2) + i); 
+      }
+    } else if(op == MPI_BOR) {
+      for(i=0; i<count; i++) {
+        *(((long long int*)buf3) + i) = *(((long long int*)buf1) + i) | *(((long long int*)buf2) + i); 
+      }
+    } else if(op == MPI_LXOR) {
+      for(i=0; i<count; i++) {
+        *(((long long int*)buf3) + i) = ((*(((long long int*)buf1) + i) ? 1 : 0) ^ (*(((long long int*)buf2) + i) ?  1 : 0)); 
+      }
+    } else if(op == MPI_BXOR) {
+      for(i=0; i<count; i++) {
+        *(((long long int*)buf3) + i) = ((*(((long long int*)buf1) + i)) ^ (*(((long long int*)buf2) + i))); 
       }
     } else return NBC_OP_NOT_SUPPORTED; 
   } else if(type == MPI_SHORT) { 
@@ -279,6 +365,342 @@ int NBC_Operation(void *buf3, void *buf1, void *buf2, MPI_Op op, MPI_Datatype ty
     } else if(op == MPI_BXOR) {
       for(i=0; i<count; i++) {
         *(((unsigned short*)buf3) + i) = ((*(((unsigned short*)buf1) + i)) ^ (*(((unsigned short*)buf2) + i))); 
+      }
+    } else return NBC_OP_NOT_SUPPORTED; 
+  } else if(type == MPI_INT8_T) { 
+    if(op == MPI_MIN) {
+      for(i=0; i<count; i++) {
+        if(*(((int8_t*)buf1) + i) > *(((int8_t*)buf2) + i)) *(((int8_t*)buf3) + i) = *(((int8_t*)buf2) + i); else *(((int8_t*)buf3) + i) = *(((int8_t*)buf1) + i); 
+      }
+    } else if(op == MPI_MAX) {
+      for(i=0; i<count; i++) {
+        if(*(((int8_t*)buf1) + i) < *(((int8_t*)buf2) + i)) *(((int8_t*)buf3) + i) = *(((int8_t*)buf2) + i); else *(((int8_t*)buf3) + i) = *(((int8_t*)buf1) + i); 
+      }
+    } else if(op == MPI_SUM) {
+      for(i=0; i<count; i++) {
+        *(((int8_t*)buf3) + i) = *(((int8_t*)buf1) + i) + *(((int8_t*)buf2) + i); 
+      }
+    } else if(op == MPI_PROD) {
+      for(i=0; i<count; i++) {
+        *(((int8_t*)buf3) + i) = *(((int8_t*)buf1) + i) * *(((int8_t*)buf2) + i); 
+      }
+    } else if(op == MPI_LAND) {
+      for(i=0; i<count; i++) {
+        *(((int8_t*)buf3) + i) = *(((int8_t*)buf1) + i) && *(((int8_t*)buf2) + i); 
+      }
+    } else if(op == MPI_BAND) {
+      for(i=0; i<count; i++) {
+        *(((int8_t*)buf3) + i) = *(((int8_t*)buf1) + i) & *(((int8_t*)buf2) + i); 
+      }
+    } else if(op == MPI_LOR) {
+      for(i=0; i<count; i++) {
+        *(((int8_t*)buf3) + i) = *(((int8_t*)buf1) + i) || *(((int8_t*)buf2) + i); 
+      }
+    } else if(op == MPI_BOR) {
+      for(i=0; i<count; i++) {
+        *(((int8_t*)buf3) + i) = *(((int8_t*)buf1) + i) | *(((int8_t*)buf2) + i); 
+      }
+    } else if(op == MPI_LXOR) {
+      for(i=0; i<count; i++) {
+        *(((int8_t*)buf3) + i) = ((*(((int8_t*)buf1) + i) ? 1 : 0) ^ (*(((int8_t*)buf2) + i) ?  1 : 0)); 
+      }
+    } else if(op == MPI_BXOR) {
+      for(i=0; i<count; i++) {
+        *(((int8_t*)buf3) + i) = ((*(((int8_t*)buf1) + i)) ^ (*(((int8_t*)buf2) + i))); 
+      }
+    } else return NBC_OP_NOT_SUPPORTED; 
+  } else if(type == MPI_INT16_T) { 
+    if(op == MPI_MIN) {
+      for(i=0; i<count; i++) {
+        if(*(((int16_t*)buf1) + i) > *(((int16_t*)buf2) + i)) *(((int16_t*)buf3) + i) = *(((int16_t*)buf2) + i); else *(((int16_t*)buf3) + i) = *(((int16_t*)buf1) + i); 
+      }
+    } else if(op == MPI_MAX) {
+      for(i=0; i<count; i++) {
+        if(*(((int16_t*)buf1) + i) < *(((int16_t*)buf2) + i)) *(((int16_t*)buf3) + i) = *(((int16_t*)buf2) + i); else *(((int16_t*)buf3) + i) = *(((int16_t*)buf1) + i); 
+      }
+    } else if(op == MPI_SUM) {
+      for(i=0; i<count; i++) {
+        *(((int16_t*)buf3) + i) = *(((int16_t*)buf1) + i) + *(((int16_t*)buf2) + i); 
+      }
+    } else if(op == MPI_PROD) {
+      for(i=0; i<count; i++) {
+        *(((int16_t*)buf3) + i) = *(((int16_t*)buf1) + i) * *(((int16_t*)buf2) + i); 
+      }
+    } else if(op == MPI_LAND) {
+      for(i=0; i<count; i++) {
+        *(((int16_t*)buf3) + i) = *(((int16_t*)buf1) + i) && *(((int16_t*)buf2) + i); 
+      }
+    } else if(op == MPI_BAND) {
+      for(i=0; i<count; i++) {
+        *(((int16_t*)buf3) + i) = *(((int16_t*)buf1) + i) & *(((int16_t*)buf2) + i); 
+      }
+    } else if(op == MPI_LOR) {
+      for(i=0; i<count; i++) {
+        *(((int16_t*)buf3) + i) = *(((int16_t*)buf1) + i) || *(((int16_t*)buf2) + i); 
+      }
+    } else if(op == MPI_BOR) {
+      for(i=0; i<count; i++) {
+        *(((int16_t*)buf3) + i) = *(((int16_t*)buf1) + i) | *(((int16_t*)buf2) + i); 
+      }
+    } else if(op == MPI_LXOR) {
+      for(i=0; i<count; i++) {
+        *(((int16_t*)buf3) + i) = ((*(((int16_t*)buf1) + i) ? 1 : 0) ^ (*(((int16_t*)buf2) + i) ?  1 : 0)); 
+      }
+    } else if(op == MPI_BXOR) {
+      for(i=0; i<count; i++) {
+        *(((int16_t*)buf3) + i) = ((*(((int16_t*)buf1) + i)) ^ (*(((int16_t*)buf2) + i))); 
+      }
+    } else return NBC_OP_NOT_SUPPORTED; 
+  } else if(type == MPI_INT32_T) { 
+    if(op == MPI_MIN) {
+      for(i=0; i<count; i++) {
+        if(*(((int32_t*)buf1) + i) > *(((int32_t*)buf2) + i)) *(((int32_t*)buf3) + i) = *(((int32_t*)buf2) + i); else *(((int32_t*)buf3) + i) = *(((int32_t*)buf1) + i); 
+      }
+    } else if(op == MPI_MAX) {
+      for(i=0; i<count; i++) {
+        if(*(((int32_t*)buf1) + i) < *(((int32_t*)buf2) + i)) *(((int32_t*)buf3) + i) = *(((int32_t*)buf2) + i); else *(((int32_t*)buf3) + i) = *(((int32_t*)buf1) + i); 
+      }
+    } else if(op == MPI_SUM) {
+      for(i=0; i<count; i++) {
+        *(((int32_t*)buf3) + i) = *(((int32_t*)buf1) + i) + *(((int32_t*)buf2) + i); 
+      }
+    } else if(op == MPI_PROD) {
+      for(i=0; i<count; i++) {
+        *(((int32_t*)buf3) + i) = *(((int32_t*)buf1) + i) * *(((int32_t*)buf2) + i); 
+      }
+    } else if(op == MPI_LAND) {
+      for(i=0; i<count; i++) {
+        *(((int32_t*)buf3) + i) = *(((int32_t*)buf1) + i) && *(((int32_t*)buf2) + i); 
+      }
+    } else if(op == MPI_BAND) {
+      for(i=0; i<count; i++) {
+        *(((int32_t*)buf3) + i) = *(((int32_t*)buf1) + i) & *(((int32_t*)buf2) + i); 
+      }
+    } else if(op == MPI_LOR) {
+      for(i=0; i<count; i++) {
+        *(((int32_t*)buf3) + i) = *(((int32_t*)buf1) + i) || *(((int32_t*)buf2) + i); 
+      }
+    } else if(op == MPI_BOR) {
+      for(i=0; i<count; i++) {
+        *(((int32_t*)buf3) + i) = *(((int32_t*)buf1) + i) | *(((int32_t*)buf2) + i); 
+      }
+    } else if(op == MPI_LXOR) {
+      for(i=0; i<count; i++) {
+        *(((int32_t*)buf3) + i) = ((*(((int32_t*)buf1) + i) ? 1 : 0) ^ (*(((int32_t*)buf2) + i) ?  1 : 0)); 
+      }
+    } else if(op == MPI_BXOR) {
+      for(i=0; i<count; i++) {
+        *(((int32_t*)buf3) + i) = ((*(((int32_t*)buf1) + i)) ^ (*(((int32_t*)buf2) + i))); 
+      }
+    } else return NBC_OP_NOT_SUPPORTED; 
+  } else if(type == MPI_INT64_T) { 
+    if(op == MPI_MIN) {
+      for(i=0; i<count; i++) {
+        if(*(((int64_t*)buf1) + i) > *(((int64_t*)buf2) + i)) *(((int64_t*)buf3) + i) = *(((int64_t*)buf2) + i); else *(((int64_t*)buf3) + i) = *(((int64_t*)buf1) + i); 
+      }
+    } else if(op == MPI_MAX) {
+      for(i=0; i<count; i++) {
+        if(*(((int64_t*)buf1) + i) < *(((int64_t*)buf2) + i)) *(((int64_t*)buf3) + i) = *(((int64_t*)buf2) + i); else *(((int64_t*)buf3) + i) = *(((int64_t*)buf1) + i); 
+      }
+    } else if(op == MPI_SUM) {
+      for(i=0; i<count; i++) {
+        *(((int64_t*)buf3) + i) = *(((int64_t*)buf1) + i) + *(((int64_t*)buf2) + i); 
+      }
+    } else if(op == MPI_PROD) {
+      for(i=0; i<count; i++) {
+        *(((int64_t*)buf3) + i) = *(((int64_t*)buf1) + i) * *(((int64_t*)buf2) + i); 
+      }
+    } else if(op == MPI_LAND) {
+      for(i=0; i<count; i++) {
+        *(((int64_t*)buf3) + i) = *(((int64_t*)buf1) + i) && *(((int64_t*)buf2) + i); 
+      }
+    } else if(op == MPI_BAND) {
+      for(i=0; i<count; i++) {
+        *(((int64_t*)buf3) + i) = *(((int64_t*)buf1) + i) & *(((int64_t*)buf2) + i); 
+      }
+    } else if(op == MPI_LOR) {
+      for(i=0; i<count; i++) {
+        *(((int64_t*)buf3) + i) = *(((int64_t*)buf1) + i) || *(((int64_t*)buf2) + i); 
+      }
+    } else if(op == MPI_BOR) {
+      for(i=0; i<count; i++) {
+        *(((int64_t*)buf3) + i) = *(((int64_t*)buf1) + i) | *(((int64_t*)buf2) + i); 
+      }
+    } else if(op == MPI_LXOR) {
+      for(i=0; i<count; i++) {
+        *(((int64_t*)buf3) + i) = ((*(((int64_t*)buf1) + i) ? 1 : 0) ^ (*(((int64_t*)buf2) + i) ?  1 : 0)); 
+      }
+    } else if(op == MPI_BXOR) {
+      for(i=0; i<count; i++) {
+        *(((int64_t*)buf3) + i) = ((*(((int64_t*)buf1) + i)) ^ (*(((int64_t*)buf2) + i))); 
+      }
+    } else return NBC_OP_NOT_SUPPORTED; 
+  } else if(type == MPI_UINT8_T) { 
+    if(op == MPI_MIN) {
+      for(i=0; i<count; i++) {
+        if(*(((uint8_t*)buf1) + i) > *(((uint8_t*)buf2) + i)) *(((uint8_t*)buf3) + i) = *(((uint8_t*)buf2) + i); else *(((uint8_t*)buf3) + i) = *(((uint8_t*)buf1) + i); 
+      }
+    } else if(op == MPI_MAX) {
+      for(i=0; i<count; i++) {
+        if(*(((uint8_t*)buf1) + i) < *(((uint8_t*)buf2) + i)) *(((uint8_t*)buf3) + i) = *(((uint8_t*)buf2) + i); else *(((uint8_t*)buf3) + i) = *(((uint8_t*)buf1) + i); 
+      }
+    } else if(op == MPI_SUM) {
+      for(i=0; i<count; i++) {
+        *(((uint8_t*)buf3) + i) = *(((uint8_t*)buf1) + i) + *(((uint8_t*)buf2) + i); 
+      }
+    } else if(op == MPI_PROD) {
+      for(i=0; i<count; i++) {
+        *(((uint8_t*)buf3) + i) = *(((uint8_t*)buf1) + i) * *(((uint8_t*)buf2) + i); 
+      }
+    } else if(op == MPI_LAND) {
+      for(i=0; i<count; i++) {
+        *(((uint8_t*)buf3) + i) = *(((uint8_t*)buf1) + i) && *(((uint8_t*)buf2) + i); 
+      }
+    } else if(op == MPI_BAND) {
+      for(i=0; i<count; i++) {
+        *(((uint8_t*)buf3) + i) = *(((uint8_t*)buf1) + i) & *(((uint8_t*)buf2) + i); 
+      }
+    } else if(op == MPI_LOR) {
+      for(i=0; i<count; i++) {
+        *(((uint8_t*)buf3) + i) = *(((uint8_t*)buf1) + i) || *(((uint8_t*)buf2) + i); 
+      }
+    } else if(op == MPI_BOR) {
+      for(i=0; i<count; i++) {
+        *(((uint8_t*)buf3) + i) = *(((uint8_t*)buf1) + i) | *(((uint8_t*)buf2) + i); 
+      }
+    } else if(op == MPI_LXOR) {
+      for(i=0; i<count; i++) {
+        *(((uint8_t*)buf3) + i) = ((*(((uint8_t*)buf1) + i) ? 1 : 0) ^ (*(((uint8_t*)buf2) + i) ?  1 : 0)); 
+      }
+    } else if(op == MPI_BXOR) {
+      for(i=0; i<count; i++) {
+        *(((uint8_t*)buf3) + i) = ((*(((uint8_t*)buf1) + i)) ^ (*(((uint8_t*)buf2) + i))); 
+      }
+    } else return NBC_OP_NOT_SUPPORTED; 
+  } else if(type == MPI_UINT16_T) { 
+    if(op == MPI_MIN) {
+      for(i=0; i<count; i++) {
+        if(*(((uint16_t*)buf1) + i) > *(((uint16_t*)buf2) + i)) *(((uint16_t*)buf3) + i) = *(((uint16_t*)buf2) + i); else *(((uint16_t*)buf3) + i) = *(((uint16_t*)buf1) + i); 
+      }
+    } else if(op == MPI_MAX) {
+      for(i=0; i<count; i++) {
+        if(*(((uint16_t*)buf1) + i) < *(((uint16_t*)buf2) + i)) *(((uint16_t*)buf3) + i) = *(((uint16_t*)buf2) + i); else *(((uint16_t*)buf3) + i) = *(((uint16_t*)buf1) + i); 
+      }
+    } else if(op == MPI_SUM) {
+      for(i=0; i<count; i++) {
+        *(((uint16_t*)buf3) + i) = *(((uint16_t*)buf1) + i) + *(((uint16_t*)buf2) + i); 
+      }
+    } else if(op == MPI_PROD) {
+      for(i=0; i<count; i++) {
+        *(((uint16_t*)buf3) + i) = *(((uint16_t*)buf1) + i) * *(((uint16_t*)buf2) + i); 
+      }
+    } else if(op == MPI_LAND) {
+      for(i=0; i<count; i++) {
+        *(((uint16_t*)buf3) + i) = *(((uint16_t*)buf1) + i) && *(((uint16_t*)buf2) + i); 
+      }
+    } else if(op == MPI_BAND) {
+      for(i=0; i<count; i++) {
+        *(((uint16_t*)buf3) + i) = *(((uint16_t*)buf1) + i) & *(((uint16_t*)buf2) + i); 
+      }
+    } else if(op == MPI_LOR) {
+      for(i=0; i<count; i++) {
+        *(((uint16_t*)buf3) + i) = *(((uint16_t*)buf1) + i) || *(((uint16_t*)buf2) + i); 
+      }
+    } else if(op == MPI_BOR) {
+      for(i=0; i<count; i++) {
+        *(((uint16_t*)buf3) + i) = *(((uint16_t*)buf1) + i) | *(((uint16_t*)buf2) + i); 
+      }
+    } else if(op == MPI_LXOR) {
+      for(i=0; i<count; i++) {
+        *(((uint16_t*)buf3) + i) = ((*(((uint16_t*)buf1) + i) ? 1 : 0) ^ (*(((uint16_t*)buf2) + i) ?  1 : 0)); 
+      }
+    } else if(op == MPI_BXOR) {
+      for(i=0; i<count; i++) {
+        *(((uint16_t*)buf3) + i) = ((*(((uint16_t*)buf1) + i)) ^ (*(((uint16_t*)buf2) + i))); 
+      }
+    } else return NBC_OP_NOT_SUPPORTED; 
+  } else if(type == MPI_UINT32_T) { 
+    if(op == MPI_MIN) {
+      for(i=0; i<count; i++) {
+        if(*(((uint32_t*)buf1) + i) > *(((uint32_t*)buf2) + i)) *(((uint32_t*)buf3) + i) = *(((uint32_t*)buf2) + i); else *(((uint32_t*)buf3) + i) = *(((uint32_t*)buf1) + i); 
+      }
+    } else if(op == MPI_MAX) {
+      for(i=0; i<count; i++) {
+        if(*(((uint32_t*)buf1) + i) < *(((uint32_t*)buf2) + i)) *(((uint32_t*)buf3) + i) = *(((uint32_t*)buf2) + i); else *(((uint32_t*)buf3) + i) = *(((uint32_t*)buf1) + i); 
+      }
+    } else if(op == MPI_SUM) {
+      for(i=0; i<count; i++) {
+        *(((uint32_t*)buf3) + i) = *(((uint32_t*)buf1) + i) + *(((uint32_t*)buf2) + i); 
+      }
+    } else if(op == MPI_PROD) {
+      for(i=0; i<count; i++) {
+        *(((uint32_t*)buf3) + i) = *(((uint32_t*)buf1) + i) * *(((uint32_t*)buf2) + i); 
+      }
+    } else if(op == MPI_LAND) {
+      for(i=0; i<count; i++) {
+        *(((uint32_t*)buf3) + i) = *(((uint32_t*)buf1) + i) && *(((uint32_t*)buf2) + i); 
+      }
+    } else if(op == MPI_BAND) {
+      for(i=0; i<count; i++) {
+        *(((uint32_t*)buf3) + i) = *(((uint32_t*)buf1) + i) & *(((uint32_t*)buf2) + i); 
+      }
+    } else if(op == MPI_LOR) {
+      for(i=0; i<count; i++) {
+        *(((uint32_t*)buf3) + i) = *(((uint32_t*)buf1) + i) || *(((uint32_t*)buf2) + i); 
+      }
+    } else if(op == MPI_BOR) {
+      for(i=0; i<count; i++) {
+        *(((uint32_t*)buf3) + i) = *(((uint32_t*)buf1) + i) | *(((uint32_t*)buf2) + i); 
+      }
+    } else if(op == MPI_LXOR) {
+      for(i=0; i<count; i++) {
+        *(((uint32_t*)buf3) + i) = ((*(((uint32_t*)buf1) + i) ? 1 : 0) ^ (*(((uint32_t*)buf2) + i) ?  1 : 0)); 
+      }
+    } else if(op == MPI_BXOR) {
+      for(i=0; i<count; i++) {
+        *(((uint32_t*)buf3) + i) = ((*(((uint32_t*)buf1) + i)) ^ (*(((uint32_t*)buf2) + i))); 
+      }
+    } else return NBC_OP_NOT_SUPPORTED; 
+  } else if(type == MPI_UINT64_T) { 
+    if(op == MPI_MIN) {
+      for(i=0; i<count; i++) {
+        if(*(((uint64_t*)buf1) + i) > *(((uint64_t*)buf2) + i)) *(((uint64_t*)buf3) + i) = *(((uint64_t*)buf2) + i); else *(((uint64_t*)buf3) + i) = *(((uint64_t*)buf1) + i); 
+      }
+    } else if(op == MPI_MAX) {
+      for(i=0; i<count; i++) {
+        if(*(((uint64_t*)buf1) + i) < *(((uint64_t*)buf2) + i)) *(((uint64_t*)buf3) + i) = *(((uint64_t*)buf2) + i); else *(((uint64_t*)buf3) + i) = *(((uint64_t*)buf1) + i); 
+      }
+    } else if(op == MPI_SUM) {
+      for(i=0; i<count; i++) {
+        *(((uint64_t*)buf3) + i) = *(((uint64_t*)buf1) + i) + *(((uint64_t*)buf2) + i); 
+      }
+    } else if(op == MPI_PROD) {
+      for(i=0; i<count; i++) {
+        *(((uint64_t*)buf3) + i) = *(((uint64_t*)buf1) + i) * *(((uint64_t*)buf2) + i); 
+      }
+    } else if(op == MPI_LAND) {
+      for(i=0; i<count; i++) {
+        *(((uint64_t*)buf3) + i) = *(((uint64_t*)buf1) + i) && *(((uint64_t*)buf2) + i); 
+      }
+    } else if(op == MPI_BAND) {
+      for(i=0; i<count; i++) {
+        *(((uint64_t*)buf3) + i) = *(((uint64_t*)buf1) + i) & *(((uint64_t*)buf2) + i); 
+      }
+    } else if(op == MPI_LOR) {
+      for(i=0; i<count; i++) {
+        *(((uint64_t*)buf3) + i) = *(((uint64_t*)buf1) + i) || *(((uint64_t*)buf2) + i); 
+      }
+    } else if(op == MPI_BOR) {
+      for(i=0; i<count; i++) {
+        *(((uint64_t*)buf3) + i) = *(((uint64_t*)buf1) + i) | *(((uint64_t*)buf2) + i); 
+      }
+    } else if(op == MPI_LXOR) {
+      for(i=0; i<count; i++) {
+        *(((uint64_t*)buf3) + i) = ((*(((uint64_t*)buf1) + i) ? 1 : 0) ^ (*(((uint64_t*)buf2) + i) ?  1 : 0)); 
+      }
+    } else if(op == MPI_BXOR) {
+      for(i=0; i<count; i++) {
+        *(((uint64_t*)buf3) + i) = ((*(((uint64_t*)buf1) + i)) ^ (*(((uint64_t*)buf2) + i))); 
       }
     } else return NBC_OP_NOT_SUPPORTED; 
   } else if(type == MPI_FLOAT) { 

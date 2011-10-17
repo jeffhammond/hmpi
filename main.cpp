@@ -1,6 +1,6 @@
 #include "hmpi.h"
 
-void tmain(){
+void tmain(int argc, char** argv){
 
   int p,r;
   HMPI_Comm_rank (HMPI_COMM_WORLD, &r);
@@ -55,9 +55,10 @@ void tmain(){
 #endif
   }
 #endif
-//#define TEST
+#define TEST
 #ifdef TEST
-  int buf=0;
+//  int buf=0;
+#if 0
   if(p>=2) 
   if(r == 0) {
     buf = 100;
@@ -67,16 +68,21 @@ void tmain(){
     HMPI_Recv(&buf, 1, MPI_INT, MPI_ANY_SOURCE, 99, HMPI_COMM_WORLD, MPI_STATUS_IGNORE);
     printf("buf: %i [%x] (should be 100 ;-)\n", buf, &buf);
   }
-
-  int x=1, y=0;
-  HMPI_Allreduce(&x, &y, 1, MPI_INT, MPI_SUM, HMPI_COMM_WORLD);
-  printf("[%i] buf: %i\n", r, y);
-
-  if(r == 0) y=1;
-  HMPI_Bcast(&y, 1, MPI_INT, 0, HMPI_COMM_WORLD);
-  printf("[%i] bcast buf: %i\n", r, y);
 #endif
-#define TEST2
+
+  //int x=1, y=0;
+  uint64_t x[4] = {1, 2, 3, 4};
+  uint64_t y[4] = {0};
+  HMPI_Allreduce2(x, y, 4, MPI_UINT64_T, HMPI_SUM, HMPI_COMM_WORLD);
+  printf("[%i] buf: %i %d %d %d\n", r, y[0], y[1], y[2], y[3]);
+
+
+//  if(r == 0) y=1;
+//  HMPI_Bcast(&y, 1, MPI_INT, 0, HMPI_COMM_WORLD);
+//  printf("[%i] bcast buf: %i\n", r, y);
+#endif
+
+//#define TEST2
 #ifdef TEST2
     int* sendbuf = (int*)malloc(sizeof(int) * 8192);
     int* recvbuf = (int*)malloc(sizeof(int) * 8192);

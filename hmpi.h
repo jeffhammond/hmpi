@@ -40,6 +40,7 @@ typedef struct {
   volatile MPI_Datatype* rtype;
   volatile void* mpi_sbuf; //Used by alltoall
   volatile void* mpi_rbuf;
+  //volatile uint8_t* flag;
   barrier_t barr;
   MPI_Comm mpicomm;
   //MPI_Comm* tcomms;
@@ -58,6 +59,7 @@ extern HMPI_Comm HMPI_COMM_WORLD;
 //#define HMPI_ANY_SOURCE -55
 //#define HMPI_ANY_TAG -55
 
+//ACTIVE and COMPLETE specifically chosen to match MPI test flags
 #define HMPI_REQ_ACTIVE 0
 #define HMPI_REQ_COMPLETE 1
 #define HMPI_REQ_RECV_COMPLETE 2
@@ -83,7 +85,7 @@ typedef struct HMPI_Request {
   MPI_Request req;
   //MPI_Status* status;
   // following only for HMPI_RECV_ANY_SOURCE
-  MPI_Comm comm;
+  //MPI_Comm comm;
   MPI_Datatype datatype;
 } HMPI_Request;
 
@@ -139,6 +141,20 @@ int HMPI_Barrier(HMPI_Comm comm);
 
 int HMPI_Allreduce(void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype, MPI_Op op, HMPI_Comm comm);
 
+
+typedef void (*HMPI_Op_fn)(void* destbuf, void** srcbufs, int numsrcbufs, MPI_Datatype datatype, int count);
+
+typedef struct HMPI_Op {
+    MPI_Op op;
+    HMPI_Op_fn fn;
+} HMPI_Op;
+
+extern HMPI_Op HMPI_SUM;
+extern HMPI_Op HMPI_MIN;
+extern HMPI_Op HMPI_MAX;
+
+int HMPI_Allreduce2(void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype, HMPI_Op op, HMPI_Comm comm);
+
 int HMPI_Bcast(void *buffer, int count, MPI_Datatype datatype, int root, HMPI_Comm comm);
 
 int HMPI_Scatter(void* sendbuf, int sendcount, MPI_Datatype sendtype, void* recvbuf, int recvcount, MPI_Datatype recvtype, int root, HMPI_Comm comm);
@@ -154,6 +170,8 @@ int HMPI_Alltoall_local2(void* sendbuf, void* recvbuf, size_t len, HMPI_Comm com
 int HMPI_Abort( HMPI_Comm comm, int errorcode );
 
 int HMPI_Finalize();
+
+
 
 #ifdef __cplusplus
 }

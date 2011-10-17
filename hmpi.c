@@ -46,8 +46,10 @@
 
 PROFILE_DECLARE();
 PROFILE_VAR(memcpy);
-PROFILE_VAR(cpy_send);
-PROFILE_VAR(cpy_recv);
+//PROFILE_VAR(cpy_send);
+//PROFILE_VAR(cpy_recv);
+PROFILE_VAR(allreduce);
+PROFILE_VAR(op);
 
 
 int g_nthreads=-1;
@@ -128,6 +130,7 @@ static inline void remove_recv_req(HMPI_Request *req) {
 }
 
 
+#if 0
 static inline int match_send(int dest, int tag, HMPI_Request** recv_req) {
     int rank = g_hmpi_rank;
     HMPI_Request* cur;
@@ -146,6 +149,7 @@ static inline int match_send(int dest, int tag, HMPI_Request** recv_req) {
 
     return 0;
 }
+#endif
 
 static inline int match_recv(HMPI_Request* recv_req, HMPI_Request** send_req) {
     HMPI_Request* cur;
@@ -153,7 +157,7 @@ static inline int match_recv(HMPI_Request* recv_req, HMPI_Request** send_req) {
 
     for(prev = NULL, cur = g_send_reqs[g_tl_tid];
             cur != NULL; prev = cur, cur = cur->next) {
-//        printf("%d match recv %d %d cur %d %d ANY %d %d\n", g_tl_tid, recv_req->proc,
+//        printf("%d match recv %d %d %d cur %d %d ANY %d %d\n", g_tl_tid, recv_req->type, recv_req->proc,
 //                recv_req->tag, cur->proc, cur->tag, MPI_ANY_SOURCE, MPI_ANY_TAG); fflush(stdout);
 //        printf("%d proc match? %d %d\n", g_tl_tid, cur->proc == recv_req->proc, recv_req->proc == MPI_ANY_SOURCE); fflush(stdout);
 //        printf("%d tag match? %d %d\n", g_tl_tid, cur->tag == recv_req->tag,
@@ -182,6 +186,7 @@ static inline int match_recv(HMPI_Request* recv_req, HMPI_Request** send_req) {
             }
 
             //g_recvmatches += 1;
+
             recv_req->proc = cur->proc;
             recv_req->tag = cur->tag;
             *send_req = cur;
@@ -215,7 +220,7 @@ void* trampoline(void* tid) {
 
   PROFILE_INIT(g_tl_tid);
 
-//  printf("%d:%d entered trampoline\n", g_rank, g_tl_tid); fflush(stdout);
+  //printf("%d:%d entered trampoline\n", g_rank, g_tl_tid); fflush(stdout);
 
   // barrier to avoid race in tid ...
   barrier(&HMPI_COMM_WORLD->barr, g_tl_tid);
@@ -257,7 +262,10 @@ int HMPI_Init(int *argc, char ***argv, int nthreads, void (*start_routine)(int a
   HMPI_COMM_WORLD->rcount = (volatile int*)malloc(sizeof(int) * nthreads);
   HMPI_COMM_WORLD->stype = (volatile MPI_Datatype*)malloc(sizeof(MPI_Datatype) * nthreads);
   HMPI_COMM_WORLD->rtype = (volatile MPI_Datatype*)malloc(sizeof(MPI_Datatype) * nthreads);
+  //HMPI_COMM_WORLD->flag = (volatile uint8_t*)malloc(sizeof(uint8_t) * nthreads);
 
+  //Allreduce requires sbuf be initialized to NULL
+  //memset((void*)HMPI_COMM_WORLD->flag, 0, sizeof(uint8_t) * nthreads);
 
   threads = (pthread_t*)malloc(sizeof(pthread_t) * nthreads);
 
@@ -296,16 +304,30 @@ int HMPI_Init(int *argc, char ***argv, int nthreads, void (*start_routine)(int a
   //  CPU_SET(thr + 6, &cpuset[1]);
   //}
 
+#define CORES 6
+
   pthread_attr_t attr;
   for(thr=0; thr < nthreads; thr++) {
     //Create the thread
     pthread_attr_init(&attr);
+    //pthread_attr_setscope(&attr, PTHREAD_SCOPE_SYSTEM); //SYSTEM is default
     int rc = pthread_create(&threads[thr], &attr, trampoline, (void *)thr);
 
     //Set affinity -- pin each thread to one core
     cpu_set_t cpuset;
     CPU_ZERO(&cpuset);
-    CPU_SET(thr, &cpuset);
+
+    //Distribute across two sockets
+    if(thr < nthreads / 2) {
+        //printf("thread %d core %d\n", thr, thr);
+        CPU_SET(thr, &cpuset);
+    } else {
+        //printf("thread %d core %d\n", thr, thr - (nthreads / 2) + CORES);
+        CPU_SET(thr - (nthreads / 2) + CORES, &cpuset);
+    }
+
+    //Fill a socket before moving to next
+//    CPU_SET(thr, &cpuset);
 
     rc = pthread_setaffinity_np(threads[thr], sizeof(cpu_set_t), &cpuset);
     if(rc) {
@@ -313,7 +335,6 @@ int HMPI_Init(int *argc, char ***argv, int nthreads, void (*start_routine)(int a
       MPI_Abort(MPI_COMM_WORLD, 0);
     }
   }
-
 
   for(thr=0; thr<nthreads; thr++) {
     pthread_join(threads[thr], NULL);
@@ -375,17 +396,20 @@ int HMPI_Finalize() {
   HMPI_Barrier(HMPI_COMM_WORLD);
 
   //printf("%d send %d recv %d\n", g_hmpi_rank, g_sendmatches, g_recvmatches);
-  int r;
-  HMPI_Comm_rank(HMPI_COMM_WORLD, &r);
-  PROFILE_SHOW(memcpy);
-  PROFILE_SHOW(cpy_send);
-  PROFILE_SHOW(cpy_recv);
+  //int r;
+  //HMPI_Comm_rank(HMPI_COMM_WORLD, &r);
+  //PROFILE_SHOW(memcpy);
+  //PROFILE_SHOW(cpy_send);
+  //PROFILE_SHOW(cpy_recv);
 
   //PROFILE_SHOW_REDUCE(copy, r);
   //PROFILE_SHOW_REDUCE(send, r);
   //PROFILE_SHOW_REDUCE(add_send_req, r);
   //PROFILE_SHOW_REDUCE(barrier, r);
   //PROFILE_SHOW_REDUCE(alltoall, r);
+  PROFILE_SHOW_REDUCE(allreduce);
+  PROFILE_SHOW_REDUCE(op);
+  PROFILE_SHOW_REDUCE(memcpy);
 
   barrier(&HMPI_COMM_WORLD->barr, g_tl_tid);
 
@@ -399,7 +423,7 @@ int HMPI_Finalize() {
 
 // global progress function
 static inline int HMPI_Progress_request(HMPI_Request *req);
-static inline int HMPI_Progress_recv(HMPI_Request *recv_req, MPI_Status* status);
+static inline int HMPI_Progress_recv(HMPI_Request *recv_req);
 
 
 //We assume req->type == HMPI_SEND and req->stat == 0 (uncompleted send)
@@ -416,7 +440,13 @@ static inline int HMPI_Progress_send(HMPI_Request* send_req) {
     HMPI_Request* cur;
 
     for(cur = g_recv_reqs[g_tl_tid]; cur != NULL; cur = cur->next) {
-        HMPI_Progress_recv(cur, MPI_STATUS_IGNORE);
+        if(cur->type == HMPI_RECV) {
+            HMPI_Progress_recv(cur);
+        } else { //req->type  == MPI_RECV
+            int flag;
+            MPI_Test(&cur->req, &flag, MPI_STATUS_IGNORE);
+            update_reqstat(cur, flag);
+        }
     }
 
     //Write blocks on this send req if receiver has matched it.
@@ -453,7 +483,7 @@ static inline int HMPI_Progress_send(HMPI_Request* send_req) {
 }
 
 
-static inline int HMPI_Progress_recv(HMPI_Request *recv_req, MPI_Status* status) {
+static inline int HMPI_Progress_recv(HMPI_Request *recv_req) {
     //Try to match from the local send reqs list
     HMPI_Request* send_req = NULL;
 
@@ -509,9 +539,9 @@ static inline int HMPI_Progress_recv(HMPI_Request *recv_req, MPI_Status* status)
     if(size < BLOCK_SIZE * 2) {
     //if(size < 128) {
     //if(size < 1024 * 1024) {
-        PROFILE_START(memcpy);
+        //PROFILE_START(memcpy);
         memcpy((void*)recv_req->buf, send_req->buf, size);
-        PROFILE_STOP(memcpy);
+        //PROFILE_STOP(memcpy);
     } else {
         //The setting of send_req->match_req signals to sender that they can
         // start doing copying as well, if they are testing the req.
@@ -548,64 +578,99 @@ static inline int HMPI_Progress_recv(HMPI_Request *recv_req, MPI_Status* status)
 }
 
 
-static inline int HMPI_Progress_request(HMPI_Request *req, MPI_Status* status) {
+static inline void HMPI_Progress() {
+    //TODO - this visits most rescent receives first.  maybe iterate backwards
+    // to progress oldest receives first?
+    HMPI_Request* cur;
+
+    for(cur = g_recv_reqs[g_tl_tid]; cur != NULL; cur = cur->next) {
+        if(cur->type == HMPI_RECV) {
+            HMPI_Progress_recv(cur);
+        } else if(cur->type  == MPI_RECV) {
+            int flag;
+            MPI_Test(&cur->req, &flag, MPI_STATUS_IGNORE);
+            update_reqstat(cur, flag);
+        } else { //req->type == HMPI_RECV_ANY_SOURCE
+            if(HMPI_Progress_recv(cur)) {
+                return;
+            }
+
+            if(g_size > 1) {
+                // check if we can get something via the MPI library
+                int flag=0;
+                MPI_Status status;
+                MPI_Iprobe(MPI_ANY_SOURCE, cur->tag, g_tcomms[g_tl_tid], &flag, &status);
+                if(flag) {
+                  MPI_Recv((void*)cur->buf, cur->size, cur->datatype, status.MPI_SOURCE, cur->tag, g_tcomms[g_tl_tid], &status);
+                  remove_recv_req(cur);
+
+                  cur->proc = status.MPI_SOURCE;
+                  cur->tag = status.MPI_TAG;
+                  update_reqstat(cur, HMPI_REQ_RECV_COMPLETE);
+                  return;
+                }
+            }
+        }
+    }
+}
+
+
+static inline int HMPI_Progress_request(HMPI_Request *req)
+{
+  HMPI_Progress();
+
   if(req->type == HMPI_SEND) {
-      return HMPI_Progress_send(req);
+      //return HMPI_Progress_send(req);
+      return get_reqstat(req);
   } else if(req->type == HMPI_RECV) {
-      return HMPI_Progress_recv(req, status);
+      //return HMPI_Progress_recv(req);
+      //HMPI_Progress();
+      return get_reqstat(req);
   } // HMPI_RECV
   else if(req->type == MPI_SEND || req->type == MPI_RECV) {
     int flag;
 
     //PROFILE_START(mpi);
-    MPI_Test(&req->req, &flag, status);
+    MPI_Test(&req->req, &flag, MPI_STATUS_IGNORE);
     //PROFILE_STOP(mpi);
 
     //TODO - is this right?
     update_reqstat(req, flag);
     return flag;
   } else if(req->type == HMPI_RECV_ANY_SOURCE) {
-    if(HMPI_Progress_recv(req, status)) {
+      return get_reqstat(req);
+#if 0
+    if(HMPI_Progress_recv(req)) {
         return 1;
     }
 
-    // check if we can get something via the MPI library
-    int flag=0;
-    //PROFILE_START(mpi);
-    MPI_Iprobe(MPI_ANY_SOURCE, req->tag, req->comm, &flag, status);
-    //PROFILE_STOP(mpi);
-    if(flag) {
-      //PROFILE_START(mpi);
-      MPI_Recv((void*)req->buf, req->size, req->datatype, status->MPI_SOURCE, req->tag, req->comm, status);
-      //PROFILE_STOP(mpi);
-      remove_recv_req(req);
+    if(g_size > 1) {
+        // check if we can get something via the MPI library
+        int flag=0;
+        MPI_Status status;
+        MPI_Iprobe(MPI_ANY_SOURCE, req->tag, g_tcomms[g_tl_tid], &flag, &status);
+        if(flag) {
+          MPI_Recv((void*)req->buf, req->size, req->datatype, status.MPI_SOURCE, req->tag, g_tcomms[g_tl_tid], &status);
+          remove_recv_req(req);
 
-      req->proc = status->MPI_SOURCE;
-      req->tag = status->MPI_TAG;
-      return 1;
+          req->proc = status.MPI_SOURCE;
+          req->tag = status.MPI_TAG;
+          update_reqstat(cur, HMPI_REQ_RECV_COMPLETE);
+          return 1;
+        }
     }
-    
+#endif 
   } //HMPI_RECV_ANY_SOURCE
   return 0;
-}
-
-
-static inline void HMPI_Progress() {
-    //TODO - this visits most rescent receives first.  maybe iterate backwards
-    // to progress oldest receives first?
-    HMPI_Request* cur;
-    for(cur = g_recv_reqs[g_tl_tid]; cur != NULL; cur = cur->next) {
-        HMPI_Progress_recv(cur, MPI_STATUS_IGNORE);
-    }
 }
 
 
 int HMPI_Test(HMPI_Request *req, int *flag, MPI_Status *status)
 {
   if(get_reqstat(req) != HMPI_REQ_COMPLETE) {
-      *flag = HMPI_Progress_request(req, status);
+      *flag = HMPI_Progress_request(req);
   } else {
-    *flag = 1;
+      *flag = 1;
   }
 
   if(*flag && status != MPI_STATUS_IGNORE) {
@@ -613,6 +678,7 @@ int HMPI_Test(HMPI_Request *req, int *flag, MPI_Status *status)
       status->MPI_TAG = req->tag;
       status->MPI_ERROR = MPI_SUCCESS;
   }
+
   return MPI_SUCCESS;
 }
 
@@ -662,7 +728,6 @@ int HMPI_Isend(void* buf, int count, MPI_Datatype datatype, int dest, int tag, H
   }
 #endif
 #endif
-
 
     int target_mpi_rank = dest / g_nthreads;
     if(target_mpi_rank == g_rank) {
@@ -801,7 +866,21 @@ int HMPI_Irecv(void* buf, int count, MPI_Datatype datatype, int source, int tag,
   req->buf = buf;
 
   int source_mpi_rank = source / g_nthreads;
-  if(source_mpi_rank == g_rank) {
+  if(unlikely(source == MPI_ANY_SOURCE)) {
+    // test both layers and pick first 
+    req->type = HMPI_RECV_ANY_SOURCE;
+    req->proc = MPI_ANY_SOURCE;
+    //req->proc = source;
+    //req->tag = tag;
+    //req->size = size*count;
+    //req->buf = buf;
+
+    //req->comm = g_tcomms[g_tl_tid]; // not 100% sure -- this doesn't catch all messages -- Probe would need to loop over all thread comms and lock :-(
+    req->datatype = datatype;
+
+    add_recv_req(req);
+    HMPI_Progress_recv(req);
+  } else if(source_mpi_rank == g_rank) {
     // recv from other thread in my process
     req->type = HMPI_RECV;
     //req->match_req = NULL;
@@ -810,8 +889,8 @@ int HMPI_Irecv(void* buf, int count, MPI_Datatype datatype, int source, int tag,
     //while(HMPI_Progress_request(req) != 1 && ++tests<10);
 
     add_recv_req(req);
-    HMPI_Progress_recv(req, MPI_STATUS_IGNORE);
-  } else if(source != MPI_ANY_SOURCE) {
+    HMPI_Progress_recv(req);
+  } else /*if(source != MPI_ANY_SOURCE)*/ {
     int source_mpi_thread = source % g_nthreads;
     //printf("%d buf %p count %d src %d tag %d req %p\n", g_rank*g_nthreads+g_tl_tid, buf, count, source, tag, req);
 
@@ -823,24 +902,12 @@ int HMPI_Irecv(void* buf, int count, MPI_Datatype datatype, int source, int tag,
     //req->buf = buf;
 
     //PROFILE_START(mpi);
-    MPI_Irecv(buf, count, datatype, source_mpi_rank, tag, g_tcomms[source_mpi_thread], &req->req);
+    //MPI_Irecv(buf, count, datatype, source_mpi_rank, tag, g_tcomms[source_mpi_thread], &req->req);
+    MPI_Irecv(buf, count, datatype, source_mpi_rank, tag, g_tcomms[g_tl_tid], &req->req);
     //PROFILE_STOP(mpi);
 
     req->type = MPI_RECV;
-  } else if(source == MPI_ANY_SOURCE) {
-
-    // test both layers and pick first 
-    req->type = HMPI_RECV_ANY_SOURCE;
-    //req->proc = source;
-    //req->tag = tag;
-    //req->size = size*count;
-    //req->buf = buf;
-
-    req->comm = g_tcomms[g_tl_tid]; // not 100% sure -- this doesn't catch all messages -- Probe would need to loop over all thread comms and lock :-(
-    req->datatype = datatype;
-
-    add_recv_req(req);
-    HMPI_Progress_recv(req, MPI_STATUS_IGNORE);
+  //} else /*if(source == MPI_ANY_SOURCE)*/ {
   }
 
   return MPI_SUCCESS;
@@ -892,15 +959,16 @@ int HMPI_Allreduce(void *sendbuf, void *recvbuf, int count, MPI_Datatype datatyp
     int i;
 
     MPI_Type_size(datatype, &size);
-    MPI_Type_get_extent(datatype, &lb, &extent);
+    //MPI_Type_get_extent(datatype, &lb, &extent);
     //MPI_Type_extent(datatype, &extent);
 
+#if 0
     if(extent != size) {
         printf("allreduce non-contiguous derived datatypes are not supported yet!\n");
         fflush(stdout);
         MPI_Abort(comm->mpicomm, 0);
     }
-
+#endif
 
 #ifdef DEBUG
     if(g_tl_tid == 0) {
@@ -909,56 +977,131 @@ int HMPI_Allreduce(void *sendbuf, void *recvbuf, int count, MPI_Datatype datatyp
     }
 #endif
 
-    void* localbuf = NULL;
+#if 0
+    if(unlikely(g_size == 1 && g_nthreads == 1)) {
+        printf("doing 1-rank shortcut\n");
+        memcpy(recvbuf, sendbuf, size * count);
+        return MPI_SUCCESS;
+    }
+#endif
 
-    //if(g_tl_tid == 0) {
-        //comm->rootsbuf = localbuf;
-        //comm->rootrbuf = recvbuf;
-        //comm->sbuf[0] = localbuf;
-        //comm->rbuf[0] = recvbuf;
-    //}
+    //barrier_cb(&comm->barr, g_tl_tid, barrier_iprobe);
 
-    comm->sbuf[g_tl_tid] = sendbuf;
-
-    barrier_cb(&comm->barr, g_tl_tid, barrier_iprobe);
-
-    //TODO - this is silly.  Have each rank set its send buf, then root rank reduces into its buf.
     // Do the MPI allreduce, then each rank can copy out.
     if(g_tl_tid == 0) {
-        localbuf = memalign(4096, size * count);
-        memcpy(localbuf, sendbuf, size * count);
-
         comm->rbuf[0] = recvbuf;
 
-        for(i=1; i<g_nthreads; ++i) {
-            //if(g_tl_tid == i) {
-                NBC_Operation(localbuf, localbuf, (void*)comm->sbuf[i], op, datatype, count);
-                //NBC_Operation((void*)comm->sbuf[0], (void*)comm->sbuf[0], (void*)comm->sbuf[i], op, datatype, count);
-            //}
+        barrier_cb(&comm->barr, 0, barrier_iprobe);
 
-            //barrier_cb(&comm->barr, g_tl_tid, barrier_iprobe);
+        //TODO eliminate this memcpy by folding into a reduce call
+        memcpy(recvbuf, sendbuf, size * count);
+        //while(comm->flag[1] == 0);
+        //NBC_Operation(recvbuf, sendbuf, (void*)comm->sbuf[1], op, datatype, count);
+        //comm->flag[1] = 0;
+
+        for(i=1; i<g_nthreads; ++i) {
+            //Wait for flag to be set by each thread before reading their buf
+            //while(comm->flag[i] == 0);
+            NBC_Operation(recvbuf, recvbuf, (void*)comm->sbuf[i], op, datatype, count);
+            //comm->flag[i] = 0;
         }
 
-        //printf("%d before mpi allreduce\n", g_rank); fflush(stdout);
-        MPI_Allreduce(localbuf, recvbuf, count, datatype, op, comm->mpicomm);
-        //printf("%d after mpi allreduce\n", g_rank); fflush(stdout);
-        free(localbuf);
+        if(g_size > 1) {
+            MPI_Allreduce(MPI_IN_PLACE, recvbuf, count, datatype, op, comm->mpicomm);
+        }
+
+        //STORE_FENCE();
+        //comm->flag[0] = 1;
+        //barrier_cb(&comm->barr, g_tl_tid, barrier_iprobe);
+        barrier(&comm->barr, 0);
+    } else {
+        comm->sbuf[g_tl_tid] = sendbuf;
+        //STORE_FENCE();
+        //comm->flag[g_tl_tid] = 1;
+
+        barrier_cb(&comm->barr, g_tl_tid, barrier_iprobe);
+
+        //Threads cannot start until 0 arrives -- OK if others havent arrived
+        //barrier_cb(&comm->barr, g_tl_tid, barrier_iprobe);
+        barrier(&comm->barr, g_tl_tid);
+        //while(comm->flag[0] == 0);
+
+        //printf("%d doing allreduce copy\n", g_tl_tid); fflush(stdout);
+        //while(comm->flag[0] == 0);
+        memcpy(recvbuf, (void*)comm->rbuf[0], count*size);
     }
-
-    barrier_cb(&comm->barr, g_tl_tid, barrier_iprobe);
-
-    //printf("%d doing allreduce copy\n", g_tl_tid); fflush(stdout);
-    if(g_tl_tid != 0) memcpy(recvbuf, (void*)comm->rbuf[0], count*size);
 
     // protect from early leave (rootrbuf)
-    barrier_cb(&comm->barr, g_tl_tid, barrier_iprobe);
+    //0 can't leave until all threads arrive.. all others can go
+    //barrier_cb(&comm->barr, g_tl_tid, barrier_iprobe);
+
+    barrier(&comm->barr, g_tl_tid);
+    //if(g_tl_tid == 0) {
+    //    comm->flag[0] = 0;
+    //}
 
     //printf("%d done with allreduce\n", g_tl_tid); fflush(stdout);
+    return MPI_SUCCESS;
+}
+
+
+int HMPI_Allreduce2(void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype, HMPI_Op op, HMPI_Comm comm)
+{
+    MPI_Aint extent, lb;
+    int size;
+    int i;
+
+    MPI_Type_size(datatype, &size);
+#ifdef DEBUG
     if(g_tl_tid == 0) {
-        //free(localbuf);
-        //printf("4\n"); fflush(stdout);
+    printf("[%i %i] HMPI_Allreduce(%p, %p, %i, %p, %p, %p)\n", g_hmpi_rank, g_tl_tid, sendbuf, recvbuf,  count, datatype, op, comm);
+    fflush(stdout);
+    }
+#endif
+
+    // Do the MPI allreduce, then each rank can copy out.
+    if(g_tl_tid == 0) {
+        comm->sbuf[0] = sendbuf;
+        comm->rbuf[0] = recvbuf;
+
+        barrier_cb(&comm->barr, 0, barrier_iprobe);
+    PROFILE_START(allreduce);
+
+        //TODO eliminate this memcpy by folding into a reduce call
+        //memcpy(recvbuf, sendbuf, size * count);
+
+        //for(i=1; i<g_nthreads; ++i) {
+            //Wait for flag to be set by each thread before reading their buf
+            //NBC_Operation(recvbuf, recvbuf, (void*)comm->sbuf[i], op, datatype, count);
+        //}
+        PROFILE_START(op);
+        op.fn(recvbuf, (void**)comm->sbuf, g_nthreads, datatype, count);
+        PROFILE_STOP(op);
+
+        if(g_size > 1) {
+            MPI_Allreduce(MPI_IN_PLACE, recvbuf, count, datatype, op.op, comm->mpicomm);
+        }
+
+        barrier(&comm->barr, 0);
+    } else {
+        comm->sbuf[g_tl_tid] = sendbuf;
+
+        //barrier_cb(&comm->barr, g_tl_tid, barrier_iprobe);
+        barrier(&comm->barr, g_tl_tid);
+    PROFILE_START(allreduce);
+
+        //Threads cannot start until 0 arrives -- OK if others havent arrived
+        barrier(&comm->barr, g_tl_tid);
+
+    PROFILE_START(memcpy);
+        memcpy(recvbuf, (void*)comm->rbuf[0], count*size);
+    PROFILE_STOP(memcpy);
     }
 
+    // protect from early leave (rootrbuf)
+    //0 can't leave until all threads arrive.. all others can go
+    barrier(&comm->barr, g_tl_tid);
+    PROFILE_STOP(allreduce);
     return MPI_SUCCESS;
 }
 
@@ -1759,5 +1902,185 @@ int HMPI_Alltoall_local2(void* sendbuf, void* recvbuf, size_t copy_len, HMPI_Com
     return MPI_SUCCESS;
 }
 #endif
+
+
+
+void HMPI_SUM_op(void* destbuf, void** srcbufs, int numsrcbufs, MPI_Datatype datatype, int count)
+{
+    switch(datatype) {
+        case MPI_INT:
+            for(int i = 0; i < count; i++) {
+                int temp = ((int**)srcbufs)[0][i];
+                for(int j = 1; j < numsrcbufs; j++) {
+                    temp += ((int**)srcbufs)[j][i];
+                }
+
+                ((int*)destbuf)[i] = temp;
+            }
+            break;
+        case MPI_LONG:
+            break;
+        case MPI_LONG_LONG:
+        //case MPI_LONG_LONG_INT:
+        case MPI_INT64_T:
+            break;
+        case MPI_SHORT:
+            break;
+        case MPI_UNSIGNED:
+            break;
+        case MPI_UNSIGNED_LONG:
+            break;
+        case MPI_UNSIGNED_SHORT:
+            break;
+        case MPI_UINT64_T:
+            for(int i = 0; i < count; i++) {
+                uint64_t temp = ((uint64_t**)srcbufs)[0][i];
+                for(int j = 1; j < numsrcbufs; j++) {
+                    temp += ((uint64_t**)srcbufs)[j][i];
+                }
+
+                ((uint64_t*)destbuf)[i] = temp;
+            }
+            return;
+        case MPI_DOUBLE:
+            //TODO - maybe invert the loops
+            for(int i = 0; i < count; i++) {
+                double temp = ((double**)srcbufs)[0][i];
+                for(int j = 1; j < numsrcbufs; j++) {
+                    temp += ((double**)srcbufs)[j][i];
+                }
+
+                ((double*)destbuf)[i] = temp;
+            }
+            break;
+        default:
+            return;
+    }
+}
+
+
+void HMPI_MIN_op(void* destbuf, void** srcbufs, int numsrcbufs, MPI_Datatype datatype, int count)
+{
+    switch(datatype) {
+        case MPI_INT:
+            for(int i = 0; i < count; i++) {
+                int temp = ((int**)srcbufs)[0][i];
+                for(int j = 1; j < numsrcbufs; j++) {
+                    //temp += ((int**)srcbufs)[j][i];
+                    temp = temp < ((int**)srcbufs)[j][i] ?
+                        temp : ((int**)srcbufs)[j][i];
+                }
+
+                ((int*)destbuf)[i] = temp;
+            }
+            break;
+        case MPI_LONG:
+            break;
+        case MPI_LONG_LONG:
+        //case MPI_LONG_LONG_INT:
+        case MPI_INT64_T:
+            break;
+        case MPI_SHORT:
+            break;
+        case MPI_UNSIGNED:
+            break;
+        case MPI_UNSIGNED_LONG:
+            break;
+        case MPI_UNSIGNED_SHORT:
+            break;
+        case MPI_UINT64_T:
+            for(int i = 0; i < count; i++) {
+                uint64_t temp = ((uint64_t**)srcbufs)[0][i];
+                for(int j = 1; j < numsrcbufs; j++) {
+                    //temp += ((uint64_t**)srcbufs)[j][i];
+                    temp = temp < ((uint64_t**)srcbufs)[j][i] ?
+                        temp : ((uint64_t**)srcbufs)[j][i];
+                }
+
+                ((uint64_t*)destbuf)[i] = temp;
+            }
+            return;
+        case MPI_DOUBLE:
+            //TODO - maybe invert the loops
+            for(int i = 0; i < count; i++) {
+                double temp = ((double**)srcbufs)[0][i];
+                for(int j = 1; j < numsrcbufs; j++) {
+                    //temp += ((double**)srcbufs)[j][i];
+                    temp = temp < ((double**)srcbufs)[j][i] ?
+                        temp : ((double**)srcbufs)[j][i];
+                }
+
+                ((double*)destbuf)[i] = temp;
+            }
+            break;
+        default:
+            return;
+    }
+}
+
+
+void HMPI_MAX_op(void* destbuf, void** srcbufs, int numsrcbufs, MPI_Datatype datatype, int count)
+{
+    switch(datatype) {
+        case MPI_INT:
+            for(int i = 0; i < count; i++) {
+                int temp = ((int**)srcbufs)[0][i];
+                for(int j = 1; j < numsrcbufs; j++) {
+                    //temp += ((int**)srcbufs)[j][i];
+                    temp = temp > ((int**)srcbufs)[j][i] ?
+                        temp : ((int**)srcbufs)[j][i];
+                }
+
+                ((int*)destbuf)[i] = temp;
+            }
+            break;
+        case MPI_LONG:
+            break;
+        case MPI_LONG_LONG:
+        //case MPI_LONG_LONG_INT:
+        case MPI_INT64_T:
+            break;
+        case MPI_SHORT:
+            break;
+        case MPI_UNSIGNED:
+            break;
+        case MPI_UNSIGNED_LONG:
+            break;
+        case MPI_UNSIGNED_SHORT:
+            break;
+        case MPI_UINT64_T:
+            for(int i = 0; i < count; i++) {
+                uint64_t temp = ((uint64_t**)srcbufs)[0][i];
+                for(int j = 1; j < numsrcbufs; j++) {
+                    //temp += ((uint64_t**)srcbufs)[j][i];
+                    temp = temp > ((uint64_t**)srcbufs)[j][i] ?
+                        temp : ((uint64_t**)srcbufs)[j][i];
+                }
+
+                ((uint64_t*)destbuf)[i] = temp;
+            }
+            return;
+        case MPI_DOUBLE:
+            //TODO - maybe invert the loops
+            for(int i = 0; i < count; i++) {
+                double temp = ((double**)srcbufs)[0][i];
+                for(int j = 1; j < numsrcbufs; j++) {
+                    //temp += ((double**)srcbufs)[j][i];
+                    temp = temp > ((double**)srcbufs)[j][i] ?
+                        temp : ((double**)srcbufs)[j][i];
+                }
+
+                ((double*)destbuf)[i] = temp;
+            }
+            break;
+        default:
+            return;
+    }
+}
+
+
+HMPI_Op HMPI_SUM = {MPI_SUM, HMPI_SUM_op};
+HMPI_Op HMPI_MIN = {MPI_MIN, HMPI_MIN_op};
+HMPI_Op HMPI_MAX = {MPI_MAX, HMPI_MAX_op};
 
 
