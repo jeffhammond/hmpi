@@ -22,6 +22,7 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
+#include <hwloc.h>
 //#include "pipelinecopy.h"
 #include "lock.h"
 
@@ -53,6 +54,7 @@ PROFILE_VAR(allreduce);
 PROFILE_VAR(op);
 
 
+hwloc_topology_t g_hwloc_topology;
 int g_nthreads=-1;
 int g_rank=-1;
 static __thread int g_hmpi_rank=-1;
@@ -216,22 +218,64 @@ static inline int get_reqstat(HMPI_Request *req) {
 
 // this is called by pthread create and then calls the real function!
 void* trampoline(void* tid) {
-  // save thread-id in thread-local storage
-  g_tl_tid = (int)(unsigned long)tid;
-  g_hmpi_rank = g_rank*g_nthreads+(int)(unsigned long)tid;
+    int rank = (int)(uintptr_t)tid;
 
-  PROFILE_INIT(g_tl_tid);
+  //Just try this:
+  // obj = hwloc_get_obj_by_type(topo, HWLOC_OBJ_CORE, rank)
+  // cpuset = hwloc_bitmap_dup(obj->cpuset);
+  // hwloc_bitmap_singlify(cpuset);
+  // hwloc_set_cpubind(topo, cpuset, HWLOC_CPUBIND_THREAD)
+    {
+        hwloc_obj_t obj;
+        hwloc_cpuset_t cpuset;
+        int depth;
 
-  //printf("%d:%d entered trampoline\n", g_rank, g_tl_tid); fflush(stdout);
+        int num_sockets =
+            hwloc_get_nbobjs_by_type(g_hwloc_topology, HWLOC_OBJ_SOCKET);
+        if(num_sockets == 0) {
+            num_sockets = 1;
+        }
 
-  // barrier to avoid race in tid ...
-  barrier(&HMPI_COMM_WORLD->barr, g_tl_tid);
+        int num_cores =
+            hwloc_get_nbobjs_by_type(g_hwloc_topology, HWLOC_OBJ_CORE);
+        if(num_cores == 0) {
+            num_cores = 1;
+        }
 
-  //printf("%d:%d g_entry now\n", g_rank, g_tl_tid); fflush(stdout);
-  // call user function
-  g_entry(g_argc, g_argv);
+        num_cores /= num_sockets; //cores per socket
 
-  return NULL;
+        int rs = g_nthreads / num_sockets;
+        int idx = ((rank / rs) * num_cores) + (rank % rs);
+        //printf("Rank %d binding to index %d\n", rank, idx);
+
+        obj = hwloc_get_obj_by_type(g_hwloc_topology, HWLOC_OBJ_CORE, idx);
+        if(obj == NULL) {
+            printf("ERROR got NULL hwloc core object\n");
+            MPI_Abort(MPI_COMM_WORLD, 0);
+        }
+
+        cpuset = hwloc_bitmap_dup(obj->cpuset);
+        hwloc_bitmap_singlify(cpuset);
+        hwloc_set_cpubind(g_hwloc_topology, cpuset, HWLOC_CPUBIND_THREAD);
+    }
+
+
+    // save thread-id in thread-local storage
+    g_tl_tid = rank;
+    g_hmpi_rank = g_rank*g_nthreads+rank;
+
+    PROFILE_INIT(g_tl_tid);
+
+    //printf("%d:%d entered trampoline\n", g_rank, g_tl_tid); fflush(stdout);
+
+    // barrier to avoid race in tid ...
+    barrier(&HMPI_COMM_WORLD->barr, g_tl_tid);
+
+    //printf("%d:%d g_entry now\n", g_rank, g_tl_tid); fflush(stdout);
+    // call user function
+    g_entry(g_argc, g_argv);
+
+    return NULL;
 }
 
 
@@ -307,8 +351,38 @@ int HMPI_Init(int *argc, char ***argv, int nthreads, void (*start_routine)(int a
   //  CPU_SET(thr + 6, &cpuset[1]);
   //}
 
+  //hwloc_topology_t topology;
+
+  hwloc_topology_init(&g_hwloc_topology);
+  hwloc_topology_load(g_hwloc_topology);
+
+  int num_sockets = hwloc_get_nbobjs_by_type(g_hwloc_topology, HWLOC_OBJ_SOCKET);
+  if(num_sockets == 0) {
+      num_sockets = 1;
+  }
+
+  int num_cores = hwloc_get_nbobjs_by_type(g_hwloc_topology, HWLOC_OBJ_CORE);
+  if(num_cores == 0) {
+      num_cores = 1;
+  }
+  //printf("hwloc says %d sockets\n", num_sockets);
+  //printf("hwloc says %d cores\n", num_cores);
+
+  //2 sockets 12 cores
+  if(num_cores < nthreads) {
+      printf("%d request %d threads but only %d cores\n", g_rank, nthreads, num_cores);
+      MPI_Abort(MPI_COMM_WORLD, 0);
+  }
+
+
+  //Spread threads evenly across cores
+  //Each thread should bind itself according to its rank.
+  // Compute rs = num_ranks / num_sockets
+  //         c = r % rs, s = r / rs
+  // Bind to core c on socket s
+
 //TODO - should use hwloc to do this right in general case
-#define CORES 6 //Sierra
+//#define CORES 6 //Sierra
 
   pthread_attr_t attr;
   for(thr=0; thr < nthreads; thr++) {
@@ -318,6 +392,7 @@ int HMPI_Init(int *argc, char ***argv, int nthreads, void (*start_routine)(int a
     int rc = pthread_create(&threads[thr], &attr, trampoline, (void *)thr);
 
     //Set affinity -- pin each thread to one core
+#if 0
     cpu_set_t cpuset;
     CPU_ZERO(&cpuset);
 
@@ -338,6 +413,7 @@ int HMPI_Init(int *argc, char ***argv, int nthreads, void (*start_routine)(int a
       printf("%d:%ld pthread_setaffinity_np error %s\n", g_rank, thr, strerror(rc));
       MPI_Abort(MPI_COMM_WORLD, 0);
     }
+#endif
   }
 
   for(thr=0; thr<nthreads; thr++) {
