@@ -23,6 +23,7 @@
 #include <stdio.h>
 #include <string.h>
 //#include "pipelinecopy.h"
+#include "lock.h"
 
 #define BLOCK_SIZE 8192
 
@@ -60,6 +61,7 @@ static int g_size=-1;
 HMPI_Comm HMPI_COMM_WORLD;
 
 static MPI_Comm* g_tcomms;
+lock_t g_mpi_lock;      //Used to protect ANY_SRC Iprobe/Recv sequence
 
 static __thread int g_tl_tid=-1;
 
@@ -239,10 +241,10 @@ int HMPI_Init(int *argc, char ***argv, int nthreads, void (*start_routine)(int a
   int provided;
   long int thr;
 
-//  printf("before MPI_Init\n"); fflush(stdout);
+  //printf("before MPI_Init\n"); fflush(stdout);
   MPI_Init_thread(argc, argv, MPI_THREAD_MULTIPLE, &provided);
   assert(MPI_THREAD_MULTIPLE == provided);
-  printf("HMPI INIT %d threads\n", nthreads); fflush(stdout);
+  //printf("HMPI INIT %d threads\n", nthreads); fflush(stdout);
 #ifdef DEBUG
   printf("after MPI_Init\n"); fflush(stdout);
 #endif
@@ -251,6 +253,7 @@ int HMPI_Init(int *argc, char ***argv, int nthreads, void (*start_routine)(int a
   g_argv = *argv; 
   g_entry = start_routine;
   g_nthreads = nthreads;
+  LOCK_INIT(&g_mpi_lock, 0);
 
   HMPI_COMM_WORLD = (HMPI_Comm_info*)malloc(sizeof(HMPI_Comm_info));
   HMPI_COMM_WORLD->mpicomm = MPI_COMM_WORLD;
@@ -304,7 +307,8 @@ int HMPI_Init(int *argc, char ***argv, int nthreads, void (*start_routine)(int a
   //  CPU_SET(thr + 6, &cpuset[1]);
   //}
 
-#define CORES 6
+//TODO - should use hwloc to do this right in general case
+#define CORES 6 //Sierra
 
   pthread_attr_t attr;
   for(thr=0; thr < nthreads; thr++) {
@@ -327,7 +331,7 @@ int HMPI_Init(int *argc, char ***argv, int nthreads, void (*start_routine)(int a
     }
 
     //Fill a socket before moving to next
-//    CPU_SET(thr, &cpuset);
+    //CPU_SET(thr, &cpuset);
 
     rc = pthread_setaffinity_np(threads[thr], sizeof(cpu_set_t), &cpuset);
     if(rc) {
@@ -355,7 +359,10 @@ int HMPI_Comm_rank(HMPI_Comm comm, int *rank) {
     printf("only MPI_COMM_WORLD is supported so far\n");
     MPI_Abort(comm->mpicomm, 0);
   }
-    
+
+  //printf("HMPI_Comm_rank %d thread %d nthreads %d mpi rank %d size %d\n",
+  //  g_hmpi_rank, g_tl_tid, g_nthreads, g_rank, g_size);
+  //fflush(stdout);
   *rank = g_hmpi_rank;
   return 0;
 }
@@ -437,6 +444,7 @@ static inline int HMPI_Progress_send(HMPI_Request* send_req) {
 
     //TODO - this visits most rescent receives first.  maybe iterate backwards
     // to progress oldest receives first?
+#if 0
     HMPI_Request* cur;
 
     for(cur = g_recv_reqs[g_tl_tid]; cur != NULL; cur = cur->next) {
@@ -448,6 +456,7 @@ static inline int HMPI_Progress_send(HMPI_Request* send_req) {
             update_reqstat(cur, flag);
         }
     }
+#endif
 
     //Write blocks on this send req if receiver has matched it.
     //If mesage is short, receiver won't bother setting recv_buf, and instead
@@ -586,28 +595,32 @@ static inline void HMPI_Progress() {
     for(cur = g_recv_reqs[g_tl_tid]; cur != NULL; cur = cur->next) {
         if(cur->type == HMPI_RECV) {
             HMPI_Progress_recv(cur);
-        } else if(cur->type  == MPI_RECV) {
+        } else if(cur->type == MPI_RECV) {
             int flag;
             MPI_Test(&cur->req, &flag, MPI_STATUS_IGNORE);
             update_reqstat(cur, flag);
         } else { //req->type == HMPI_RECV_ANY_SOURCE
             if(HMPI_Progress_recv(cur)) {
-                return;
-            }
-
-            if(g_size > 1) {
+                //Local match & completion
+                continue;
+            } else if(g_size > 1) {
                 // check if we can get something via the MPI library
                 int flag=0;
                 MPI_Status status;
+
+                //TODO - probably need to lock this..
+                LOCK_SET(&g_mpi_lock);
                 MPI_Iprobe(MPI_ANY_SOURCE, cur->tag, g_tcomms[g_tl_tid], &flag, &status);
                 if(flag) {
                   MPI_Recv((void*)cur->buf, cur->size, cur->datatype, status.MPI_SOURCE, cur->tag, g_tcomms[g_tl_tid], &status);
+                  LOCK_CLEAR(&g_mpi_lock);
                   remove_recv_req(cur);
 
                   cur->proc = status.MPI_SOURCE;
                   cur->tag = status.MPI_TAG;
                   update_reqstat(cur, HMPI_REQ_RECV_COMPLETE);
-                  return;
+                } else {
+                  LOCK_CLEAR(&g_mpi_lock);
                 }
             }
         }
@@ -620,15 +633,14 @@ static inline int HMPI_Progress_request(HMPI_Request *req)
   HMPI_Progress();
 
   if(req->type == HMPI_SEND) {
-      //return HMPI_Progress_send(req);
-      return get_reqstat(req);
+      return HMPI_Progress_send(req);
+      //return get_reqstat(req);
   } else if(req->type == HMPI_RECV) {
       //return HMPI_Progress_recv(req);
-      //HMPI_Progress();
       return get_reqstat(req);
-  } // HMPI_RECV
-  else if(req->type == MPI_SEND || req->type == MPI_RECV) {
+  } else if(req->type == MPI_SEND || req->type == MPI_RECV) {
     int flag;
+    //Recv is tacked on here, even though it just got tested in HMPI_Progress()
 
     //PROFILE_START(mpi);
     MPI_Test(&req->req, &flag, MPI_STATUS_IGNORE);
@@ -637,7 +649,7 @@ static inline int HMPI_Progress_request(HMPI_Request *req)
     //TODO - is this right?
     update_reqstat(req, flag);
     return flag;
-  } else if(req->type == HMPI_RECV_ANY_SOURCE) {
+  } else /*if(req->type == HMPI_RECV_ANY_SOURCE)*/ {
       return get_reqstat(req);
 #if 0
     if(HMPI_Progress_recv(req)) {
@@ -1128,6 +1140,7 @@ int HMPI_Bcast(void *buffer, int count, MPI_Datatype datatype, int root, HMPI_Co
   //We need a buffer set on all MPI ranks, so use thread root % tid
   //if(root == g_nthreads*g_rank+g_tl_tid) {
   if(root % g_nthreads == g_tl_tid) {
+//      printf("%d set buffer\n", g_tl_tid);
       comm->sbuf[0] = buffer;
   }
 
@@ -1138,14 +1151,19 @@ int HMPI_Bcast(void *buffer, int count, MPI_Datatype datatype, int root, HMPI_Co
     MPI_Bcast((void*)comm->sbuf[0], count, datatype, root, comm->mpicomm);
   }
 
-  barrier_cb(&comm->barr, g_tl_tid, barrier_iprobe);
+  barrier(&comm->barr, g_tl_tid);
+  //barrier_cb(&comm->barr, g_tl_tid, barrier_iprobe);
   //barrier_wait(&comm->barr);
 
+  //TODO - skip if g_rank == root / g_nthreads
   if(root % g_nthreads != g_tl_tid) {
+//      printf("%d copy buffer\n", g_tl_tid);
     memcpy(buffer, (void*)comm->sbuf[0], count*size);
   }
 
-  barrier_cb(&comm->barr, g_tl_tid, barrier_iprobe);
+//  fflush(stdout);
+  barrier(&comm->barr, g_tl_tid);
+  //barrier_cb(&comm->barr, g_tl_tid, barrier_iprobe);
   //barrier_wait(&comm->barr);
 
 #if 0
@@ -1798,32 +1816,34 @@ int HMPI_Alltoall_local2(void* sendbuf, void* recvbuf, size_t copy_len, HMPI_Com
     int rank = g_nthreads*g_rank + tid;
 
     //Dumb alltoall -- send to everybody, then receive.
-    //HMPI_Request* sreqs = (HMPI_Request*)malloc(sizeof(MPI_Request) * comm_size);
-    HMPI_Request* sreqs = (HMPI_Request*)alloca(sizeof(MPI_Request) * comm_size);
+    //HMPI_Request* sreqs = (HMPI_Request*)malloc(sizeof(HMPI_Request) * comm_size);
+    HMPI_Request* sreqs = (HMPI_Request*)alloca(sizeof(HMPI_Request) * comm_size);
 
     //Do the self copy
     memcpy((void*)(rbuf + (tid * copy_len)),
            (void*)(sbuf + (tid * copy_len)), copy_len);
 
     //Post sends
-    for(int i = 1; i < g_size; i++) {
-        int r = (rank + i) % g_size;
-        HMPI_Isend((void*)(sbuf + copy_len * r), copy_len, MPI_BYTE, r, 4317194,
+    for(int i = 1; i < comm_size; i++) {
+        int r = (rank + i) % comm_size;
+        HMPI_Isend((void*)(sbuf + (copy_len * r)), copy_len, MPI_BYTE, r, 4317194,
                 HMPI_COMM_WORLD, &sreqs[i]);
     }
 
     //Do blocking receives
-    for(int i = 1; i < g_size; i++) {
-        int r = (rank + g_size - i) % g_size;
-        HMPI_Recv((void*)(rbuf + copy_len * r), copy_len, MPI_BYTE, r, 4317194,
+    for(int i = 1; i < comm_size; i++) {
+        int r = (rank + comm_size - i) % comm_size;
+        HMPI_Recv((void*)(rbuf + (copy_len * r)), copy_len, MPI_BYTE, r, 4317194,
                 HMPI_COMM_WORLD, MPI_STATUS_IGNORE);
         HMPI_Wait(&sreqs[i], MPI_STATUS_IGNORE);
     }
 
     //Complete sends
-    //for(int i = 1; i < g_size; i++) {
-        //HMPI_Wait(&sreqs[i], MPI_STATUS_IGNORE);
-   // }
+#if 0
+    for(int i = 1; i < comm_size; i++) {
+        HMPI_Wait(&sreqs[i], MPI_STATUS_IGNORE);
+    }
+#endif
 
     //free(sreqs);
 }

@@ -1,7 +1,7 @@
-CXX=mpicxx
-#CXXFLAGS=-O0 -g -D_GLIBCXX_DEBUG
+CXX=mpicc -std=gnu99
+CXXFLAGS=-O0 -g -L/usr/local/tools/papi/lib -I/usr/local/tools/papi/include
 #CXXFLAGS=-march=k8 -O2 -fomit-frame-pointer
-CXXFLAGS=-march=native -O3 -fomit-frame-pointer -Iopenpa-1.0.2/src -L/usr/local/tools/papi/lib -I/usr/local/tools/papi/include
+#CXXFLAGS=-march=native -O3 -fomit-frame-pointer -Iopenpa-1.0.2/src -L/usr/local/tools/papi/lib -I/usr/local/tools/papi/include
 
 all: main
 

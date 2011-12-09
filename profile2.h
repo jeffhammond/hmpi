@@ -336,9 +336,9 @@ static void __PROFILE_SHOW_REDUCE(const char* name, struct profile_vars_t* v)
     MPI_Comm_size(MPI_COMM_WORLD, &size);
 
     MPI_Reduce(&v->count, &r_count, 1,
-            MPI_UINT64_t, MPI_SUM, 0, MPI_COMM_WORLD);
+            MPI_UINT64_T, MPI_SUM, 0, MPI_COMM_WORLD);
     MPI_Reduce(&v->time, &r_time, 1,
-            MPI_UINT64_t, MPI_SUM, 0, MPI_COMM_WORLD);
+            MPI_UINT64_T, MPI_SUM, 0, MPI_COMM_WORLD);
     MPI_Reduce(&a, &r_avg, 1, MPI_DOUBLE, MPI_SUM, 0, MPI_COMM_WORLD);
 #elif _PROFILE_HMPI == 1
     HMPI_Comm_rank(HMPI_COMM_WORLD, &rank);
