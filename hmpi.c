@@ -54,7 +54,7 @@ PROFILE_VAR(allreduce);
 PROFILE_VAR(op);
 
 
-hwloc_topology_t g_hwloc_topology;
+hwloc_topology_t g_hwloc_topo;
 int g_nthreads=-1;
 int g_rank=-1;
 static __thread int g_hmpi_rank=-1;
@@ -220,35 +220,47 @@ static inline int get_reqstat(HMPI_Request *req) {
 void* trampoline(void* tid) {
     int rank = (int)(uintptr_t)tid;
 
-  //Just try this:
-  // obj = hwloc_get_obj_by_type(topo, HWLOC_OBJ_CORE, rank)
-  // cpuset = hwloc_bitmap_dup(obj->cpuset);
-  // hwloc_bitmap_singlify(cpuset);
-  // hwloc_set_cpubind(topo, cpuset, HWLOC_CPUBIND_THREAD)
     {
+        //Spread threads evenly across cores
+        //Each thread should bind itself according to its rank.
+        // Compute rs = num_ranks / num_sockets
+        //         c = r % rs, s = r / rs
+        //         idx = s * num_cores + c
         hwloc_obj_t obj;
         hwloc_cpuset_t cpuset;
         int depth;
 
         int num_sockets =
-            hwloc_get_nbobjs_by_type(g_hwloc_topology, HWLOC_OBJ_SOCKET);
+            hwloc_get_nbobjs_by_type(g_hwloc_topo, HWLOC_OBJ_SOCKET);
         if(num_sockets == 0) {
             num_sockets = 1;
         }
 
         int num_cores =
-            hwloc_get_nbobjs_by_type(g_hwloc_topology, HWLOC_OBJ_CORE);
+            hwloc_get_nbobjs_by_type(g_hwloc_topo, HWLOC_OBJ_CORE);
         if(num_cores == 0) {
             num_cores = 1;
         }
 
+        if(num_cores < g_nthreads) {
+            printf("%d ERROR requested %d threads but only %d cores\n",
+                    g_rank, g_nthreads, num_cores);
+            MPI_Abort(MPI_COMM_WORLD, 0);
+        }
+
         num_cores /= num_sockets; //cores per socket
 
-        int rs = g_nthreads / num_sockets;
-        int idx = ((rank / rs) * num_cores) + (rank % rs);
+        int idx;
+
+        if(g_nthreads <= num_sockets) {
+            idx = rank * num_cores;
+        } else { 
+            int rs = g_nthreads / num_sockets;
+            idx = ((rank / rs) * num_cores) + (rank % rs);
+        }
         //printf("Rank %d binding to index %d\n", rank, idx);
 
-        obj = hwloc_get_obj_by_type(g_hwloc_topology, HWLOC_OBJ_CORE, idx);
+        obj = hwloc_get_obj_by_type(g_hwloc_topo, HWLOC_OBJ_CORE, idx);
         if(obj == NULL) {
             printf("ERROR got NULL hwloc core object\n");
             MPI_Abort(MPI_COMM_WORLD, 0);
@@ -256,7 +268,9 @@ void* trampoline(void* tid) {
 
         cpuset = hwloc_bitmap_dup(obj->cpuset);
         hwloc_bitmap_singlify(cpuset);
-        hwloc_set_cpubind(g_hwloc_topology, cpuset, HWLOC_CPUBIND_THREAD);
+
+        hwloc_set_cpubind(g_hwloc_topo, cpuset, HWLOC_CPUBIND_THREAD);
+        hwloc_set_membind(g_hwloc_topo, cpuset, HWLOC_MEMBIND_BIND, HWLOC_CPUBIND_THREAD);
     }
 
 
@@ -353,15 +367,16 @@ int HMPI_Init(int *argc, char ***argv, int nthreads, void (*start_routine)(int a
 
   //hwloc_topology_t topology;
 
-  hwloc_topology_init(&g_hwloc_topology);
-  hwloc_topology_load(g_hwloc_topology);
+  hwloc_topology_init(&g_hwloc_topo);
+  hwloc_topology_load(g_hwloc_topo);
 
-  int num_sockets = hwloc_get_nbobjs_by_type(g_hwloc_topology, HWLOC_OBJ_SOCKET);
+#if 0
+  int num_sockets = hwloc_get_nbobjs_by_type(g_hwloc_topo, HWLOC_OBJ_SOCKET);
   if(num_sockets == 0) {
       num_sockets = 1;
   }
 
-  int num_cores = hwloc_get_nbobjs_by_type(g_hwloc_topology, HWLOC_OBJ_CORE);
+  int num_cores = hwloc_get_nbobjs_by_type(g_hwloc_topo, HWLOC_OBJ_CORE);
   if(num_cores == 0) {
       num_cores = 1;
   }
@@ -373,16 +388,11 @@ int HMPI_Init(int *argc, char ***argv, int nthreads, void (*start_routine)(int a
       printf("%d request %d threads but only %d cores\n", g_rank, nthreads, num_cores);
       MPI_Abort(MPI_COMM_WORLD, 0);
   }
+#endif
 
-
-  //Spread threads evenly across cores
-  //Each thread should bind itself according to its rank.
-  // Compute rs = num_ranks / num_sockets
-  //         c = r % rs, s = r / rs
-  // Bind to core c on socket s
 
 //TODO - should use hwloc to do this right in general case
-//#define CORES 6 //Sierra
+#define CORES 6 //Sierra
 
   pthread_attr_t attr;
   for(thr=0; thr < nthreads; thr++) {
@@ -391,8 +401,8 @@ int HMPI_Init(int *argc, char ***argv, int nthreads, void (*start_routine)(int a
     //pthread_attr_setscope(&attr, PTHREAD_SCOPE_SYSTEM); //SYSTEM is default
     int rc = pthread_create(&threads[thr], &attr, trampoline, (void *)thr);
 
-    //Set affinity -- pin each thread to one core
 #if 0
+    //Set affinity -- pin each thread to one core
     cpu_set_t cpuset;
     CPU_ZERO(&cpuset);
 
@@ -1922,6 +1932,7 @@ int HMPI_Alltoall_local2(void* sendbuf, void* recvbuf, size_t copy_len, HMPI_Com
 #endif
 
     //free(sreqs);
+    return MPI_SUCCESS;
 }
 
 
