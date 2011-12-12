@@ -142,19 +142,6 @@ int HMPI_Barrier(HMPI_Comm comm);
 int HMPI_Allreduce(void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype, MPI_Op op, HMPI_Comm comm);
 
 
-typedef void (*HMPI_Op_fn)(void* destbuf, void** srcbufs, int numsrcbufs, MPI_Datatype datatype, int count);
-
-typedef struct HMPI_Op {
-    MPI_Op op;
-    HMPI_Op_fn fn;
-} HMPI_Op;
-
-extern HMPI_Op HMPI_SUM;
-extern HMPI_Op HMPI_MIN;
-extern HMPI_Op HMPI_MAX;
-
-int HMPI_Allreduce2(void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype, HMPI_Op op, HMPI_Comm comm);
-
 int HMPI_Bcast(void *buffer, int count, MPI_Datatype datatype, int root, HMPI_Comm comm);
 
 int HMPI_Scatter(void* sendbuf, int sendcount, MPI_Datatype sendtype, void* recvbuf, int recvcount, MPI_Datatype recvtype, int root, HMPI_Comm comm);
@@ -165,6 +152,7 @@ int HMPI_Alltoall(void* sendbuf, int sendcount, MPI_Datatype sendtype, void* rec
 
 int HMPI_Alltoall_local(void* sendbuf, int sendcount, MPI_Datatype sendtype, void* recvbuf, int recvcount, MPI_Datatype recvtype, HMPI_Comm comm);
 
+//Assumes all ranks are local.
 int HMPI_Alltoall_local2(void* sendbuf, void* recvbuf, size_t len, HMPI_Comm comm);
 
 int HMPI_Abort( HMPI_Comm comm, int errorcode );

@@ -167,10 +167,7 @@ static inline int match_recv(HMPI_Request* recv_req, HMPI_Request** send_req) {
 //        printf("%d tag match? %d %d\n", g_tl_tid, cur->tag == recv_req->tag,
 //                recv_req->tag == MPI_ANY_TAG); fflush(stdout);
 
-        //The send request can't have ANY_SOURCE or ANY_TAG
-        //if(cur->proc == recv_req->proc ||
-        //        recv_req->proc == MPI_ANY_SOURCE) {
-        //    if(cur->tag == recv_req->tag || recv_req->tag == MPI_ANY_TAG) {
+        //The send request can't have ANY_SOURCE or ANY_TAG, so don't check for that.
         if((cur->proc == recv_req->proc ||
                 recv_req->proc == MPI_ANY_SOURCE) &&
                 (cur->tag == recv_req->tag || recv_req->tag == MPI_ANY_TAG)) {
@@ -370,29 +367,9 @@ int HMPI_Init(int *argc, char ***argv, int nthreads, void (*start_routine)(int a
   hwloc_topology_init(&g_hwloc_topo);
   hwloc_topology_load(g_hwloc_topo);
 
-#if 0
-  int num_sockets = hwloc_get_nbobjs_by_type(g_hwloc_topo, HWLOC_OBJ_SOCKET);
-  if(num_sockets == 0) {
-      num_sockets = 1;
-  }
-
-  int num_cores = hwloc_get_nbobjs_by_type(g_hwloc_topo, HWLOC_OBJ_CORE);
-  if(num_cores == 0) {
-      num_cores = 1;
-  }
-  //printf("hwloc says %d sockets\n", num_sockets);
-  //printf("hwloc says %d cores\n", num_cores);
-
-  //2 sockets 12 cores
-  if(num_cores < nthreads) {
-      printf("%d request %d threads but only %d cores\n", g_rank, nthreads, num_cores);
-      MPI_Abort(MPI_COMM_WORLD, 0);
-  }
-#endif
-
 
 //TODO - should use hwloc to do this right in general case
-#define CORES 6 //Sierra
+//#define CORES 6 //Sierra
 
   pthread_attr_t attr;
   for(thr=0; thr < nthreads; thr++) {
@@ -441,10 +418,12 @@ int HMPI_Init(int *argc, char ***argv, int nthreads, void (*start_routine)(int a
 int HMPI_Comm_rank(HMPI_Comm comm, int *rank) {
   
   //printf("[%i] HMPI_Comm_rank()\n", g_rank*g_nthreads+g_tl_tid);
+#if HMPI_SAFE 
   if(comm->mpicomm != MPI_COMM_WORLD) {
     printf("only MPI_COMM_WORLD is supported so far\n");
     MPI_Abort(comm->mpicomm, 0);
   }
+#endif
 
   //printf("HMPI_Comm_rank %d thread %d nthreads %d mpi rank %d size %d\n",
   //  g_hmpi_rank, g_tl_tid, g_nthreads, g_rank, g_size);
@@ -455,11 +434,12 @@ int HMPI_Comm_rank(HMPI_Comm comm, int *rank) {
 
 
 int HMPI_Comm_size ( HMPI_Comm comm, int *size ) {
-  
+#if HMPI_SAFE 
   if(comm->mpicomm != MPI_COMM_WORLD) {
     printf("only MPI_COMM_WORLD is supported so far\n");
     MPI_Abort(comm->mpicomm, 0);
   }
+#endif
     
   *size = g_size*g_nthreads;
   return 0;
@@ -1143,67 +1123,6 @@ int HMPI_Allreduce(void *sendbuf, void *recvbuf, int count, MPI_Datatype datatyp
 }
 
 
-int HMPI_Allreduce2(void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype, HMPI_Op op, HMPI_Comm comm)
-{
-    MPI_Aint extent, lb;
-    int size;
-    int i;
-
-    MPI_Type_size(datatype, &size);
-#ifdef DEBUG
-    if(g_tl_tid == 0) {
-    printf("[%i %i] HMPI_Allreduce(%p, %p, %i, %p, %p, %p)\n", g_hmpi_rank, g_tl_tid, sendbuf, recvbuf,  count, datatype, op, comm);
-    fflush(stdout);
-    }
-#endif
-
-    // Do the MPI allreduce, then each rank can copy out.
-    if(g_tl_tid == 0) {
-        comm->sbuf[0] = sendbuf;
-        comm->rbuf[0] = recvbuf;
-
-        barrier_cb(&comm->barr, 0, barrier_iprobe);
-    PROFILE_START(allreduce);
-
-        //TODO eliminate this memcpy by folding into a reduce call
-        //memcpy(recvbuf, sendbuf, size * count);
-
-        //for(i=1; i<g_nthreads; ++i) {
-            //Wait for flag to be set by each thread before reading their buf
-            //NBC_Operation(recvbuf, recvbuf, (void*)comm->sbuf[i], op, datatype, count);
-        //}
-        PROFILE_START(op);
-        op.fn(recvbuf, (void**)comm->sbuf, g_nthreads, datatype, count);
-        PROFILE_STOP(op);
-
-        if(g_size > 1) {
-            MPI_Allreduce(MPI_IN_PLACE, recvbuf, count, datatype, op.op, comm->mpicomm);
-        }
-
-        barrier(&comm->barr, 0);
-    } else {
-        comm->sbuf[g_tl_tid] = sendbuf;
-
-        //barrier_cb(&comm->barr, g_tl_tid, barrier_iprobe);
-        barrier(&comm->barr, g_tl_tid);
-    PROFILE_START(allreduce);
-
-        //Threads cannot start until 0 arrives -- OK if others havent arrived
-        barrier(&comm->barr, g_tl_tid);
-
-    PROFILE_START(memcpy);
-        memcpy(recvbuf, (void*)comm->rbuf[0], count*size);
-    PROFILE_STOP(memcpy);
-    }
-
-    // protect from early leave (rootrbuf)
-    //0 can't leave until all threads arrive.. all others can go
-    barrier(&comm->barr, g_tl_tid);
-    PROFILE_STOP(allreduce);
-    return MPI_SUCCESS;
-}
-
-
 int HMPI_Bcast(void *buffer, int count, MPI_Datatype datatype, int root, HMPI_Comm comm) {
   MPI_Aint extent, lb;
   int size;
@@ -1423,6 +1342,7 @@ int HMPI_Gather(void* sendbuf, int sendcount, MPI_Datatype sendtype, void* recvb
 }
 
 
+//TODO - the proper thing would be to have our own internal MPI comm for colls
 #define HMPI_ALLTOALL_TAG 7546347
 
 int HMPI_Alltoall(void* sendbuf, int sendcount, MPI_Datatype sendtype, void* recvbuf, int recvcount, MPI_Datatype recvtype, HMPI_Comm comm) 
@@ -1438,11 +1358,14 @@ int HMPI_Alltoall(void* sendbuf, int sendcount, MPI_Datatype sendtype, void* rec
   MPI_Datatype dt_recv;
 
   MPI_Type_size(sendtype, &send_size);
+
+#if HMPI_SAFE
   MPI_Type_size(recvtype, &recv_size);
-  MPI_Type_get_extent(sendtype, &lb, &send_extent);
-  MPI_Type_get_extent(recvtype, &lb, &recv_extent);
+
   //MPI_Type_extent(sendtype, &send_extent);
   //MPI_Type_extent(recvtype, &recv_extent);
+  MPI_Type_get_extent(sendtype, &lb, &send_extent);
+  MPI_Type_get_extent(recvtype, &lb, &recv_extent);
 
   if(send_extent != send_size || recv_extent != recv_size) {
     printf("alltoall non-contiguous derived datatypes are not supported yet!\n");
@@ -1453,6 +1376,7 @@ int HMPI_Alltoall(void* sendbuf, int sendcount, MPI_Datatype sendtype, void* rec
     printf("different send and receive size is not supported!\n");
     MPI_Abort(comm->mpicomm, 0);
   }
+#endif
 
 #ifdef DEBUG
   printf("[%i] HMPI_Alltoall(%p, %i, %p, %p, %i, %p, %p)\n", g_rank*g_nthreads+g_tl_tid, sendbuf, sendcount, sendtype, recvbuf, recvcount, recvtype, comm);
@@ -1604,7 +1528,6 @@ int HMPI_Alltoall(void* sendbuf, int sendcount, MPI_Datatype sendtype, void* rec
   }
 
   barrier_cb(&comm->barr, g_tl_tid, barrier_iprobe);
-  //barrier_wait(&comm->barr);
 
   if(g_tl_tid == 0) {
       free((void*)comm->mpi_sbuf);
@@ -1741,9 +1664,10 @@ int HMPI_Alltoall_local(void* sendbuf, int sendcount, MPI_Datatype sendtype, voi
     int tid = g_tl_tid;
 
     MPI_Type_size(sendtype, &send_size);
-    MPI_Type_size(recvtype, &recv_size);
 
 #if HMPI_SAFE
+    MPI_Type_size(recvtype, &recv_size);
+
     MPI_Type_get_extent(sendtype, &lb, &send_extent);
     MPI_Type_get_extent(recvtype, &lb, &recv_extent);
     //MPI_Type_extent(sendtype, &send_extent);
@@ -1772,7 +1696,7 @@ int HMPI_Alltoall_local(void* sendbuf, int sendcount, MPI_Datatype sendtype, voi
   //Do the self copy
   int copy_len = send_size * sendcount;
   memcpy((void*)((uintptr_t)recvbuf + (tid * copy_len)),
-         (void*)((uintptr_t)sendbuf + (tid * copy_len)) , copy_len);
+         (void*)((uintptr_t)sendbuf + (tid * copy_len)), copy_len);
 
   //barrier_cb(&comm->barr, g_tl_tid, barrier_iprobe);
   barrier(&comm->barr, tid);
@@ -1793,401 +1717,5 @@ int HMPI_Alltoall_local(void* sendbuf, int sendcount, MPI_Datatype sendtype, voi
   barrier(&comm->barr, tid);
   return MPI_SUCCESS;
 }
-
-
-#if 0
-int HMPI_Alltoall_local2(void* sendbuf, void* recvbuf, size_t copy_len, HMPI_Comm comm)
-{
-    int thr, i;
-    int tid = g_tl_tid;
-
-  comm->sbuf[tid] = sendbuf;
-  comm->rbuf[tid] = recvbuf;
-
-
-  //Do the self copy
-  //int copy_len = len;
-  memcpy((void*)((uintptr_t)recvbuf + (tid * copy_len)),
-         (void*)((uintptr_t)sendbuf + (tid * copy_len)) , copy_len);
-
-  //barrier_cb(&comm->barr, g_tl_tid, barrier_iprobe);
-  barrier(&comm->barr, tid);
-
-  //Push local data to each other thread's receive buffer.
-  //For each thread, memcpy from my send buffer into their receive buffer.
-
-  //TODO - try staggering
-  for(thr = 1; thr < g_nthreads; thr++) {
-      int t = (tid + thr) % g_nthreads;
-      memcpy((void*)((uintptr_t)recvbuf + (t * copy_len)),
-             (void*)((uintptr_t)comm->sbuf[t] + (tid * copy_len)) , copy_len);
-      //memcpy((void*)((uintptr_t)comm->rbuf[t] + (tid * copy_len)),
-      //       (void*)((uintptr_t)sendbuf + (t * copy_len)) , copy_len);
-  }
-
-
-//for alltoall, i can set bufs, barrier, all threads copy, barrier
-//easy checks -- if < 16k recver copies the whole thing
-//if more, lower rank copies lower half, upper rank copies upper half
-
-//do two for loops.. one up to tid, one from tid onward
-#if 0
-#define COPY_LIMIT 16384
-
-  //int copy_len = len;
-  int half_len = copy_len >> 1;
-
-  //Do the self copy
-  memcpy((void*)((uintptr_t)recvbuf + (tid * copy_len)),
-         (void*)((uintptr_t)sendbuf + (tid * copy_len)), copy_len);
-
-
-  if(copy_len < COPY_LIMIT) {
-      for(thr = 1; thr < g_nthreads; thr++) {
-          int t = (tid + thr) % g_nthreads;
-          memcpy((void*)((uintptr_t)recvbuf + (t * copy_len)),
-                 (void*)((uintptr_t)comm->sbuf[t] + (tid * copy_len)) , copy_len);
-          //memcpy((void*)((uintptr_t)comm->rbuf[t] + (tid * copy_len)),
-          //       (void*)((uintptr_t)sendbuf + (t * copy_len)) , copy_len);
-      }
-  } else {
-      half_len = copy_len >> 1;
-
-      //Double-copy path
-
-      for(int t = tid + 1; t < g_nthreads; t++) {
-          memcpy((void*)((uintptr_t)recvbuf + (t * copy_len)),
-                 (void*)((uintptr_t)comm->sbuf[t] + (tid * copy_len)), half_len);
-      //}
-
-      //for(int t = tid + 1; t < g_nthreads; t++) {
-          memcpy((void*)((uintptr_t)comm->rbuf[t] + (tid * copy_len)),
-                 (void*)((uintptr_t)sendbuf + (t * copy_len)), half_len);
-      }
-
-      for(int t = 0; t < tid; t++) {
-          //Also need to memcpy the other way!
-          memcpy((void*)((uintptr_t)recvbuf + (t * copy_len)+half_len),
-                 (void*)((uintptr_t)comm->sbuf[t] + (tid * copy_len) + half_len),
-                 copy_len - half_len);
-      //}
-
-      //for(int t = 0; t < tid; t++) {
-          memcpy((void*)((uintptr_t)comm->rbuf[t] + (tid * copy_len)+half_len),
-                 (void*)((uintptr_t)sendbuf + (t * copy_len) + half_len),
-                 copy_len - half_len);
-      }
-
-
-  }
-#endif
-
-  //barrier_cb(&comm->barr, g_tl_tid, barrier_iprobe);
-  barrier(&comm->barr, tid);
-  return MPI_SUCCESS;
-}
-#endif
-
-
-//Can I sync smarter?
-//Two threads join up and swap data -- combine the sync for the two transfers.
-//each thread sets send/recv buffer, when those are set, we know to go
-
-int HMPI_Alltoall_local2(void* sendbuf, void* recvbuf, size_t copy_len, HMPI_Comm comm)
-{
-    int comm_size = g_size * g_nthreads;
-    uintptr_t sbuf = (uintptr_t)sendbuf;
-    uintptr_t rbuf = (uintptr_t)recvbuf;
-    int tid = g_tl_tid;
-    int rank = g_nthreads*g_rank + tid;
-
-    //Dumb alltoall -- send to everybody, then receive.
-    //HMPI_Request* sreqs = (HMPI_Request*)malloc(sizeof(HMPI_Request) * comm_size);
-    HMPI_Request* sreqs = (HMPI_Request*)alloca(sizeof(HMPI_Request) * comm_size);
-
-    //Do the self copy
-    memcpy((void*)(rbuf + (tid * copy_len)),
-           (void*)(sbuf + (tid * copy_len)), copy_len);
-
-    //Post sends
-    for(int i = 1; i < comm_size; i++) {
-        int r = (rank + i) % comm_size;
-        HMPI_Isend((void*)(sbuf + (copy_len * r)), copy_len, MPI_BYTE, r, 4317194,
-                HMPI_COMM_WORLD, &sreqs[i]);
-    }
-
-    //Do blocking receives
-    for(int i = 1; i < comm_size; i++) {
-        int r = (rank + comm_size - i) % comm_size;
-        HMPI_Recv((void*)(rbuf + (copy_len * r)), copy_len, MPI_BYTE, r, 4317194,
-                HMPI_COMM_WORLD, MPI_STATUS_IGNORE);
-        HMPI_Wait(&sreqs[i], MPI_STATUS_IGNORE);
-    }
-
-    //Complete sends
-#if 0
-    for(int i = 1; i < comm_size; i++) {
-        HMPI_Wait(&sreqs[i], MPI_STATUS_IGNORE);
-    }
-#endif
-
-    //free(sreqs);
-    return MPI_SUCCESS;
-}
-
-
-
-#if 0
-int HMPI_Alltoall_local2(void* sendbuf, void* recvbuf, size_t copy_len, HMPI_Comm comm)
-{
-    int thr, i;
-    int tid = g_tl_tid;
-
-    //Do the self copy
-    memcpy((void*)((uintptr_t)recvbuf + (tid * copy_len)),
-           (void*)((uintptr_t)sendbuf + (tid * copy_len)), copy_len);
-
-    //Need to avoid deadlocking here.
-    //Have a priority -- lower tid sends first, then higher tid
-
-    for(int t = 1; t < g_nthreads; t++) {
-        //Send to tid - t, recv from tid + t
-        int send_tid = (tid + g_nthreads - t) % g_nthreads;
-        int recv_tid = (tid + t) % g_nthreads;
-
-        int send_len = copy_len;
-        int recv_len = copy_len;
-        char* sendptr = (char*)((uintptr_t)sendbuf + (send_tid * copy_len));
-        char* recvptr = (char*)((uintptr_t)recvbuf + (recv_tid * copy_len));
-        //printf("%d send tid %d recv tid %d\n", tid, send_tid, recv_tid);
-        //fflush(stdout);
-
-        //Index is [sender][receiver]
-        buffer_t* send_buf = &g_buffers[tid][recv_tid];
-        buffer_t* recv_buf = &g_buffers[send_tid][tid];
-
-        //printf("%d sendbuf %p head %llu tail %llu\n", tid, send_buf, send_buf->head, send_buf->tail);
-        //printf("%d recvbuf %p head %llu tail %llu\n", tid, recv_buf, recv_buf->head, recv_buf->tail);
-        //fflush(stdout);
-
-        while(send_len > 0 || recv_len > 0) {
-            int head = send_buf->head;
-
-            // Send until we have to wait for a free block
-            while(send_len > 0 && head - send_buf->tail < NUM_BLOCKS) {
-                int len = (send_len < BLOCK_SIZE ? send_len : BLOCK_SIZE);
-
-                memcpy(&send_buf->data[(head % NUM_BLOCKS) * BLOCK_SIZE],
-                        sendptr, len);
-
-                //TODO - maybe use sfence and non-atomic add
-                head = __sync_fetch_and_add(&send_buf->head, 1) + 1;
-
-                send_len -= len;
-                sendptr += len;
-            }
-
-
-            int tail = recv_buf->tail;
-
-            // Recv until we have to wait for a free block
-            while(recv_len > 0 && tail < recv_buf->head) {
-                int len = (recv_len < BLOCK_SIZE ? recv_len : BLOCK_SIZE);
-
-                memcpy(recvptr,
-                       &recv_buf->data[(tail % NUM_BLOCKS) * BLOCK_SIZE], len);
-
-                //TODO - maybe use sfence and non-atomic add
-                tail = __sync_fetch_and_add(&recv_buf->tail, 1) + 1;
-
-                recv_len -= len;
-                recvptr += len;
-            }
-        }
-    }
-
-    return MPI_SUCCESS;
-}
-#endif
-
-
-
-void HMPI_SUM_op(void* destbuf, void** srcbufs, int numsrcbufs, MPI_Datatype datatype, int count)
-{
-    switch(datatype) {
-        case MPI_INT:
-            for(int i = 0; i < count; i++) {
-                int temp = ((int**)srcbufs)[0][i];
-                for(int j = 1; j < numsrcbufs; j++) {
-                    temp += ((int**)srcbufs)[j][i];
-                }
-
-                ((int*)destbuf)[i] = temp;
-            }
-            break;
-        case MPI_LONG:
-            break;
-        case MPI_LONG_LONG:
-        //case MPI_LONG_LONG_INT:
-        case MPI_INT64_T:
-            break;
-        case MPI_SHORT:
-            break;
-        case MPI_UNSIGNED:
-            break;
-        case MPI_UNSIGNED_LONG:
-            break;
-        case MPI_UNSIGNED_SHORT:
-            break;
-        case MPI_UINT64_T:
-            for(int i = 0; i < count; i++) {
-                uint64_t temp = ((uint64_t**)srcbufs)[0][i];
-                for(int j = 1; j < numsrcbufs; j++) {
-                    temp += ((uint64_t**)srcbufs)[j][i];
-                }
-
-                ((uint64_t*)destbuf)[i] = temp;
-            }
-            return;
-        case MPI_DOUBLE:
-            //TODO - maybe invert the loops
-            for(int i = 0; i < count; i++) {
-                double temp = ((double**)srcbufs)[0][i];
-                for(int j = 1; j < numsrcbufs; j++) {
-                    temp += ((double**)srcbufs)[j][i];
-                }
-
-                ((double*)destbuf)[i] = temp;
-            }
-            break;
-        default:
-            return;
-    }
-}
-
-
-void HMPI_MIN_op(void* destbuf, void** srcbufs, int numsrcbufs, MPI_Datatype datatype, int count)
-{
-    switch(datatype) {
-        case MPI_INT:
-            for(int i = 0; i < count; i++) {
-                int temp = ((int**)srcbufs)[0][i];
-                for(int j = 1; j < numsrcbufs; j++) {
-                    //temp += ((int**)srcbufs)[j][i];
-                    temp = temp < ((int**)srcbufs)[j][i] ?
-                        temp : ((int**)srcbufs)[j][i];
-                }
-
-                ((int*)destbuf)[i] = temp;
-            }
-            break;
-        case MPI_LONG:
-            break;
-        case MPI_LONG_LONG:
-        //case MPI_LONG_LONG_INT:
-        case MPI_INT64_T:
-            break;
-        case MPI_SHORT:
-            break;
-        case MPI_UNSIGNED:
-            break;
-        case MPI_UNSIGNED_LONG:
-            break;
-        case MPI_UNSIGNED_SHORT:
-            break;
-        case MPI_UINT64_T:
-            for(int i = 0; i < count; i++) {
-                uint64_t temp = ((uint64_t**)srcbufs)[0][i];
-                for(int j = 1; j < numsrcbufs; j++) {
-                    //temp += ((uint64_t**)srcbufs)[j][i];
-                    temp = temp < ((uint64_t**)srcbufs)[j][i] ?
-                        temp : ((uint64_t**)srcbufs)[j][i];
-                }
-
-                ((uint64_t*)destbuf)[i] = temp;
-            }
-            return;
-        case MPI_DOUBLE:
-            //TODO - maybe invert the loops
-            for(int i = 0; i < count; i++) {
-                double temp = ((double**)srcbufs)[0][i];
-                for(int j = 1; j < numsrcbufs; j++) {
-                    //temp += ((double**)srcbufs)[j][i];
-                    temp = temp < ((double**)srcbufs)[j][i] ?
-                        temp : ((double**)srcbufs)[j][i];
-                }
-
-                ((double*)destbuf)[i] = temp;
-            }
-            break;
-        default:
-            return;
-    }
-}
-
-
-void HMPI_MAX_op(void* destbuf, void** srcbufs, int numsrcbufs, MPI_Datatype datatype, int count)
-{
-    switch(datatype) {
-        case MPI_INT:
-            for(int i = 0; i < count; i++) {
-                int temp = ((int**)srcbufs)[0][i];
-                for(int j = 1; j < numsrcbufs; j++) {
-                    //temp += ((int**)srcbufs)[j][i];
-                    temp = temp > ((int**)srcbufs)[j][i] ?
-                        temp : ((int**)srcbufs)[j][i];
-                }
-
-                ((int*)destbuf)[i] = temp;
-            }
-            break;
-        case MPI_LONG:
-            break;
-        case MPI_LONG_LONG:
-        //case MPI_LONG_LONG_INT:
-        case MPI_INT64_T:
-            break;
-        case MPI_SHORT:
-            break;
-        case MPI_UNSIGNED:
-            break;
-        case MPI_UNSIGNED_LONG:
-            break;
-        case MPI_UNSIGNED_SHORT:
-            break;
-        case MPI_UINT64_T:
-            for(int i = 0; i < count; i++) {
-                uint64_t temp = ((uint64_t**)srcbufs)[0][i];
-                for(int j = 1; j < numsrcbufs; j++) {
-                    //temp += ((uint64_t**)srcbufs)[j][i];
-                    temp = temp > ((uint64_t**)srcbufs)[j][i] ?
-                        temp : ((uint64_t**)srcbufs)[j][i];
-                }
-
-                ((uint64_t*)destbuf)[i] = temp;
-            }
-            return;
-        case MPI_DOUBLE:
-            //TODO - maybe invert the loops
-            for(int i = 0; i < count; i++) {
-                double temp = ((double**)srcbufs)[0][i];
-                for(int j = 1; j < numsrcbufs; j++) {
-                    //temp += ((double**)srcbufs)[j][i];
-                    temp = temp > ((double**)srcbufs)[j][i] ?
-                        temp : ((double**)srcbufs)[j][i];
-                }
-
-                ((double*)destbuf)[i] = temp;
-            }
-            break;
-        default:
-            return;
-    }
-}
-
-
-HMPI_Op HMPI_SUM = {MPI_SUM, HMPI_SUM_op};
-HMPI_Op HMPI_MIN = {MPI_MIN, HMPI_MIN_op};
-HMPI_Op HMPI_MAX = {MPI_MAX, HMPI_MAX_op};
 
 
