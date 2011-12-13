@@ -73,8 +73,10 @@ void tmain(int argc, char** argv){
   //int x=1, y=0;
   uint64_t x[4] = {1, 2, 3, 4};
   uint64_t y[4] = {0};
-  HMPI_Allreduce2(x, y, 4, MPI_UINT64_T, HMPI_SUM, HMPI_COMM_WORLD);
+  HMPI_Reduce(x, y, 4, MPI_UINT64_T, MPI_SUM, 0, HMPI_COMM_WORLD);
+  //if(r == 0) {
   printf("[%i] buf: %i %d %d %d\n", r, y[0], y[1], y[2], y[3]);
+  //}
 
 
 //  if(r == 0) y=1;
@@ -130,7 +132,13 @@ void tmain(int argc, char** argv){
 
 int main(int argc, char** argv) {
 
-  HMPI_Init(&argc, &argv, 4, &tmain);
+    int g_numthreads;
 
+    if(argc < 2) {
+        printf("ERROR must specify number of threads: ./main <numthreads>\n");
+        return -1;
+    }
 
+    //TODO - may not be portable to other MPIs?
+    HMPI_Init(&argc, &argv, atoi(argv[1]), &tmain);
 }

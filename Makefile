@@ -1,5 +1,8 @@
-CXX=mpicc -std=gnu99
-CXXFLAGS=-O0 -g -L/usr/local/tools/papi/lib -I/usr/local/tools/papi/include
+CXX=mpicxx -std=gnu99
+
+HWLOC=/g/g19/friedley/local
+
+CXXFLAGS=-O0 -g -I$(HWLOC)/include -L$(HWLOC)/lib -L/usr/local/tools/papi/lib -I/usr/local/tools/papi/include
 #CXXFLAGS=-march=k8 -O2 -fomit-frame-pointer
 #CXXFLAGS=-march=native -O3 -fomit-frame-pointer -Iopenpa-1.0.2/src -L/usr/local/tools/papi/lib -I/usr/local/tools/papi/include
 
@@ -16,8 +19,8 @@ hmpi.a: hmpi.o nbc_op.o
 	ranlib $@
 
 main: hmpi.a main.cpp
-	$(CXX) main.cpp $(CXXFLAGS) -lpapi hmpi.a -o $@ 
-	#$(CXX) main.cpp $(CXXFLAGS) -lpmi -lpapi hmpi.a -o $@ 
+	$(CXX) main.cpp $(CXXFLAGS) -lhwloc -lpapi hmpi.a -o $@ 
+	#$(CXX) main.cpp $(CXXFLAGS) -lhwloc -lpmi -lpapi hmpi.a -o $@ 
 
 hmpi.S: hmpi.c hmpi.h
 	$(CXX) hmpi.c -S -fverbose-asm -o $@

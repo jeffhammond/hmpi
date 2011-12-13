@@ -55,18 +55,19 @@ PROFILE_VAR(op);
 
 
 hwloc_topology_t g_hwloc_topo;
-int g_nthreads=-1;
-int g_rank=-1;
-static __thread int g_hmpi_rank=-1;
-static int g_size=-1;
+
+int g_nthreads=-1;                  //Threads per node
+int g_rank=-1;                      //Underlyin MPI rank for this node
+static int g_size=-1;               //Underlying MPI world size
+static __thread int g_hmpi_rank=-1; //HMPI rank for this thread
+static __thread int g_tl_tid=-1;    //HMPI node-local rank for this thread (tid)
 
 HMPI_Comm HMPI_COMM_WORLD;
 
 static MPI_Comm* g_tcomms;
 lock_t g_mpi_lock;      //Used to protect ANY_SRC Iprobe/Recv sequence
 
-static __thread int g_tl_tid=-1;
-
+//Argument passthrough
 static int g_argc;
 static char** g_argv;
 static void (*g_entry)(int argc, char** argv);
@@ -247,19 +248,34 @@ void* trampoline(void* tid) {
 
         num_cores /= num_sockets; //cores per socket
 
-        int idx;
-
+#if 0
         if(g_nthreads <= num_sockets) {
             idx = rank * num_cores;
         } else { 
             int rs = g_nthreads / num_sockets;
             idx = ((rank / rs) * num_cores) + (rank % rs);
+            printf("rank %d num_cores %d g_nthreads %d num_sockets %d rs %d idx %d pid %d\n", rank, num_cores, g_nthreads, num_sockets, rs, idx, getpid());
+            fflush(stdout);
         }
+#endif
+
+        //Spread ranks evenly across sockets, grouping adjacent ranks into one socket.
+        int idx;
+        int rms = g_nthreads % num_sockets;
+        int rs = (g_nthreads / num_sockets) + 1;
+        if(rank < rms * rs) {
+            idx = ((rank / rs) * num_cores) + (rank % rs);
+        } else {
+            int rmd = rank - (rms * rs);
+            rs -= 1;
+            idx = (rmd / rs) * num_cores + (rmd % rs) + rms * num_cores;
+        }
+
         //printf("Rank %d binding to index %d\n", rank, idx);
 
         obj = hwloc_get_obj_by_type(g_hwloc_topo, HWLOC_OBJ_CORE, idx);
         if(obj == NULL) {
-            printf("ERROR got NULL hwloc core object\n");
+            printf("%d ERROR got NULL hwloc core object idx %d\n", rank, idx);
             MPI_Abort(MPI_COMM_WORLD, 0);
         }
 
@@ -362,8 +378,8 @@ int HMPI_Init(int *argc, char ***argv, int nthreads, void (*start_routine)(int a
   //  CPU_SET(thr + 6, &cpuset[1]);
   //}
 
-  //hwloc_topology_t topology;
 
+  //Ranks set their own affinity in trampoline.
   hwloc_topology_init(&g_hwloc_topo);
   hwloc_topology_load(g_hwloc_topo);
 
@@ -383,6 +399,7 @@ int HMPI_Init(int *argc, char ***argv, int nthreads, void (*start_routine)(int a
     cpu_set_t cpuset;
     CPU_ZERO(&cpuset);
 
+#if 0
     //Distribute across two sockets
     if(thr < nthreads / 2) {
         //printf("thread %d core %d\n", thr, thr);
@@ -391,9 +408,10 @@ int HMPI_Init(int *argc, char ***argv, int nthreads, void (*start_routine)(int a
         //printf("thread %d core %d\n", thr, thr - (nthreads / 2) + CORES);
         CPU_SET(thr - (nthreads / 2) + CORES, &cpuset);
     }
+#endif
 
     //Fill a socket before moving to next
-    //CPU_SET(thr, &cpuset);
+    CPU_SET(thr, &cpuset);
 
     rc = pthread_setaffinity_np(threads[thr], sizeof(cpu_set_t), &cpuset);
     if(rc) {
@@ -1030,6 +1048,67 @@ int HMPI_Barrier(HMPI_Comm comm) {
 int NBC_Operation(void *buf3, void *buf1, void *buf2, MPI_Op op, MPI_Datatype type, int count);
 //}
 
+int HMPI_Reduce(void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype, MPI_Op op, int root, HMPI_Comm comm)
+{
+    MPI_Aint extent, lb;
+    int size;
+    int i;
+
+    MPI_Type_size(datatype, &size);
+
+#ifdef DEBUG
+    if(g_tl_tid == 0) {
+    printf("[%i %i] HMPI_Allreduce(%p, %p, %i, %p, %p, %p)\n", g_hmpi_rank, g_tl_tid, sendbuf, recvbuf,  count, datatype, op, comm);
+    fflush(stdout);
+    }
+#endif
+
+    //Root rank mod g_nthreads takes lead.
+    //Root rank allocs a buffer for local ranks to reduce into.
+    //Then does an MPI reduce into the receive buf, and we're done.
+    if(g_tl_tid == root % g_nthreads) {
+        void* localbuf;
+        if(g_hmpi_rank == root) {
+            localbuf = recvbuf;
+        } else {
+            localbuf = memalign(4096, size * count);
+        }
+
+        barrier_cb(&comm->barr, 0, barrier_iprobe);
+
+        //TODO eliminate this memcpy by folding into a reduce call
+        memcpy(localbuf, sendbuf, size * count);
+
+        for(i=0; i<g_nthreads; ++i) {
+            if(i == g_tl_tid) continue;
+            NBC_Operation(localbuf,
+                    localbuf, (void*)comm->sbuf[i], op, datatype, count);
+        }
+
+        //Other local ranks are free to go.
+        barrier(&comm->barr, 0);
+
+        if(g_size > 1) {
+            MPI_Reduce(MPI_IN_PLACE,
+                    localbuf, count, datatype, op, root / g_nthreads, comm->mpicomm);
+        }
+
+        if(g_hmpi_rank != root) {
+            free(localbuf);
+        }
+    } else {
+        //First barrier signals to root that all buffers are ready.
+        comm->sbuf[g_tl_tid] = sendbuf;
+        barrier_cb(&comm->barr, g_tl_tid, barrier_iprobe);
+
+        //Wait for root to copy our data; were free when it's done.
+        barrier(&comm->barr, g_tl_tid);
+    }
+
+    return MPI_SUCCESS;
+}
+
+
 int HMPI_Allreduce(void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype, MPI_Op op, HMPI_Comm comm)
 {
     MPI_Aint extent, lb;
@@ -1052,14 +1131,6 @@ int HMPI_Allreduce(void *sendbuf, void *recvbuf, int count, MPI_Datatype datatyp
     if(g_tl_tid == 0) {
     printf("[%i %i] HMPI_Allreduce(%p, %p, %i, %p, %p, %p)\n", g_hmpi_rank, g_tl_tid, sendbuf, recvbuf,  count, datatype, op, comm);
     fflush(stdout);
-    }
-#endif
-
-#if 0
-    if(unlikely(g_size == 1 && g_nthreads == 1)) {
-        printf("doing 1-rank shortcut\n");
-        memcpy(recvbuf, sendbuf, size * count);
-        return MPI_SUCCESS;
     }
 #endif
 
@@ -1338,6 +1409,73 @@ int HMPI_Gather(void* sendbuf, int sendcount, MPI_Datatype sendtype, void* recvb
   }
 
   barrier_cb(&comm->barr, g_tl_tid, barrier_iprobe);
+  return MPI_SUCCESS;
+}
+
+
+int HMPI_Allgather(void* sendbuf, int sendcount, MPI_Datatype sendtype, void* recvbuf, int recvcount, MPI_Datatype recvtype, HMPI_Comm comm)
+{
+  MPI_Aint send_extent, recv_extent, lb;
+  int send_size;
+  int recv_size;
+  int size;
+
+  MPI_Type_size(sendtype, &send_size);
+  MPI_Type_size(recvtype, &recv_size);
+  MPI_Type_get_extent(sendtype, &lb, &send_extent);
+  MPI_Type_get_extent(recvtype, &lb, &recv_extent);
+  //MPI_Type_extent(sendtype, &send_extent);
+  //MPI_Type_extent(recvtype, &recv_extent);
+  size = send_size * sendcount;
+
+  if(send_extent != send_size || recv_extent != recv_size) {
+    printf("gather non-contiguous derived datatypes are not supported yet!\n");
+    MPI_Abort(comm->mpicomm, 0);
+  }
+
+  if(size != recv_size * recvcount) {
+    printf("different send and receive size is not supported!\n");
+    MPI_Abort(comm->mpicomm, 0);
+  }
+ 
+#ifdef DEBUG
+  printf("[%i] HMPI_Gather(%p, %i, %p, %p, %i, %p, %i, %p)\n", g_rank*g_nthreads+g_tl_tid, sendbuf, sendcount, sendtype, recvbuf, recvcount, recvtype, root, comm);
+#endif
+
+  //How do I want to do this?
+  //Gather locally to sbuf[0]
+  // MPI allgather to rbuf[0]
+  // Each thread copies into its own rbuf, except 0.
+  if(g_tl_tid == 0) {
+      comm->sbuf[0] = memalign(4096, size * g_nthreads);
+
+      //root is not on this node, set the recv type to something
+      comm->rbuf[0] = recvbuf;
+      comm->rcount[0] = recvcount;
+      comm->rtype[0] = recvtype;
+  }
+
+  barrier_cb(&comm->barr, g_tl_tid, barrier_iprobe);
+
+  //Each thread copies into the send buffer
+  memcpy((void*)((uintptr_t)comm->sbuf[0] + size * g_tl_tid), sendbuf, size);
+
+  barrier(&comm->barr, g_tl_tid);
+
+  if(g_tl_tid == 0) {
+    MPI_Allgather((void*)comm->sbuf[0], sendcount * g_nthreads,
+            sendtype, (void*)comm->rbuf[0],
+            recvcount * g_nthreads, recvtype, comm->mpicomm);
+    free((void*)comm->sbuf[0]);
+  }
+
+  barrier(&comm->barr, g_tl_tid);
+
+  if(g_tl_tid != 0) {
+      //All threads but 0 copy from 0's receive buffer
+      memcpy(recvbuf, (void*)comm->sbuf[0], size * g_nthreads * g_size);
+  }
+
   return MPI_SUCCESS;
 }
 
