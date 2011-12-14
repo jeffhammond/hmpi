@@ -1050,7 +1050,6 @@ int NBC_Operation(void *buf3, void *buf1, void *buf2, MPI_Op op, MPI_Datatype ty
 
 int HMPI_Reduce(void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype, MPI_Op op, int root, HMPI_Comm comm)
 {
-    MPI_Aint extent, lb;
     int size;
     int i;
 
@@ -1058,7 +1057,7 @@ int HMPI_Reduce(void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype, 
 
 #ifdef DEBUG
     if(g_tl_tid == 0) {
-    printf("[%i %i] HMPI_Allreduce(%p, %p, %i, %p, %p, %p)\n", g_hmpi_rank, g_tl_tid, sendbuf, recvbuf,  count, datatype, op, comm);
+    printf("[%i %i] HMPI_Reduce(%p, %p, %i, %p, %p, %d, %p)\n", g_hmpi_rank, g_tl_tid, sendbuf, recvbuf, count, datatype, op, root, comm);
     fflush(stdout);
     }
 #endif
@@ -1074,10 +1073,10 @@ int HMPI_Reduce(void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype, 
             localbuf = memalign(4096, size * count);
         }
 
-        barrier_cb(&comm->barr, 0, barrier_iprobe);
-
         //TODO eliminate this memcpy by folding into a reduce call
         memcpy(localbuf, sendbuf, size * count);
+
+        barrier_cb(&comm->barr, 0, barrier_iprobe);
 
         for(i=0; i<g_nthreads; ++i) {
             if(i == g_tl_tid) continue;
@@ -1190,6 +1189,79 @@ int HMPI_Allreduce(void *sendbuf, void *recvbuf, int count, MPI_Datatype datatyp
     //}
 
     //printf("%d done with allreduce\n", g_tl_tid); fflush(stdout);
+    return MPI_SUCCESS;
+}
+
+
+#define HMPI_SCAN_TAG 7546348
+
+int HMPI_Scan(void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype, MPI_Op op, HMPI_Comm comm)
+{
+    MPI_Aint extent, lb;
+    MPI_Request req;
+    int size;
+    int i;
+
+    MPI_Type_size(datatype, &size);
+    //MPI_Type_get_extent(datatype, &lb, &extent);
+    //MPI_Type_extent(datatype, &extent);
+
+#if 0
+    if(extent != size) {
+        printf("allreduce non-contiguous derived datatypes are not supported yet!\n");
+        fflush(stdout);
+        MPI_Abort(comm->mpicomm, 0);
+    }
+#endif
+
+#ifdef DEBUG
+    if(g_tl_tid == 0) {
+    printf("[%i %i] HMPI_Scan(%p, %p, %i, %p, %p, %d, %p)\n", g_hmpi_rank, g_tl_tid, sendbuf, recvbuf, count, datatype, op, root, comm);
+    fflush(stdout);
+    }
+#endif
+
+
+    //Each rank makes its send buffer available
+    comm->sbuf[g_tl_tid] = sendbuf;
+
+    //One rank posts a recv if mpi rank > 0
+    if(g_tl_tid == 0 && g_rank > 0) {
+        comm->rbuf[0] = memalign(4096, size * count);
+        MPI_Irecv((void*)comm->rbuf[0], count, datatype,
+                g_rank - 1, HMPI_SCAN_TAG, MPI_COMM_WORLD, &req);
+    }
+
+    //Each rank reduces local ranks below it
+    //Copy my own receive buffer first
+    memcpy(recvbuf, sendbuf, size * count);
+
+    barrier_cb(&comm->barr, 0, barrier_iprobe);
+
+    for(i = 0; i < g_tl_tid; i++) {
+        NBC_Operation(recvbuf,
+                recvbuf, (void*)comm->sbuf[i], op, datatype, count);
+    }
+
+    //Wait on recv; all ranks reduce if mpi rank > 0
+    if(g_tl_tid == 0 && g_rank > 0) {
+        MPI_Wait(&req, MPI_STATUS_IGNORE);
+    }
+
+    barrier(&comm->barr, 0);
+
+    if(g_rank > 0) {
+        NBC_Operation(recvbuf,
+                recvbuf, (void*)comm->rbuf[0], op, datatype, count);
+    }
+
+    //Last rank sends result to next mpi rank if < size - 1
+    if(g_tl_tid == g_nthreads - 1 && g_rank < g_size - 1) {
+        MPI_Send(recvbuf, count, datatype,
+                g_rank + 1, HMPI_SCAN_TAG, MPI_COMM_WORLD);
+        free((void*)comm->rbuf[0]);
+    }
+
     return MPI_SUCCESS;
 }
 
