@@ -140,13 +140,13 @@ void HMPI_Barrier_local(HMPI_Comm comm);
 
 
 int HMPI_Send(void *buf, int count, MPI_Datatype datatype, int dest, int tag, HMPI_Comm comm );
-int HMPI_Recv(void *buf, int count, MPI_Datatype datatype, int source, int tag, HMPI_Comm comm, MPI_Status *status );
+int HMPI_Recv(void *buf, int count, MPI_Datatype datatype, int source, int tag, HMPI_Comm comm, HMPI_Status *status );
 
 int HMPI_Isend(void *buf, int count, MPI_Datatype datatype, int dest, int tag, HMPI_Comm comm, HMPI_Request *req );
 int HMPI_Irecv(void *buf, int count, MPI_Datatype datatype, int source, int tag, HMPI_Comm comm, HMPI_Request *req );
 
-int HMPI_Iprobe(int source, int tag, HMPI_Comm comm, int* flag, MPI_Status* status);
-int HMPI_Probe(int source, int tag, HMPI_Comm comm, MPI_Status* status);
+int HMPI_Iprobe(int source, int tag, HMPI_Comm comm, int* flag, HMPI_Status* status);
+int HMPI_Probe(int source, int tag, HMPI_Comm comm, HMPI_Status* status);
 
 int HMPI_Test(HMPI_Request *request, int *flag, HMPI_Status *status);
 int HMPI_Testall(int count, HMPI_Request *requests, int* flags, HMPI_Status *statuses);

@@ -873,7 +873,7 @@ int HMPI_Get_count(HMPI_Status* status, MPI_Datatype datatype, int* count)
 }
 
 
-int HMPI_Iprobe(int source, int tag, HMPI_Comm comm, int* flag, MPI_Status* status)
+int HMPI_Iprobe(int source, int tag, HMPI_Comm comm, int* flag, HMPI_Status* status)
 {
     //Try to match using source/tag/comm.
     //If match, set flag and fill in status as we would for a recv
@@ -892,7 +892,7 @@ int HMPI_Iprobe(int source, int tag, HMPI_Comm comm, int* flag, MPI_Status* stat
     return MPI_SUCCESS;
 }
 
-int HMPI_Probe(int source, int tag, HMPI_Comm comm, MPI_Status* status)
+int HMPI_Probe(int source, int tag, HMPI_Comm comm, HMPI_Status* status)
 {
     int flag;
 
