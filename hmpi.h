@@ -59,6 +59,17 @@ extern HMPI_Comm HMPI_COMM_WORLD;
 //#define HMPI_ANY_SOURCE -55
 //#define HMPI_ANY_TAG -55
 
+#define HMPI_STATUS_IGNORE NULL
+#define HMPI_STATUSES_IGNORE NULL
+
+typedef struct HMPI_Status {
+    size_t count;
+    int MPI_SOURCE;
+    int MPI_TAG;
+    int MPI_ERROR;
+} HMPI_Status;
+
+
 //ACTIVE and COMPLETE specifically chosen to match MPI test flags
 #define HMPI_REQ_ACTIVE 0
 #define HMPI_REQ_COMPLETE 1
@@ -134,8 +145,15 @@ int HMPI_Recv(void *buf, int count, MPI_Datatype datatype, int source, int tag, 
 int HMPI_Isend(void *buf, int count, MPI_Datatype datatype, int dest, int tag, HMPI_Comm comm, HMPI_Request *req );
 int HMPI_Irecv(void *buf, int count, MPI_Datatype datatype, int source, int tag, HMPI_Comm comm, HMPI_Request *req );
 
-int HMPI_Test(HMPI_Request *request, int *flag, MPI_Status *status);
-int HMPI_Wait(HMPI_Request *request, MPI_Status *status);
+int HMPI_Iprobe(int source, int tag, HMPI_Comm comm, int* flag, MPI_Status* status);
+int HMPI_Probe(int source, int tag, HMPI_Comm comm, MPI_Status* status);
+
+int HMPI_Test(HMPI_Request *request, int *flag, HMPI_Status *status);
+int HMPI_Testall(int count, HMPI_Request *requests, int* flags, HMPI_Status *statuses);
+int HMPI_Wait(HMPI_Request *request, HMPI_Status *status);
+int HMPI_Waitall(int count, HMPI_Request *requests, HMPI_Status *statuses);
+
+int HMPI_Get_count(HMPI_Status* status, MPI_Datatype datatype, int* count);
 
 int HMPI_Barrier(HMPI_Comm comm);
 

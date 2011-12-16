@@ -156,6 +156,7 @@ static inline int match_send(int dest, int tag, HMPI_Request** recv_req) {
 }
 #endif
 
+//TODO - should this be built on top of match_probe?
 static inline int match_recv(HMPI_Request* recv_req, HMPI_Request** send_req) {
     HMPI_Request* cur;
     HMPI_Request* prev;
@@ -191,6 +192,24 @@ static inline int match_recv(HMPI_Request* recv_req, HMPI_Request** send_req) {
 
             recv_req->proc = cur->proc;
             recv_req->tag = cur->tag;
+            *send_req = cur;
+            return 1;
+        }
+    }
+
+    return 0;
+}
+
+
+static inline int match_probe(int source, int tag, HMPI_Comm comm, HMPI_Request** send_req) {
+    HMPI_Request* cur;
+
+    for(cur = g_send_reqs[g_tl_tid]; cur != NULL; cur = cur->next) {
+        //The send request can't have ANY_SOURCE or ANY_TAG,
+        // so don't check for that.
+        if((cur->proc == source || source == MPI_ANY_SOURCE) &&
+                (cur->tag == tag || tag == MPI_ANY_TAG)) {
+            //We don't want to do anything other than return the send req.
             *send_req = cur;
             return 1;
         }
@@ -464,13 +483,13 @@ int HMPI_Comm_size ( HMPI_Comm comm, int *size ) {
 }
 
 
+//Callback used in barriers to cause MPI library progress while waiting
 static inline void barrier_iprobe(void)
 {
     int flag;
-    MPI_Status st;
 
     //PROFILE_START(mpi);
-    MPI_Iprobe(MPI_ANY_SOURCE, MPI_ANY_TAG, MPI_COMM_WORLD, &flag, &st);
+    MPI_Iprobe(MPI_ANY_SOURCE, MPI_ANY_TAG, MPI_COMM_WORLD, &flag, MPI_STATUS_IGNORE);
     //PROFILE_STOP(mpi);
 }
 
@@ -622,6 +641,9 @@ static inline int HMPI_Progress_recv(HMPI_Request *recv_req) {
     if(unlikely(size > recv_req->size)) {
         //printf("[recv] message of size %i truncated to %i (doesn't fit in matching receive buffer)!\n", sendsize, recv_req->size);
         size = recv_req->size;
+    } else {
+        //Need to update the size for HMPI_Get_count
+        recv_req->size = size;
     }
 
     //printf("[%i] memcpy %p -> %p (%i)\n",
@@ -761,7 +783,7 @@ static inline int HMPI_Progress_request(HMPI_Request *req)
 }
 
 
-int HMPI_Test(HMPI_Request *req, int *flag, MPI_Status *status)
+int HMPI_Test(HMPI_Request *req, int *flag, HMPI_Status *status)
 {
   if(get_reqstat(req) != HMPI_REQ_COMPLETE) {
       *flag = HMPI_Progress_request(req);
@@ -769,7 +791,8 @@ int HMPI_Test(HMPI_Request *req, int *flag, MPI_Status *status)
       *flag = 1;
   }
 
-  if(*flag && status != MPI_STATUS_IGNORE) {
+  if(*flag && status != HMPI_STATUS_IGNORE) {
+      status->count = req->size;
       status->MPI_SOURCE = req->proc;
       status->MPI_TAG = req->tag;
       status->MPI_ERROR = MPI_SUCCESS;
@@ -779,7 +802,21 @@ int HMPI_Test(HMPI_Request *req, int *flag, MPI_Status *status)
 }
 
 
-int HMPI_Wait(HMPI_Request *request, MPI_Status *status) {
+int HMPI_Testall(int count, HMPI_Request *requests, int* flags, HMPI_Status *statuses)
+{
+    for(int i = 0; i < count; i++) {
+        if(statuses == HMPI_STATUSES_IGNORE) {
+            HMPI_Test(&requests[i], &flags[i], HMPI_STATUS_IGNORE);
+        } else {
+            HMPI_Test(&requests[i], &flags[i], &statuses[i]);
+        }
+    }
+
+    return MPI_SUCCESS;
+}
+
+
+int HMPI_Wait(HMPI_Request *request, HMPI_Status *status) {
   int flag=0;
 #ifdef DEBUG
   printf("[%i] HMPI_Wait(%x, %x) type: %i\n", g_hmpi_rank, request, status, request->type);
@@ -793,6 +830,78 @@ int HMPI_Wait(HMPI_Request *request, MPI_Status *status) {
   return MPI_SUCCESS;
 }
 
+
+int HMPI_Waitall(int count, HMPI_Request *requests, HMPI_Status *statuses)
+{
+    int flag;
+    int done;
+
+#ifdef DEBUG
+    printf("[%i] HMPI_Waitall(%d, %p, %p) type: %i\n", g_hmpi_rank, count, requests, statuses, request->type);
+    fflush(stdout);
+#endif
+
+    do {
+        done = 0;
+        for(int i = 0; i < count; i++) {
+            if(statuses == HMPI_STATUSES_IGNORE) {
+                HMPI_Test(&requests[i], &flag, HMPI_STATUS_IGNORE);
+            } else {
+                HMPI_Test(&requests[i], &flag, &statuses[i]);
+            }
+
+            if(flag) {
+                done += 1;
+            }
+        }
+    } while(done < count);
+
+  return MPI_SUCCESS;
+}
+
+
+int HMPI_Get_count(HMPI_Status* status, MPI_Datatype datatype, int* count)
+{
+    int size;
+
+    //Status will have the number of bytes transferred.
+    //Get the size of the datatype in bytes, then divide to get the count.
+    MPI_Type_size(datatype, &size);
+    *count = status->count / size;
+
+    return MPI_SUCCESS;
+}
+
+
+int HMPI_Iprobe(int source, int tag, HMPI_Comm comm, int* flag, MPI_Status* status)
+{
+    //Try to match using source/tag/comm.
+    //If match, set flag and fill in status as we would for a recv
+    // Also have to set length!
+    //If no match, clear flag and we're done.
+    HMPI_Request* send_req = NULL;
+
+    *flag = match_probe(source, tag, comm, &send_req);
+    if(*flag && status != HMPI_STATUS_IGNORE) {
+        status->count = send_req->size;
+        status->MPI_SOURCE = send_req->proc;
+        status->MPI_TAG = send_req->tag;
+        status->MPI_ERROR = MPI_SUCCESS;
+    }
+
+    return MPI_SUCCESS;
+}
+
+int HMPI_Probe(int source, int tag, HMPI_Comm comm, MPI_Status* status)
+{
+    int flag;
+
+    do {
+        HMPI_Iprobe(source, tag, comm, &flag, status);
+    } while(flag == 0);
+
+    return MPI_SUCCESS;
+}
 
 int HMPI_Isend(void* buf, int count, MPI_Datatype datatype, int dest, int tag, HMPI_Comm comm, HMPI_Request *req) {
   
@@ -910,7 +1019,7 @@ int HMPI_Isend(void* buf, int count, MPI_Datatype datatype, int dest, int tag, H
 int HMPI_Send(void* buf, int count, MPI_Datatype datatype, int dest, int tag, HMPI_Comm comm) {
   HMPI_Request req;
   HMPI_Isend(buf, count, datatype, dest, tag, comm, &req);
-  HMPI_Wait(&req, MPI_STATUS_IGNORE);
+  HMPI_Wait(&req, HMPI_STATUS_IGNORE);
   return MPI_SUCCESS;
 }
 
@@ -1010,7 +1119,7 @@ int HMPI_Irecv(void* buf, int count, MPI_Datatype datatype, int source, int tag,
 }
 
 
-int HMPI_Recv(void* buf, int count, MPI_Datatype datatype, int source, int tag, HMPI_Comm comm, MPI_Status *status) {
+int HMPI_Recv(void* buf, int count, MPI_Datatype datatype, int source, int tag, HMPI_Comm comm, HMPI_Status *status) {
   HMPI_Request req;
   HMPI_Irecv(buf, count, datatype, source, tag, comm, &req);
   HMPI_Wait(&req, status);
