@@ -100,7 +100,7 @@ typedef struct HMPI_Request {
   MPI_Datatype datatype;
 } HMPI_Request;
 
-int HMPI_Init(int *argc, char ***argv, int nthreads, void (*start_routine)(int argc, char** argv));
+int HMPI_Init(int *argc, char ***argv, int nthreads, int (*start_routine)(int argc, char** argv));
 
 int HMPI_Comm_rank ( HMPI_Comm comm, int *rank );
 int HMPI_Comm_size ( HMPI_Comm comm, int *size );
@@ -149,7 +149,7 @@ int HMPI_Iprobe(int source, int tag, HMPI_Comm comm, int* flag, HMPI_Status* sta
 int HMPI_Probe(int source, int tag, HMPI_Comm comm, HMPI_Status* status);
 
 int HMPI_Test(HMPI_Request *request, int *flag, HMPI_Status *status);
-int HMPI_Testall(int count, HMPI_Request *requests, int* flags, HMPI_Status *statuses);
+int HMPI_Testall(int count, HMPI_Request *requests, int* flag, HMPI_Status *statuses);
 int HMPI_Wait(HMPI_Request *request, HMPI_Status *status);
 int HMPI_Waitall(int count, HMPI_Request *requests, HMPI_Status *statuses);
 
@@ -188,6 +188,76 @@ int HMPI_Abort( HMPI_Comm comm, int errorcode );
 int HMPI_Finalize();
 
 
+#ifndef HMPI_INTERNAL
+
+#define MPI_Comm HMPI_Comm
+
+#ifdef MPI_COMM_WORLD
+#undef MPI_COMM_WORLD
+#endif
+
+#define MPI_COMM_WORLD HMPI_COMM_WORLD
+
+#ifdef MPI_STATUS_IGNORE
+#undef MPI_STATUS_IGNORE
+#endif
+
+#ifdef MPI_STATUSES_IGNORE
+#undef MPI_STATUSES_IGNORE
+#endif
+
+#define MPI_STATUS_IGNORE HMPI_STATUS_IGNORE
+#define MPI_STATUSES_IGNORE HMPI_STATUSES_IGNORE
+#define MPI_Status HMPI_Status
+
+#define MPI_Request HMPI_Request
+
+#define MPI_Init HMPI_Init
+
+#define MPI_Comm_rank HMPI_Comm_rank
+#define MPI_Comm_size HMPI_Comm_size
+
+//These are HMPI specific routines, we define for consistency
+#define MPI_Comm_local HMPI_Comm_local
+#define MPI_Comm_thread HMPI_Comm_thread
+#define MPI_Barrier_local HMPI_Barrier_local
+
+#define MPI_Send HMPI_Send
+#define MPI_Recv HMPI_Recv
+
+#define MPI_Isend HMPI_Isend
+#define MPI_Irecv HMPI_Irecv
+
+#define MPI_Iprobe HMPI_Iprobe
+#define MPI_Probe HMPI_Probe
+
+#define MPI_Test HMPI_Test
+#define MPI_Testall HMPI_Testall
+
+#define MPI_Wait HMPI_Wait
+#define MPI_Waitall HMPI_Waitall
+
+#define MPI_Get_count HMPI_Get_count
+
+#define MPI_Barrier HMPI_Barrier
+#define MPI_Reduce HMPI_Reduce
+#define MPI_Allreduce HMPI_Allreduce
+#define MPI_Scan HMPI_Scan
+#define MPI_Bcast HMPI_Bcast
+#define MPI_Scatter HMPI_Scatter
+#define MPI_Gather HMPI_Gather
+#define MPI_Allgather HMPI_Allgather
+#define MPI_Allgatherv HMPI_Allgatherv
+#define MPI_Alltoall HMPI_Alltoall
+
+//These are HMPI specific routines, we define for consistency
+#define MPI_Alltoall_local HMPI_Alltoall_local
+#define MPI_Alltoall_local2 HMPI_Alltoall_local2
+
+#define MPI_Abort HMPI_Abort
+#define MPI_Finalize HMPI_Finalize
+
+#endif
 
 #ifdef __cplusplus
 }
