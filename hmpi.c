@@ -628,11 +628,11 @@ static inline int HMPI_Progress_recv(HMPI_Request *recv_req) {
     }
 #endif
 
-//#ifdef DEBUG
+#ifdef DEBUG
     printf("[%i] [recv] found send from %i (%p) for buf %p in uq (tag: %i, size: %ld, status: %d)\n",
             g_hmpi_rank, send_req->proc, send_req->buf, recv_req->buf, send_req->tag, send_req->size, get_reqstat(send_req));
     fflush(stdout);
-//#endif
+#endif
 
     //Remove the recv from the request list
     //remove_recv_req(recv_req);
@@ -910,10 +910,10 @@ int HMPI_Probe(int source, int tag, HMPI_Comm comm, HMPI_Status* status)
 
 int HMPI_Isend(void* buf, int count, MPI_Datatype datatype, int dest, int tag, HMPI_Comm comm, HMPI_Request *req) {
   
-//#ifdef DEBUG
+#ifdef DEBUG
     printf("[%i] HMPI_Isend(%p, %i, %p, %i, %i, %p, %p) (proc null: %i)\n", g_hmpi_rank, buf, count, (void*)datatype, dest, tag, comm, req, MPI_PROC_NULL);
     fflush(stdout);
-//#endif
+#endif
 
     if(unlikely(dest == MPI_PROC_NULL)) { 
         update_reqstat(req, HMPI_REQ_COMPLETE);
@@ -1034,10 +1034,10 @@ int HMPI_Irecv(void* buf, int count, MPI_Datatype datatype, int source, int tag,
   //if(unlikely(source == MPI_ANY_SOURCE)) source = HMPI_ANY_SOURCE;
   //if(unlikely(tag == MPI_ANY_TAG)) tag = HMPI_ANY_TAG;
 
-//#ifdef DEBUG
+#ifdef DEBUG
   printf("[%i] HMPI_Irecv(%p, %i, %p, %i, %i, %p, %p) (proc null: %i)\n", g_hmpi_rank, buf, count, (void*)datatype, source, tag, comm, req, MPI_PROC_NULL);
   fflush(stdout);
-//#endif
+#endif
 
 
   if(unlikely(source == MPI_PROC_NULL)) { 
