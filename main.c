@@ -1,6 +1,6 @@
 #include "hmpi.h"
 
-void tmain(int argc, char** argv){
+int tmain(int argc, char** argv){
 
   int p,r;
   HMPI_Comm_rank (HMPI_COMM_WORLD, &r);
@@ -102,7 +102,7 @@ void tmain(int argc, char** argv){
           w, counts, displs, MPI_UINT64_T, HMPI_COMM_WORLD);
 
   for(int i = 0; i < p; i++) {
-    printf("[%i] allgatherv buf[%d]: %d %d\n", r, i * 2, w[i * 2], w[i * 2 + 1]);
+    printf("[%i] allgatherv buf[%d]: %llu %llu\n", r, i * 2, w[i * 2], w[i * 2 + 1]);
   }
 
 
@@ -155,12 +155,12 @@ void tmain(int argc, char** argv){
     fflush(stdout);
 #endif
   HMPI_Finalize();
+  return 0;
 }
 
 
 int main(int argc, char** argv) {
 
-    int g_numthreads;
 
     if(argc < 2) {
         printf("ERROR must specify number of threads: ./main <numthreads>\n");
