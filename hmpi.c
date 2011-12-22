@@ -455,7 +455,7 @@ int HMPI_Init(int *argc, char ***argv, int nthreads, int (*start_routine)(int ar
 int HMPI_Comm_rank(HMPI_Comm comm, int *rank) {
   
   //printf("[%i] HMPI_Comm_rank()\n", g_rank*g_nthreads+g_tl_tid);
-#if HMPI_SAFE 
+#ifdef HMPI_SAFE 
   if(comm->mpicomm != MPI_COMM_WORLD) {
     printf("only MPI_COMM_WORLD is supported so far\n");
     MPI_Abort(comm->mpicomm, 0);
@@ -471,7 +471,7 @@ int HMPI_Comm_rank(HMPI_Comm comm, int *rank) {
 
 
 int HMPI_Comm_size ( HMPI_Comm comm, int *size ) {
-#if HMPI_SAFE 
+#ifdef HMPI_SAFE 
   if(comm->mpicomm != MPI_COMM_WORLD) {
     printf("only MPI_COMM_WORLD is supported so far\n");
     MPI_Abort(comm->mpicomm, 0);
@@ -568,9 +568,17 @@ static inline int HMPI_Progress_send(HMPI_Request* send_req) {
         //PROFILE_START(cpy_send);
         HMPI_Request* recv_req = (HMPI_Request*)send_req->match_req;
         uintptr_t rbuf = (uintptr_t)recv_req->buf;
-        //We know the receiver has arrived, so work on copying.
-        size_t size = (send_req->size < recv_req->size ?
-                send_req->size : recv_req->size);
+        int type_size;
+        size_t send_size;
+        size_t recv_size;
+
+        MPI_Type_size(send_req->datatype, &type_size);
+        send_size = type_size * (size_t)send_req->count;
+
+        MPI_Type_size(recv_req->datatype, &type_size);
+        recv_size = type_size * (size_t)recv_req->count;
+
+        size_t size = (send_size < recv_size ? send_size : recv_size);
         uintptr_t sbuf = (uintptr_t)send_req->buf;
         size_t* offsetptr = (size_t*)&send_req->offset;
         size_t offset;
@@ -620,14 +628,6 @@ static inline int HMPI_Progress_recv(HMPI_Request *recv_req) {
     //LOCK_SET(&send_req->match);
     //recv_req->match_req = send_req;
 
-#if 0
-    if(status != MPI_STATUS_IGNORE) {
-        status->MPI_SOURCE = send_req->proc;
-        status->MPI_TAG = send_req->tag;
-        status->MPI_ERROR = MPI_SUCCESS;
-    }
-#endif
-
 #ifdef DEBUG
     printf("[%i] [recv] found send from %i (%p) for buf %p in uq (tag: %i, size: %ld, status: %d)\n",
             g_hmpi_rank, send_req->proc, send_req->buf, recv_req->buf, send_req->tag, send_req->size, get_reqstat(send_req));
@@ -636,19 +636,35 @@ static inline int HMPI_Progress_recv(HMPI_Request *recv_req) {
 
     //Remove the recv from the request list
     //remove_recv_req(recv_req);
+    int type_size;
+    size_t send_size;
+    size_t recv_size;
 
-    size_t size = send_req->size;
-    if(unlikely(size > recv_req->size)) {
-        //printf("[recv] message of size %i truncated to %i (doesn't fit in matching receive buffer)!\n", sendsize, recv_req->size);
-        size = recv_req->size;
-    } else {
-        //Need to update the size for HMPI_Get_count
-        recv_req->size = size;
+    MPI_Type_size(send_req->datatype, &type_size);
+    send_size = type_size * (size_t)send_req->count;
+
+    MPI_Type_size(recv_req->datatype, &type_size);
+    recv_size = type_size * (size_t)recv_req->count;
+
+    //size_t size = (send_size < recv_size ? send_size : recv_size);
+    size_t size = recv_size;
+    if(send_size < recv_size) {
+        //Adjust receive count
+        recv_req->count = send_size / type_size; 
+        size = send_size;
     }
 
-    //printf("[%i] memcpy %p -> %p (%i)\n",
-    //        g_hmpi_rank, send_req->buf, recv_req->buf, sendsize);
-    //fflush(stdout);
+#ifdef HMPI_SAFE
+    if(unlikely(send_size > recv_size)) {
+        printf("[recv] message of size %i truncated to %i (doesn't fit in matching receive buffer)!\n", sendsize, recv_req->size);
+    }
+#endif
+
+#if 0
+    printf("[%i] memcpy %p -> %p (%i)\n",
+            g_hmpi_rank, send_req->buf, recv_req->buf, size);
+    fflush(stdout);
+#endif
 
 
     if(size < BLOCK_SIZE * 2) {
@@ -718,7 +734,7 @@ static inline void HMPI_Progress() {
                 LOCK_SET(&g_mpi_lock);
                 MPI_Iprobe(MPI_ANY_SOURCE, cur->tag, g_tcomms[g_tl_tid], &flag, &status);
                 if(flag) {
-                  MPI_Recv((void*)cur->buf, cur->size, cur->datatype, status.MPI_SOURCE, cur->tag, g_tcomms[g_tl_tid], &status);
+                  MPI_Recv((void*)cur->buf, cur->count, cur->datatype, status.MPI_SOURCE, cur->tag, g_tcomms[g_tl_tid], &status);
                   LOCK_CLEAR(&g_mpi_lock);
                   remove_recv_req(cur);
 
@@ -792,7 +808,8 @@ int HMPI_Test(HMPI_Request *req, int *flag, HMPI_Status *status)
   }
 
   if(*flag && status != HMPI_STATUS_IGNORE) {
-      status->count = req->size;
+      status->datatype = req->datatype;
+      status->count = req->count;
       status->MPI_SOURCE = req->proc;
       status->MPI_TAG = req->tag;
       status->MPI_ERROR = MPI_SUCCESS;
@@ -866,11 +883,20 @@ int HMPI_Waitall(int count, HMPI_Request *requests, HMPI_Status *statuses)
 int HMPI_Get_count(HMPI_Status* status, MPI_Datatype datatype, int* count)
 {
     int size;
+    size_t bytes;
 
-    //Status will have the number of bytes transferred.
-    //Get the size of the datatype in bytes, then divide to get the count.
+    //Supposed to return a count of MPI_UNDEFINED if the amount of data
+    // in status is not an exact multiple of the size of datatype.
+    //TODO - faster way to do this and/or eliminate it?
+    MPI_Type_size(status->datatype, &size);
+    bytes = (size_t)status->count * (size_t)size;
+
     MPI_Type_size(datatype, &size);
-    *count = status->count / size;
+    if(unlikely(bytes % size)) {
+        *count = MPI_UNDEFINED;
+    } else {
+        *count = status->count;
+    }
 
     return MPI_SUCCESS;
 }
@@ -884,12 +910,34 @@ int HMPI_Iprobe(int source, int tag, HMPI_Comm comm, int* flag, HMPI_Status* sta
     //If no match, clear flag and we're done.
     HMPI_Request* send_req = NULL;
 
+    //Progress here prevents deadlocks.
+    HMPI_Progress();
+
+    //Probe HMPI (on-node) layer
     *flag = match_probe(source, tag, comm, &send_req);
-    if(*flag && status != HMPI_STATUS_IGNORE) {
-        status->count = send_req->size;
-        status->MPI_SOURCE = send_req->proc;
-        status->MPI_TAG = send_req->tag;
-        status->MPI_ERROR = MPI_SUCCESS;
+    if(*flag) {
+        if(status != HMPI_STATUS_IGNORE) {
+            status->datatype = send_req->datatype;
+            status->count = send_req->count;
+            status->MPI_SOURCE = send_req->proc;
+            status->MPI_TAG = send_req->tag;
+            status->MPI_ERROR = MPI_SUCCESS;
+        }
+    } else if(g_size > 1) {
+        //Probe MPI (off-node) layer only if more than one MPI rank
+        MPI_Status st;
+        MPI_Iprobe(source, tag, comm->mpicomm, flag, &st);
+
+        if(*flag) {
+            //TODO - I dont know the count or datatype here!
+            //I can get the count if i assume some datatype like MPI_BYTE
+            // But this breaks MPI_UNDEFINED being returned in Get_count
+            status->datatype = MPI_BYTE;
+            MPI_Get_count(&st, MPI_BYTE, &status->count);
+            status->MPI_SOURCE = st.MPI_SOURCE;
+            status->MPI_TAG = st.MPI_TAG;
+            status->MPI_ERROR = st.MPI_ERROR;
+        }
     }
 
     return MPI_SUCCESS;
@@ -941,13 +989,10 @@ int HMPI_Isend(void* buf, int count, MPI_Datatype datatype, int dest, int tag, H
 
     int target_mpi_rank = dest / g_nthreads;
     if(target_mpi_rank == g_rank) {
-        int size;
-        MPI_Type_size(datatype, &size);
-
+#if 0
         // send to other thread in my process
         //TODO - delay filling this stuff in until we know theres no match
         //Try to match the send
-#if 0
         HMPI_Request* recv_req;
         if(match_send(dest, tag, &recv_req)) {
 
@@ -964,7 +1009,8 @@ int HMPI_Isend(void* buf, int count, MPI_Datatype datatype, int dest, int tag, H
                 req->type = HMPI_SEND;
                 req->proc = g_hmpi_rank; // my local rank
                 req->tag = tag;
-                req->size = size*count;
+                req->count = count;
+                req->datatype = datatype;
                 req->buf = buf;
                 //req->match_req = NULL;
                 //req->offset = 0;
@@ -989,7 +1035,8 @@ int HMPI_Isend(void* buf, int count, MPI_Datatype datatype, int dest, int tag, H
             req->type = HMPI_SEND;
             req->proc = g_hmpi_rank; // my local rank
             req->tag = tag;
-            req->size = size*count;
+            req->count = count;
+            req->datatype = datatype;
             req->buf = buf;
             req->match_req = NULL;
             req->offset = 0;
@@ -1002,12 +1049,11 @@ int HMPI_Isend(void* buf, int count, MPI_Datatype datatype, int dest, int tag, H
             //printf("[%i] LOCAL sending to thread %i at rank %i  %p %p\n", g_hmpi_rank, target_mpi_thread, target_mpi_rank, req, g_send_reqs[target_mpi_thread]);
      //   }
     } else {
-        int size;
-        MPI_Type_size(datatype, &size);
         req->type = MPI_SEND;
         req->proc = g_hmpi_rank; // my local rank
         req->tag = tag;
-        req->size = size*count;
+        req->count = count;
+        req->datatype = datatype;
         req->buf = buf;
         update_reqstat(req, HMPI_REQ_ACTIVE);
 
@@ -1067,12 +1113,10 @@ int HMPI_Irecv(void* buf, int count, MPI_Datatype datatype, int source, int tag,
 
   update_reqstat(req, HMPI_REQ_ACTIVE);
   
-  int size;
-  MPI_Type_size(datatype, &size);
-
   req->proc = source;
   req->tag = tag;
-  req->size = size*count;
+  req->count = count;
+  req->datatype = datatype;
   req->buf = buf;
 
   int source_mpi_rank = source / g_nthreads;
@@ -1080,17 +1124,12 @@ int HMPI_Irecv(void* buf, int count, MPI_Datatype datatype, int source, int tag,
     // test both layers and pick first 
     req->type = HMPI_RECV_ANY_SOURCE;
     req->proc = MPI_ANY_SOURCE;
-    //req->proc = source;
-    //req->tag = tag;
-    //req->size = size*count;
-    //req->buf = buf;
 
     //req->comm = g_tcomms[g_tl_tid]; // not 100% sure -- this doesn't catch all messages -- Probe would need to loop over all thread comms and lock :-(
-    req->datatype = datatype;
 
     add_recv_req(req);
     HMPI_Progress_recv(req);
-  } else if(source_mpi_rank == g_rank) {
+  } else if(source_mpi_rank == g_rank) { //Recv on-node, but not ANY_SOURCE
     // recv from other thread in my process
     req->type = HMPI_RECV;
     //req->match_req = NULL;
@@ -1100,24 +1139,15 @@ int HMPI_Irecv(void* buf, int count, MPI_Datatype datatype, int source, int tag,
 
     add_recv_req(req);
     HMPI_Progress_recv(req);
-  } else /*if(source != MPI_ANY_SOURCE)*/ {
+  } else { //Recv off-node, but not ANY_SOURCE
     //int source_mpi_thread = source % g_nthreads;
     //printf("%d buf %p count %d src %d tag %d req %p\n", g_rank*g_nthreads+g_tl_tid, buf, count, source, tag, req);
 
-    int size;
-    MPI_Type_size(datatype, &size);
-    //req->proc = source;
-    //req->tag = tag;
-    //req->size = size*count;
-    //req->buf = buf;
-
     //PROFILE_START(mpi);
-    //MPI_Irecv(buf, count, datatype, source_mpi_rank, tag, g_tcomms[source_mpi_thread], &req->req);
     MPI_Irecv(buf, count, datatype, source_mpi_rank, tag, g_tcomms[g_tl_tid], &req->req);
     //PROFILE_STOP(mpi);
 
     req->type = MPI_RECV;
-  //} else /*if(source == MPI_ANY_SOURCE)*/ {
   }
 
   return MPI_SUCCESS;
@@ -1786,14 +1816,14 @@ int HMPI_Alltoall(void* sendbuf, int sendcount, MPI_Datatype sendtype, void* rec
   //void* rbuf;
   int32_t send_size;
   uint64_t size;
-  MPI_Request* send_reqs;
-  MPI_Request* recv_reqs;
+  MPI_Request* send_reqs = NULL;
+  MPI_Request* recv_reqs = NULL;
   MPI_Datatype dt_send;
   MPI_Datatype dt_recv;
 
   MPI_Type_size(sendtype, &send_size);
 
-#if HMPI_SAFE
+#ifdef HMPI_SAFE
   int32_t recv_size;
   MPI_Aint send_extent, recv_extent, lb;
 
@@ -2100,7 +2130,7 @@ int HMPI_Alltoall_local(void* sendbuf, int sendcount, MPI_Datatype sendtype, voi
 
     MPI_Type_size(sendtype, &send_size);
 
-#if HMPI_SAFE
+#ifdef HMPI_SAFE
     MPI_Aint send_extent, recv_extent, lb;
     int32_t recv_size;
 

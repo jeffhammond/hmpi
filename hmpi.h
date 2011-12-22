@@ -63,7 +63,8 @@ extern HMPI_Comm HMPI_COMM_WORLD;
 #define HMPI_STATUSES_IGNORE NULL
 
 typedef struct HMPI_Status {
-    size_t count;
+    MPI_Datatype datatype;
+    int count;
     int MPI_SOURCE;
     int MPI_TAG;
     int MPI_ERROR;
@@ -80,7 +81,9 @@ typedef struct HMPI_Request {
   int type;
   int proc;
   int tag;
-  size_t size;
+  //size_t size;
+  int count;
+  MPI_Datatype datatype;
 
   void* buf;
   struct HMPI_Request* match_req;
@@ -97,7 +100,6 @@ typedef struct HMPI_Request {
   //MPI_Status* status;
   // following only for HMPI_RECV_ANY_SOURCE
   //MPI_Comm comm;
-  MPI_Datatype datatype;
 } HMPI_Request;
 
 int HMPI_Init(int *argc, char ***argv, int nthreads, int (*start_routine)(int argc, char** argv));
@@ -110,7 +112,7 @@ int HMPI_Comm_size ( HMPI_Comm comm, int *size );
 
 static inline int HMPI_Comm_local(HMPI_Comm comm, int rank)
 {
-#if HMPI_SAFE
+#ifdef HMPI_SAFE
   if(comm->mpicomm != MPI_COMM_WORLD) {
     printf("only MPI_COMM_WORLD is supported so far\n");
     MPI_Abort(comm->mpicomm, 0);
