@@ -2,7 +2,7 @@ CC=mpicc -std=gnu99
 
 HWLOC=/g/g19/friedley/local
 
-CFLAGS=-O3 -Wall -Wuninitialized -I$(HWLOC)/include -L$(HWLOC)/lib -L/usr/local/tools/papi/lib -I/usr/local/tools/papi/include
+CFLAGS=-O0 -g -Wall -Wuninitialized -I$(HWLOC)/include -L$(HWLOC)/lib -L/usr/local/tools/papi/lib -I/usr/local/tools/papi/include
 #CFLAGS=-O3 -Wall -Wuninitialized -I$(HWLOC)/include -L$(HWLOC)/lib
 #CFLAGS=-march=k8 -O2 -fomit-frame-pointer
 #CFLAGS=-march=native -O3 -fomit-frame-pointer -Iopenpa-1.0.2/src -L/usr/local/tools/papi/lib -I/usr/local/tools/papi/include

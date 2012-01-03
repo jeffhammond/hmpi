@@ -74,7 +74,7 @@ typedef struct HMPI_Status {
 //ACTIVE and COMPLETE specifically chosen to match MPI test flags
 #define HMPI_REQ_ACTIVE 0
 #define HMPI_REQ_COMPLETE 1
-#define HMPI_REQ_RECV_COMPLETE 2
+//#define HMPI_REQ_RECV_COMPLETE 2
 
 /* this identifies a message for matching and also acts as request */
 typedef struct HMPI_Request {
