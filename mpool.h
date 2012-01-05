@@ -33,6 +33,9 @@ typedef struct mpool_footer_t {
     struct mpool_footer_t* next;
     void* base;
     size_t length; //Does not include footer structure!
+#ifdef MPOOL_CHECK
+    int in_pool;
+#endif
 } mpool_footer_t;
 
 
@@ -86,8 +89,21 @@ static void mpool_close(mpool_t* mp)
 {
     mpool_footer_t* cur;
 
-    for(cur = mp->head; cur != NULL; cur = cur->next) {
+#if 0
+    for(cur = mp->head; cur != NULL;) {
+        printf("%p close addr %p length %llu\n", mp, cur->base, (uint64_t)cur->length); fflush(stdout);
         //hwloc_free(g_topo, cur->base, cur->length + sizeof(mpool_footer_t));
+        //Weird sequence is because we need to grab cur->next before freeing.
+        mpool_footer_t* next = cur->next;
+        free(cur);
+        cur = next;
+    }
+#endif
+
+    while(mp->head != NULL) {
+        mpool_footer_t* cur = mp->head;
+        //printf("%p close addr %p length %llu\n", mp, cur->base, (uint64_t)cur->length); fflush(stdout);
+        mp->head = cur->next;
         free(cur);
     }
 
@@ -134,6 +150,9 @@ static void* mpool_alloc(mpool_t* mp, size_t length)
             //printf("%p reuse addr %p length %llu\n", mp, cur->base, (uint64_t)length); fflush(stdout);
             //mp->num_reuses++;
             cur->next = NULL;
+#ifdef MPOOL_CHECK
+            cur->in_pool = 0;
+#endif
             return cur->base;
         }
     }
@@ -148,7 +167,11 @@ static void* mpool_alloc(mpool_t* mp, size_t length)
     ft->next = NULL;
     ft->base = (void*)((uintptr_t)ft + mp->pagesize);
     ft->length = length;
+#ifdef MPOOL_CHECK
+    ft->in_pool = 0;
+#endif
     //mp->num_allocs++;
+    //printf("%p alloc addr %p length %llu\n", mp, ft->base, (uint64_t)length); fflush(stdout);
     return ft->base;
 }
 
@@ -156,11 +179,21 @@ static void* mpool_alloc(mpool_t* mp, size_t length)
 //Return a buffer to the mpool for later reuse.
 static void mpool_free(mpool_t* mp, void* ptr)
 {
-    //printf("%p free ptr %p length %llu\n", mp, ptr, (uint64_t)length);
-    //fflush(stdout);
-
     //mpool_footer_t* ft = (mpool_footer_t*)((uintptr_t)ptr + length);
     mpool_footer_t* ft = (mpool_footer_t*)((uintptr_t)ptr - mp->pagesize);
+
+    //printf("%p free ptr %p length %llu\n", mp, ptr, (uint64_t)ft->length);
+    //fflush(stdout);
+
+#ifdef MPOOL_CHECK
+    if(ft->in_pool == 1) {
+        printf("ERROR double free?\n");
+        fflush(stdout);
+        assert(0);
+    }
+
+    ft->in_pool = 1;
+#endif
 
     //Atomically insert at head of list.
     mpool_footer_t* next;

@@ -63,8 +63,7 @@ extern HMPI_Comm HMPI_COMM_WORLD;
 #define HMPI_STATUSES_IGNORE NULL
 
 typedef struct HMPI_Status {
-    MPI_Datatype datatype;
-    int count;
+    size_t size; //Message size in bytes
     int MPI_SOURCE;
     int MPI_TAG;
     int MPI_ERROR;
@@ -81,8 +80,7 @@ typedef struct HMPI_Request {
   int type;
   int proc;
   int tag;
-  //size_t size;
-  int count;
+  size_t size;  //Message size in bytes
   MPI_Datatype datatype;
 
   void* buf;
@@ -180,10 +178,8 @@ int HMPI_Allgatherv(void *sendbuf, int sendcount, MPI_Datatype sendtype, void *r
 
 int HMPI_Alltoall(void* sendbuf, int sendcount, MPI_Datatype sendtype, void* recvbuf, int recvcount, MPI_Datatype recvtype, HMPI_Comm comm);
 
-int HMPI_Alltoall_local(void* sendbuf, int sendcount, MPI_Datatype sendtype, void* recvbuf, int recvcount, MPI_Datatype recvtype, HMPI_Comm comm);
-
 //Assumes all ranks are local.
-int HMPI_Alltoall_local2(void* sendbuf, void* recvbuf, size_t len, HMPI_Comm comm);
+int HMPI_Alltoall_local(void* sendbuf, int sendcount, MPI_Datatype sendtype, void* recvbuf, int recvcount, MPI_Datatype recvtype, HMPI_Comm comm);
 
 int HMPI_Abort( HMPI_Comm comm, int errorcode );
 
