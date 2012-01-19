@@ -5,10 +5,20 @@
 #include <stdlib.h>
 #include <unistd.h>
 #include <hwloc.h>
+#include "lock.h"
+
+//A normal lock is used, any number of threads can alloc and free safely.
+//#define LOCK_FULL 1
 
 //Alloc and free are designed such that one thread can safely enter alloc,
 //while multiple threads can simultaneously free a buffer.
+#define LOCK_FREE 1
 
+#ifdef LOCK_FULL
+#ifdef LOCK_FREE
+#error "Cannot define both LOCK_FULL and LOCK_FREE"
+#endif
+#endif
 
 //if *ptr == oldval, then write *newval
 #ifndef CAS_PTR
@@ -41,10 +51,13 @@ typedef struct mpool_footer_t {
 
 typedef struct mpool_t {
     mpool_footer_t* head;
-    //hwloc_cpuset_t cpuset;
+#ifdef LOCK_FULL
+    lock_t lock;
+#endif
+    hwloc_cpuset_t cpuset;
     size_t pagesize;
-    uint64_t num_allocs;
-    uint64_t num_reuses;
+//    uint64_t num_allocs;
+//    uint64_t num_reuses;
 } mpool_t;
 
 static lock_t g_mpool_lock = {0};
@@ -57,7 +70,6 @@ static mpool_t* mpool_open(void)
 {
     mpool_t* mp = (mpool_t*)malloc(sizeof(mpool_t));
     
-#if 0
     //TODO - could have one global topo object.
     LOCK_SET(&g_mpool_lock);
     if(g_mpool_init == 0) {
@@ -73,16 +85,20 @@ static mpool_t* mpool_open(void)
         g_mpool_init = 1;
     }
 
+    mp->cpuset = hwloc_bitmap_alloc();
     hwloc_get_cpubind(g_topo, mp->cpuset, HWLOC_CPUBIND_THREAD);
     LOCK_CLEAR(&g_mpool_lock);
-#endif
 
     mp->head = NULL;
+#ifdef LOCK_FULL
+    LOCK_INIT(&mp->lock, 0);
+#endif
     mp->pagesize = getpagesize();
-    mp->num_allocs = 0;
-    mp->num_reuses = 0;
+    //mp->num_allocs = 0;
+    //mp->num_reuses = 0;
     return mp;
 }
+
 
 //Close an mpool object, freeing any cached allocations.
 static void mpool_close(mpool_t* mp)
@@ -104,15 +120,18 @@ static void mpool_close(mpool_t* mp)
         mpool_footer_t* cur = mp->head;
         //printf("%p close addr %p length %llu\n", mp, cur->base, (uint64_t)cur->length); fflush(stdout);
         mp->head = cur->next;
-        free(cur);
+        //free(cur);
+        hwloc_free(g_topo, cur, cur->length + sizeof(mpool_footer_t));
     }
 
+    hwloc_bitmap_free(mp->cpuset);
     //hwloc_topology_destroy(mp->topo);
     //printf("%p num_allocs %llu\n", mp, mp->num_allocs);
     //printf("%p num_reuses %llu\n", mp, mp->num_reuses);
     //fflush(stdout);
     free(mp);
 }
+
 
 //Allocate a buffer, first checking the mpool for an existing allocation.
 static void* mpool_alloc(mpool_t* mp, size_t length)
@@ -129,9 +148,35 @@ static void* mpool_alloc(mpool_t* mp, size_t length)
     mpool_footer_t* cur;
     mpool_footer_t* prev;
 
+#ifdef LOCK_FULL
+    LOCK_SET(&mp->lock);
     for(prev = NULL, cur = mp->head; cur != NULL; prev = cur, cur = cur->next) {
-        //TODO this sucks, shorter allocs cant reuse longer buffers.
-        //How can I deal with this?
+        if(length <= cur->length) {
+            //Good buffer, claim it.
+            if(prev == NULL) {
+                mp->head = cur->next;
+            } else {
+                //Not at head of list, just remove.
+                prev->next = cur->next;
+            }
+            LOCK_CLEAR(&mp->lock);
+
+            //printf("%p reuse addr %p length %llu\n", mp, cur->base, (uint64_t)length); fflush(stdout);
+            //mp->num_reuses++;
+            cur->next = NULL;
+#ifdef MPOOL_CHECK
+            cur->in_pool = 0;
+#endif
+            return cur->base;
+        }
+    }
+    
+    LOCK_CLEAR(&mp->lock);
+#endif
+
+#ifdef LOCK_FREE
+    //Need to make this thread-safe for multiple allocating threads.
+    for(prev = NULL, cur = mp->head; cur != NULL; prev = cur, cur = cur->next) {
         if(length <= cur->length) {
             //Good buffer, claim it.
             if(prev == NULL) {
@@ -156,12 +201,14 @@ static void* mpool_alloc(mpool_t* mp, size_t length)
             return cur->base;
         }
     }
+#endif //LOCK_FREE
 
 
     //If no existing allocation is found, allocate a new one.
-    //void* ptr = hwloc_alloc_membind(g_topo, length + sizeof(mpool_footer_t),
-    //        mp->cpuset, HWLOC_MEMBIND_BIND, HWLOC_MEMBIND_THREAD);
-    mpool_footer_t* ft = (mpool_footer_t*)memalign(mp->pagesize, length + mp->pagesize);
+    mpool_footer_t* ft = (mpool_footer_t*)hwloc_alloc_membind(g_topo,
+            length + mp->pagesize,
+            mp->cpuset, HWLOC_MEMBIND_BIND, HWLOC_MEMBIND_THREAD);
+    //mpool_footer_t* ft = (mpool_footer_t*)memalign(mp->pagesize, length + mp->pagesize);
 
     //mpool_footer_t* ft = (mpool_footer_t*)((uintptr_t)ptr + length);
     ft->next = NULL;
@@ -195,11 +242,35 @@ static void mpool_free(mpool_t* mp, void* ptr)
     ft->in_pool = 1;
 #endif
 
+#ifdef LOCK_FULL
+    LOCK_SET(&mp->lock);
+    ft->next = mp->head;
+    mp->head = ft;
+    LOCK_CLEAR(&mp->lock);
+#endif
+
+#ifdef LOCK_FREE
     //Atomically insert at head of list.
     mpool_footer_t* next;
     do {
         next = ft->next = mp->head;
     } while(!CAS_PTR_BOOL(&mp->head, next, ft));
+#endif
 }
 
+
+//Need a communication pattern where many ranks write to different locations
+//in one big receive buffer.
+//Receiver waits for a pointer from everyone as before.
+//Why bother with any message passing? just use a buffer and semaphore.
+//In this case I can't do the nice mpool sync avoiding stuff.
+
+//Allocate the buffer for a tag.
+// owner specifies which rank's memory it should reside in.
+//AMG - do the senders know the final size of receive buffers?
+void* mpool_alloc_buf(int tag, int owner, int size);
+
+//Next, an atomic counter (semaphore?) is used to track when the buffer is rdy.
+
 #endif
+
