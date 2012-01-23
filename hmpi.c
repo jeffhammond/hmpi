@@ -97,23 +97,23 @@ static int (*g_entry)(int argc, char** argv);
 //  If match is locked, that means the sender matched.  need to sort this better
 
 //static __thread HMPI_Request* g_recv_reqs = NULL;
-static HMPI_Request** g_recv_reqs = NULL;
-static HMPI_Request** g_send_reqs = NULL;
+static HMPI_Request* g_recv_reqs = NULL;
+static HMPI_Request* g_send_reqs = NULL;
 
 
 //There is no matching remove -- done in match_recv()
-static inline void add_send_req(HMPI_Request *req, int tid) {
+static inline void add_send_req(HMPI_Request req, int tid) {
   //Set req->next = head
   //CAS head with req
   //if result is not head, repeat
-  HMPI_Request* next;
+  HMPI_Request next;
   do {
       next = req->next = g_send_reqs[tid];
   } while(!CAS_PTR_BOOL(&g_send_reqs[tid], next, req));
 }
 
 
-static inline void add_recv_req(HMPI_Request *req) {
+static inline void add_recv_req(HMPI_Request req) {
   int tid = g_tl_tid;
 
   req->next = g_recv_reqs[tid];
@@ -126,7 +126,7 @@ static inline void add_recv_req(HMPI_Request *req) {
 }
 
 
-static inline void remove_recv_req(HMPI_Request *req) {
+static inline void remove_recv_req(HMPI_Request req) {
     int tid = g_tl_tid;
 
     if(req->prev == NULL) {
@@ -143,10 +143,10 @@ static inline void remove_recv_req(HMPI_Request *req) {
 
 
 #if 0
-static inline int match_send(int dest, int tag, HMPI_Request** recv_req) {
+static inline int match_send(int dest, int tag, HMPI_Request* recv_req) {
     int rank = g_hmpi_rank;
-    HMPI_Request* cur;
-    HMPI_Request* prev;
+    HMPI_Request cur;
+    HMPI_Request prev;
 
     //wrong list!  need the rank of the receiver
     for(cur = g_recv_reqs[dest]; cur != NULL; cur = cur->next) {
@@ -164,9 +164,9 @@ static inline int match_send(int dest, int tag, HMPI_Request** recv_req) {
 #endif
 
 
-static inline int match_recv(HMPI_Request* recv_req, HMPI_Request** send_req) {
-    HMPI_Request* cur;
-    HMPI_Request* prev;
+static inline int match_recv(HMPI_Request recv_req, HMPI_Request* send_req) {
+    HMPI_Request cur;
+    HMPI_Request prev;
 
     for(prev = NULL, cur = g_send_reqs[g_tl_tid];
             cur != NULL; prev = cur, cur = cur->next) {
@@ -208,8 +208,8 @@ static inline int match_recv(HMPI_Request* recv_req, HMPI_Request** send_req) {
 }
 
 
-static inline int match_probe(int source, int tag, HMPI_Comm comm, HMPI_Request** send_req) {
-    HMPI_Request* cur;
+static inline int match_probe(int source, int tag, HMPI_Comm comm, HMPI_Request* send_req) {
+    HMPI_Request cur;
 
     for(cur = g_send_reqs[g_tl_tid]; cur != NULL; cur = cur->next) {
         //The send request can't have ANY_SOURCE or ANY_TAG,
@@ -226,13 +226,13 @@ static inline int match_probe(int source, int tag, HMPI_Comm comm, HMPI_Request*
 }
 
 
-static inline void update_reqstat(HMPI_Request *req, int stat) {
+static inline void update_reqstat(HMPI_Request req, int stat) {
   req->stat = stat;
   //OPA_swap_int(&req->stat, stat);
 }
 
 
-static inline int get_reqstat(HMPI_Request *req) {
+static inline int get_reqstat(HMPI_Request req) {
   int stat;
   stat = req->stat;
   //return OPA_load_int(&req->stat);
@@ -368,8 +368,8 @@ int HMPI_Init(int *argc, char ***argv, int nthreads, int (*start_routine)(int ar
 
   threads = (pthread_t*)malloc(sizeof(pthread_t) * nthreads);
 
-  g_recv_reqs = (HMPI_Request**)malloc(sizeof(HMPI_Request*) * nthreads);
-  g_send_reqs = (HMPI_Request**)malloc(sizeof(HMPI_Request*) * nthreads);
+  g_recv_reqs = (HMPI_Request*)malloc(sizeof(HMPI_Request) * nthreads);
+  g_send_reqs = (HMPI_Request*)malloc(sizeof(HMPI_Request) * nthreads);
 
   g_tcomms = (MPI_Comm*)malloc(sizeof(MPI_Comm) * nthreads);
 
@@ -538,12 +538,12 @@ int HMPI_Finalize() {
 
 
 // global progress function
-static inline int HMPI_Progress_request(HMPI_Request *req);
-static inline int HMPI_Progress_recv(HMPI_Request *recv_req);
+static inline int HMPI_Progress_request(HMPI_Request req);
+static inline int HMPI_Progress_recv(HMPI_Request recv_req);
 
 
 //We assume req->type == HMPI_SEND and req->stat == 0 (uncompleted send)
-static inline int HMPI_Progress_send(HMPI_Request* send_req) {
+static inline int HMPI_Progress_send(HMPI_Request send_req) {
 
     //Poll local receives in the recv reqs list.
     // We do this to prevent deadlock when local threads are exchange messages
@@ -572,7 +572,7 @@ static inline int HMPI_Progress_send(HMPI_Request* send_req) {
     // just does the copy and moves on.
     if(LOCK_TRY(&send_req->match)) {
         //PROFILE_START(cpy_send);
-        HMPI_Request* recv_req = (HMPI_Request*)send_req->match_req;
+        HMPI_Request recv_req = (HMPI_Request)send_req->match_req;
         uintptr_t rbuf = (uintptr_t)recv_req->buf;
 
         size_t send_size = send_req->size;
@@ -603,9 +603,9 @@ static inline int HMPI_Progress_send(HMPI_Request* send_req) {
 }
 
 
-static inline int HMPI_Progress_recv(HMPI_Request *recv_req) {
+static inline int HMPI_Progress_recv(HMPI_Request recv_req) {
     //Try to match from the local send reqs list
-    HMPI_Request* send_req = NULL;
+    HMPI_Request send_req = NULL;
 
 #if 0
     if(get_reqstat(recv_req) == HMPI_REQ_RECV_COMPLETE) {
@@ -711,7 +711,7 @@ static inline int HMPI_Progress_recv(HMPI_Request *recv_req) {
 static inline void HMPI_Progress() {
     //TODO - this visits most rescent receives first.  maybe iterate backwards
     // to progress oldest receives first?
-    HMPI_Request* cur;
+    HMPI_Request cur;
 
     //Progress receive requests.
     for(cur = g_recv_reqs[g_tl_tid]; cur != NULL; cur = cur->next) {
@@ -768,7 +768,7 @@ static inline void HMPI_Progress() {
 }
 
 
-static inline int HMPI_Progress_request(HMPI_Request *req)
+static inline int HMPI_Progress_request(HMPI_Request req)
 {
   HMPI_Progress();
 
@@ -824,8 +824,10 @@ static inline int HMPI_Progress_request(HMPI_Request *req)
 }
 
 
-int HMPI_Test(HMPI_Request *req, int *flag, HMPI_Status *status)
+int HMPI_Test(HMPI_Request *request, int *flag, HMPI_Status *status)
 {
+  HMPI_Request req = *request;
+
   if(get_reqstat(req) != HMPI_REQ_COMPLETE) {
       *flag = HMPI_Progress_request(req);
   } else {
@@ -864,7 +866,7 @@ int HMPI_Testall(int count, HMPI_Request *requests, int* flag, HMPI_Status *stat
 int HMPI_Wait(HMPI_Request *request, HMPI_Status *status) {
   int flag=0;
 #ifdef DEBUG
-  printf("[%i] HMPI_Wait(%x, %x) type: %i\n", g_hmpi_rank, request, status, request->type);
+  printf("[%i] HMPI_Wait(%x, %x) type: %i\n", g_hmpi_rank, req, status, (*request)->type);
   fflush(stdout);
 #endif
 
@@ -882,7 +884,7 @@ int HMPI_Waitall(int count, HMPI_Request *requests, HMPI_Status *statuses)
     int done;
 
 #ifdef DEBUG
-    printf("[%i] HMPI_Waitall(%d, %p, %p) type: %i\n", g_hmpi_rank, count, requests, statuses, request->type);
+    printf("[%i] HMPI_Waitall(%d, %p, %p)\n", g_hmpi_rank, count, requests, statuses);
     fflush(stdout);
 #endif
 
@@ -947,7 +949,7 @@ int HMPI_Iprobe(int source, int tag, HMPI_Comm comm, int* flag, HMPI_Status* sta
     //If match, set flag and fill in status as we would for a recv
     // Also have to set length!
     //If no match, clear flag and we're done.
-    HMPI_Request* send_req = NULL;
+    HMPI_Request send_req = NULL;
 
     //Progress here prevents deadlocks.
     HMPI_Progress();
@@ -992,12 +994,18 @@ int HMPI_Probe(int source, int tag, HMPI_Comm comm, HMPI_Status* status)
 }
 
 
-int HMPI_Isend(void* buf, int count, MPI_Datatype datatype, int dest, int tag, HMPI_Comm comm, HMPI_Request *req) {
+int HMPI_Isend(void* buf, int count, MPI_Datatype datatype, int dest, int tag, HMPI_Comm comm, HMPI_Request *request) {
   
 #ifdef DEBUG
     printf("[%i] HMPI_Isend(%p, %i, %p, %i, %i, %p, %p) (proc null: %i)\n", g_hmpi_rank, buf, count, (void*)datatype, dest, tag, comm, req, MPI_PROC_NULL);
     fflush(stdout);
 #endif
+
+    if(unlikely(request == HMPI_REQUEST_NULL)) {
+        return MPI_SUCCESS;
+    }
+
+    HMPI_Request req = *request;
 
     if(unlikely(dest == MPI_PROC_NULL)) { 
         update_reqstat(req, HMPI_REQ_COMPLETE);
@@ -1106,18 +1114,23 @@ int HMPI_Send(void* buf, int count, MPI_Datatype datatype, int dest, int tag, HM
 }
 
 
-int HMPI_Irecv(void* buf, int count, MPI_Datatype datatype, int source, int tag, HMPI_Comm comm, HMPI_Request *req) {
+int HMPI_Irecv(void* buf, int count, MPI_Datatype datatype, int source, int tag, HMPI_Comm comm, HMPI_Request *request) {
 
 #ifdef DEBUG
   printf("[%i] HMPI_Irecv(%p, %i, %p, %i, %i, %p, %p) (proc null: %i)\n", g_hmpi_rank, buf, count, (void*)datatype, source, tag, comm, req, MPI_PROC_NULL);
   fflush(stdout);
 #endif
 
+    if(unlikely(request == HMPI_REQUEST_NULL)) {
+        return MPI_SUCCESS;
+    }
 
-  if(unlikely(source == MPI_PROC_NULL)) { 
-    update_reqstat(req, HMPI_REQ_COMPLETE);
-    return MPI_SUCCESS;
-  }
+    HMPI_Request req = *request;
+
+    if(unlikely(source == MPI_PROC_NULL)) { 
+        update_reqstat(req, HMPI_REQ_COMPLETE);
+        return MPI_SUCCESS;
+    }
 
 #if 0
 #ifdef HMPI_SAFE
@@ -1661,6 +1674,115 @@ int HMPI_Gather(void* sendbuf, int sendcount, MPI_Datatype sendtype, void* recvb
 }
 
 
+#define HMPI_GATHERV_TAG 76361347
+int HMPI_Gatherv(void* sendbuf, int sendcnt, MPI_Datatype sendtype, void* recvbuf, int* recvcnts, int* displs, MPI_Datatype recvtype, int root, HMPI_Comm comm)
+{
+    //each sender can have a different send count.
+    //recvcnts[i] must be equal to rank i's sendcnt.
+    //only sendbuf, sendcnt, sendtype, root, comm meaningful on senders
+
+    //How do I want to do this?
+    //Challenge is that only the root knows the displacements.
+    //Could simply have each HMPI rank send to the root.
+    //Except for local ranks -- root can copy those.
+    // Actually, root can post its displ list locally, and locals copy.
+    //To reduce messages, each node builds a dtype covering its senders.
+    // Root then builds a dtype for each remote node.
+    // Results in one message from each node.
+    // May not be any better due to dtype overhead and less overlap.
+
+    //Root posts displs to local threads, who can then start copying.
+    //Root receives from all non-local ranks, waits for completion.
+    //Root waits for local threads to finish their copy.
+
+    //Do it like this -- root on each node builds a dtype
+    //Then just call MPI_Gatherv
+
+    //Everybody posts their send info
+    int tid = g_tl_tid;
+    comm->sbuf[tid] = sendbuf;
+    comm->scount[tid] = sendcnt;
+    comm->stype[tid] = sendtype;
+    comm->rbuf[tid] = recvbuf;
+    comm->mpi_rbuf = displs;
+
+    barrier_cb(&comm->barr, tid, barrier_iprobe);
+
+    //One rank on each node builds the dtypes and does the MPI_Gatherv
+    if(tid == root % g_nthreads) {
+        MPI_Datatype dtsend;
+
+        //I have g_nthreads blocks, with their own buf, cnt, type.
+        MPI_Type_create_struct(g_nthreads, (int*)comm->scount, (MPI_Aint*)comm->sbuf, (MPI_Datatype*)comm->stype, &dtsend);
+        MPI_Type_commit(&dtsend);
+
+        if(root == g_hmpi_rank) {
+            //I am root; create recv dtype.
+            //It'll have an entry for each other node.
+            //Blah.. this is a lot of dtypes..
+            //Even if I do just send/recvs, I have to create all of these..
+            //Build one datatype for every other node.
+            int rank = g_rank;
+            MPI_Datatype* dtrecvs = (MPI_Datatype*)alloca(sizeof(MPI_Datatype) * g_size);
+            MPI_Request* reqs = (MPI_Request*)alloca(sizeof(MPI_Request) * g_size);
+
+
+            for(int i = 0; i < g_size; i++) {
+                if(rank == g_rank) {
+                    //We do local copies in the root rank's node.
+                    dtrecvs[i] = MPI_DATATYPE_NULL;
+                    reqs[i] = MPI_REQUEST_NULL;
+                    continue;
+                }
+
+                MPI_Type_indexed(g_nthreads,
+                        &recvcnts[i * g_nthreads], &displs[i * g_nthreads],
+                        recvtype, &dtrecvs[i]);
+
+                MPI_Type_commit(&dtrecvs[i]);
+
+                MPI_Irecv((void*)((uintptr_t)recvbuf + displs[i * g_nthreads]),
+                            1, dtrecvs[i],
+                            i, HMPI_GATHERV_TAG, comm->mpicomm, &reqs[i]);
+            }
+
+            //Is it possible to use MPI_Gatherv at all?
+            //I have to flatten a list of per-rank displs into per-node,
+            //with one base dtype.  Might be possible with extent ugliness
+            //On the other hand, sends/recvs allow me to make a dtype for
+            //each sender.  More simple..
+
+            MPI_Waitall(g_size, reqs, MPI_STATUSES_IGNORE);
+            for(int i = 0; i < g_size; i++) {
+                MPI_Type_free(&dtrecvs[i]);
+            }
+        } else {
+            //MPI_Gatherv(MPI_BOTTOM, 1, dtsend, NULL, NULL, MPI_DATATYPE_NULL,
+            //        root, comm->mpicomm);
+            MPI_Send(MPI_BOTTOM, 1, dtsend, root / g_nthreads, HMPI_GATHERV_TAG, comm->mpicomm);
+        }
+
+        MPI_Type_free(&dtsend);
+    } else if(HMPI_Comm_local(comm, root)) {
+        //Meanwhile, all local non-root ranks do memcpys.
+        int root_tid;
+        HMPI_Comm_thread(comm, root, &root_tid);
+        int* displs = (int*)comm->mpi_rbuf;
+        void* buf = (void*)comm->rbuf[root_tid];
+        int size;
+
+        MPI_Type_size(sendtype, &size);
+
+        //Copy my data from sendbuf to the root.
+        memcpy((void*)((uintptr_t)buf + displs[g_hmpi_rank]),
+                sendbuf, size * sendcnt);
+    }
+
+    barrier(&comm->barr, tid);
+    return MPI_SUCCESS;
+}
+
+
 int HMPI_Allgather(void* sendbuf, int sendcount, MPI_Datatype sendtype, void* recvbuf, int recvcount, MPI_Datatype recvtype, HMPI_Comm comm)
 {
   MPI_Aint send_extent, recv_extent, lb;
@@ -1677,6 +1799,7 @@ int HMPI_Allgather(void* sendbuf, int sendcount, MPI_Datatype sendtype, void* re
   //MPI_Type_extent(recvtype, &recv_extent);
   size = send_size * sendcount;
 
+#ifdef HMPI_SAFE
   if(send_extent != send_size || recv_extent != recv_size) {
     printf("gather non-contiguous derived datatypes are not supported yet!\n");
     MPI_Abort(comm->mpicomm, 0);
@@ -1686,6 +1809,7 @@ int HMPI_Allgather(void* sendbuf, int sendcount, MPI_Datatype sendtype, void* re
     printf("different send and receive size is not supported!\n");
     MPI_Abort(comm->mpicomm, 0);
   }
+#endif
  
 #ifdef DEBUG
   printf("[%i] HMPI_Allgather(%p, %i, %p, %p, %i, %p, %p)\n", g_rank*g_nthreads+g_tl_tid, sendbuf, sendcount, sendtype, recvbuf, recvcount, recvtype, comm);

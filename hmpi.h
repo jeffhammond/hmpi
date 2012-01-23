@@ -39,7 +39,7 @@ typedef struct {
   volatile int* rcount;
   volatile MPI_Datatype* rtype;
   volatile void* mpi_sbuf; //Used by alltoall
-  volatile void* mpi_rbuf;
+  volatile void* mpi_rbuf; //Used by alltoall, gatherv
   //volatile uint8_t* flag;
   barrier_t barr;
   MPI_Comm mpicomm;
@@ -75,8 +75,8 @@ typedef struct HMPI_Status {
 #define HMPI_REQ_COMPLETE 1
 //#define HMPI_REQ_RECV_COMPLETE 2
 
-/* this identifies a message for matching and also acts as request */
-typedef struct HMPI_Request {
+//HMPI_Request is later defined as a pointer to this struct.
+struct HMPI_Request_info {
   int type;
   int proc;
   int tag;
@@ -84,21 +84,27 @@ typedef struct HMPI_Request {
   MPI_Datatype datatype;
 
   void* buf;
-  struct HMPI_Request* match_req;
+  struct HMPI_Request_info* match_req;
 
   size_t offset;
   lock_t match;
   volatile uint8_t stat;
 
-  struct HMPI_Request* next;
-  struct HMPI_Request* prev;
+  struct HMPI_Request_info* next;
+  struct HMPI_Request_info* prev;
 
   //pthread_mutex_t statlock;
   MPI_Request req;
   //MPI_Status* status;
   // following only for HMPI_RECV_ANY_SOURCE
   //MPI_Comm comm;
-} HMPI_Request;
+};
+
+typedef struct HMPI_Request_info* HMPI_Request;
+
+#define HMPI_REQUEST_NULL NULL
+
+
 
 int HMPI_Init(int *argc, char ***argv, int nthreads, int (*start_routine)(int argc, char** argv));
 
@@ -159,18 +165,17 @@ int HMPI_Barrier(HMPI_Comm comm);
 
 int HMPI_Reduce(void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype, MPI_Op op, int root, HMPI_Comm comm);
 
-
 int HMPI_Allreduce(void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype, MPI_Op op, HMPI_Comm comm);
 
-
 int HMPI_Scan(void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype, MPI_Op op, HMPI_Comm comm);
-
 
 int HMPI_Bcast(void *buffer, int count, MPI_Datatype datatype, int root, HMPI_Comm comm);
 
 int HMPI_Scatter(void* sendbuf, int sendcount, MPI_Datatype sendtype, void* recvbuf, int recvcount, MPI_Datatype recvtype, int root, HMPI_Comm comm);
 
 int HMPI_Gather(void* sendbuf, int sendcount, MPI_Datatype sendtype, void* recvbuf, int recvcount, MPI_Datatype recvtype, int root, HMPI_Comm comm);
+
+int HMPI_Gatherv(void* sendbuf, int sendcnt, MPI_Datatype sendtype, void* recvbuf, int* recvcnts, int* displs, MPI_Datatype recvtype, int root, HMPI_Comm comm);
 
 int HMPI_Allgather(void* sendbuf, int sendcount, MPI_Datatype sendtype, void* recvbuf, int recvcount, MPI_Datatype recvtype, HMPI_Comm comm);
 
@@ -185,6 +190,19 @@ int HMPI_Abort( HMPI_Comm comm, int errorcode );
 
 int HMPI_Finalize();
 
+//TODO NOT IMPLEMENTED YET
+// Added to catch apps that call these routines.
+
+static int HMPI_Comm_create(HMPI_Comm comm, MPI_Group group, HMPI_Comm* newcomm)
+{
+    assert(0);
+}
+
+static int HMPI_Comm_group(HMPI_Comm comm, MPI_Group* group)
+{
+    assert(0);
+}
+
 
 #ifndef HMPI_INTERNAL
 
@@ -196,6 +214,10 @@ int HMPI_Finalize();
 
 #define MPI_COMM_WORLD HMPI_COMM_WORLD
 
+#ifdef MPI_REQUEST_NULL
+#undef MPI_REQUEST_NULL
+#endif
+
 #ifdef MPI_STATUS_IGNORE
 #undef MPI_STATUS_IGNORE
 #endif
@@ -204,11 +226,15 @@ int HMPI_Finalize();
 #undef MPI_STATUSES_IGNORE
 #endif
 
+#define MPI_REQUEST_NULL HMPI_REQUEST_NULL
+
 #define MPI_STATUS_IGNORE HMPI_STATUS_IGNORE
 #define MPI_STATUSES_IGNORE HMPI_STATUSES_IGNORE
+
 #define MPI_Status HMPI_Status
 
 #define MPI_Request HMPI_Request
+
 
 #define MPI_Init HMPI_Init
 
@@ -255,7 +281,12 @@ int HMPI_Finalize();
 #define MPI_Abort HMPI_Abort
 #define MPI_Finalize HMPI_Finalize
 
-#endif
+
+//TODO NOT IMPLEMENTED YET
+// Added to catch apps that call these routines.
+#define MPI_Comm_create HMPI_Comm_create
+
+#endif //HMPI_INTERNAL
 
 #ifdef __cplusplus
 }
