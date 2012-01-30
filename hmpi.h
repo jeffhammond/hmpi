@@ -78,8 +78,15 @@ typedef struct HMPI_Status {
 #define HMPI_REQ_COMPLETE 1
 //#define HMPI_REQ_RECV_COMPLETE 2
 
+typedef struct HMPI_Item {
+    struct HMPI_Item* next;
+    struct HMPI_Item* prev;
+} HMPI_Item;
+
 //HMPI_Request is later defined as a pointer to this struct.
 typedef struct HMPI_Request_info {
+  HMPI_Item item;
+
   int type;
   int proc;
   int tag;
@@ -93,8 +100,8 @@ typedef struct HMPI_Request_info {
   lock_t match;
   volatile uint8_t stat;
 
-  struct HMPI_Request_info* next;
-  struct HMPI_Request_info* prev;
+  //struct HMPI_Request_info* next;
+  //struct HMPI_Request_info* prev;
 
   //pthread_mutex_t statlock;
   MPI_Request req;
