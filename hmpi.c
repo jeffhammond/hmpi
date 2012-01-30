@@ -101,18 +101,40 @@ static HMPI_Request* g_recv_reqs = NULL;
 //TODO - instead of wasting memory for g_nthreads dummy reqs,
 // have a base linked list struct i can typecast reqs to/from.
 //static HMPI_Request* g_send_reqs = NULL;
-static HMPI_Request_info* g_send_reqs = NULL;
-static HMPI_Request* g_send_reqs_tail = NULL;
-static lock_t* g_send_reqs_lock = NULL;
+//static HMPI_Request_info* g_send_reqs = NULL;
+//static HMPI_Request* g_send_reqs_tail = NULL;
+//static lock_t* g_send_reqs_lock = NULL;
+
+typedef struct HMPI_Request_list {
+    HMPI_Request_info head;
+    HMPI_Request tail;
+    lock_t lock;
+} HMPI_Request_list;
+
+HMPI_Request_list* g_send_reqs = NULL;
+
+
 
 //There is no matching remove -- done in match_recv()
 static inline void add_send_req(HMPI_Request req, int tid) {
+    //Insert req at tail.
+    HMPI_Request_list* req_list = &g_send_reqs[tid];
+
+    req->next = NULL;
+
+    LOCK_SET(&req_list->lock);
+    req_list->tail->next = req;
+    req_list->tail = req;
+    LOCK_CLEAR(&req_list->lock);
+
+#if 0
     //Insert req at tail.
     req->next = NULL;
     LOCK_SET(&g_send_reqs_lock[tid]);
     g_send_reqs_tail[tid]->next = req;
     g_send_reqs_tail[tid] = req;
     LOCK_CLEAR(&g_send_reqs_lock[tid]);
+#endif
 
 #if 0
     HMPI_Request oldtail;
@@ -187,9 +209,9 @@ static inline int match_send(int dest, int tag, HMPI_Request* recv_req) {
 
 
 static inline int match_recv(HMPI_Request recv_req, HMPI_Request* send_req) {
+    HMPI_Request_list* req_list = &g_send_reqs[g_tl_tid];
     HMPI_Request cur;
     HMPI_Request prev;
-
 
 #if 0
     if(g_send_reqs_tail[g_tl_tid]->next != NULL) {
@@ -200,17 +222,11 @@ static inline int match_recv(HMPI_Request recv_req, HMPI_Request* send_req) {
     }
 #endif
 
-    //I iterate starting from the head of the list here..
-    //Leave this intact, but make insertions occur at the end.
     //Locking will change here since senders wont change the head.
     //for(prev = NULL, cur = g_send_reqs[g_tl_tid];
-    for(prev = &g_send_reqs[g_tl_tid], cur = g_send_reqs[g_tl_tid].next;
+    //for(prev = &g_send_reqs[g_tl_tid], cur = g_send_reqs[g_tl_tid].next;
+    for(prev = &req_list->head, cur = prev->next;
             cur != NULL; prev = cur, cur = cur->next) {
-//        printf("%d match recv %d %d %d cur %d %d ANY %d %d\n", g_tl_tid, recv_req->type, recv_req->proc,
-//                recv_req->tag, cur->proc, cur->tag, MPI_ANY_SOURCE, MPI_ANY_TAG); fflush(stdout);
-//        printf("%d proc match? %d %d\n", g_tl_tid, cur->proc == recv_req->proc, recv_req->proc == MPI_ANY_SOURCE); fflush(stdout);
-//        printf("%d tag match? %d %d\n", g_tl_tid, cur->tag == recv_req->tag,
-//                recv_req->tag == MPI_ANY_TAG); fflush(stdout);
 
         //The send request can't have ANY_SOURCE or ANY_TAG, so don't check for that.
         if((cur->proc == recv_req->proc ||
@@ -218,6 +234,20 @@ static inline int match_recv(HMPI_Request recv_req, HMPI_Request* send_req) {
                 (cur->tag == recv_req->tag || recv_req->tag == MPI_ANY_TAG)) {
 
             if(cur->next == NULL) {
+                //cur is tail, lock to update tail.
+                prev->next = NULL;
+                LOCK_SET(&req_list->lock);
+
+                //Check again, may have had another insert since checking.
+                if(cur->next == NULL) {
+                    //Still tail.
+                    req_list->tail = prev;
+                    LOCK_CLEAR(&req_list->lock);
+                } else {
+                    LOCK_CLEAR(&req_list->lock);
+                    prev->next = cur->next;
+                }
+#if 0
                 //cur is tail, lock to update tail.
                 prev->next = NULL;
                 LOCK_SET(&g_send_reqs_lock[g_tl_tid]);
@@ -231,6 +261,7 @@ static inline int match_recv(HMPI_Request recv_req, HMPI_Request* send_req) {
                     LOCK_CLEAR(&g_send_reqs_lock[g_tl_tid]);
                     prev->next = cur->next;
                 }
+#endif
             } else {
                 //Not at tail; just remove.
                 prev->next = cur->next;
@@ -286,9 +317,10 @@ static inline int match_recv(HMPI_Request recv_req, HMPI_Request* send_req) {
 
 
 static inline int match_probe(int source, int tag, HMPI_Comm comm, HMPI_Request* send_req) {
+    HMPI_Request_list* req_list = &g_send_reqs[g_tl_tid];
     HMPI_Request cur;
 
-    for(cur = g_send_reqs[g_tl_tid].next; cur != NULL; cur = cur->next) {
+    for(cur = req_list->head.next; cur != NULL; cur = cur->next) {
         //The send request can't have ANY_SOURCE or ANY_TAG,
         // so don't check for that.
         if((cur->proc == source || source == MPI_ANY_SOURCE) &&
@@ -446,9 +478,10 @@ int HMPI_Init(int *argc, char ***argv, int nthreads, int (*start_routine)(int ar
   threads = (pthread_t*)malloc(sizeof(pthread_t) * nthreads);
 
   g_recv_reqs = (HMPI_Request*)malloc(sizeof(HMPI_Request) * nthreads);
-  g_send_reqs = (HMPI_Request_info*)malloc(sizeof(HMPI_Request_info) * nthreads);
-  g_send_reqs_tail = (HMPI_Request*)malloc(sizeof(HMPI_Request) * nthreads);
-  g_send_reqs_lock = (lock_t*)malloc(sizeof(lock_t) * nthreads);
+  //g_send_reqs = (HMPI_Request_info*)malloc(sizeof(HMPI_Request_info) * nthreads);
+  //g_send_reqs_tail = (HMPI_Request*)malloc(sizeof(HMPI_Request) * nthreads);
+  //g_send_reqs_lock = (lock_t*)malloc(sizeof(lock_t) * nthreads);
+  g_send_reqs = (HMPI_Request_list*)malloc(sizeof(HMPI_Request_list) * nthreads);
 
   g_tcomms = (MPI_Comm*)malloc(sizeof(MPI_Comm) * nthreads);
 
@@ -464,9 +497,12 @@ int HMPI_Init(int *argc, char ***argv, int nthreads, int (*start_routine)(int ar
 
     // Initialize send requests list and lock
     g_recv_reqs[thr] = NULL;
-    g_send_reqs[thr].next = NULL;
-    g_send_reqs_tail[thr] = &g_send_reqs[thr];
-    LOCK_INIT(&g_send_reqs_lock[thr], 0);
+    //g_send_reqs[thr].next = NULL;
+    //g_send_reqs_tail[thr] = &g_send_reqs[thr];
+    //LOCK_INIT(&g_send_reqs_lock[thr], 0);
+    g_send_reqs[thr].head.next = NULL;
+    g_send_reqs[thr].tail = &g_send_reqs[thr].head;
+    LOCK_INIT(&g_send_reqs[thr].lock, 0);
   }
 
   //How can I spread threads across sockets?
