@@ -24,6 +24,9 @@ typedef struct {
 } cache_line_t;
 
 
+//Placeholder typedef
+typedef void* HMPI_Group;
+
 typedef struct {
 /*  volatile void *rootsbuf;
   volatile void *rootrbuf;
@@ -76,7 +79,7 @@ typedef struct HMPI_Status {
 //#define HMPI_REQ_RECV_COMPLETE 2
 
 //HMPI_Request is later defined as a pointer to this struct.
-struct HMPI_Request_info {
+typedef struct HMPI_Request_info {
   int type;
   int proc;
   int tag;
@@ -98,9 +101,9 @@ struct HMPI_Request_info {
   //MPI_Status* status;
   // following only for HMPI_RECV_ANY_SOURCE
   //MPI_Comm comm;
-};
+} HMPI_Request_info;
 
-typedef struct HMPI_Request_info* HMPI_Request;
+typedef HMPI_Request_info* HMPI_Request;
 
 #define HMPI_REQUEST_NULL NULL
 
@@ -157,7 +160,8 @@ int HMPI_Probe(int source, int tag, HMPI_Comm comm, HMPI_Status* status);
 int HMPI_Test(HMPI_Request *request, int *flag, HMPI_Status *status);
 int HMPI_Testall(int count, HMPI_Request *requests, int* flag, HMPI_Status *statuses);
 int HMPI_Wait(HMPI_Request *request, HMPI_Status *status);
-int HMPI_Waitall(int count, HMPI_Request *requests, HMPI_Status *statuses);
+int HMPI_Waitall(int count, HMPI_Request* requests, HMPI_Status* statuses);
+int HMPI_Waitany(int count, HMPI_Request* requests, int* index, HMPI_Status *status);
 
 int HMPI_Get_count(HMPI_Status* status, MPI_Datatype datatype, int* count);
 
@@ -196,11 +200,13 @@ int HMPI_Finalize();
 static int HMPI_Comm_create(HMPI_Comm comm, MPI_Group group, HMPI_Comm* newcomm)
 {
     assert(0);
+    return MPI_SUCCESS;
 }
 
-static int HMPI_Comm_group(HMPI_Comm comm, MPI_Group* group)
+static int HMPI_Comm_group(HMPI_Comm comm, HMPI_Group* group)
 {
-    assert(0);
+    *group = NULL;
+    return MPI_SUCCESS;    
 }
 
 
@@ -260,6 +266,7 @@ static int HMPI_Comm_group(HMPI_Comm comm, MPI_Group* group)
 
 #define MPI_Wait HMPI_Wait
 #define MPI_Waitall HMPI_Waitall
+#define MPI_Waitany HMPI_Waitany
 
 #define MPI_Get_count HMPI_Get_count
 
@@ -270,6 +277,7 @@ static int HMPI_Comm_group(HMPI_Comm comm, MPI_Group* group)
 #define MPI_Bcast HMPI_Bcast
 #define MPI_Scatter HMPI_Scatter
 #define MPI_Gather HMPI_Gather
+#define MPI_Gatherv HMPI_Gatherv
 #define MPI_Allgather HMPI_Allgather
 #define MPI_Allgatherv HMPI_Allgatherv
 #define MPI_Alltoall HMPI_Alltoall
@@ -285,6 +293,7 @@ static int HMPI_Comm_group(HMPI_Comm comm, MPI_Group* group)
 //TODO NOT IMPLEMENTED YET
 // Added to catch apps that call these routines.
 #define MPI_Comm_create HMPI_Comm_create
+#define MPI_Comm_group HMPI_Comm_group
 
 #endif //HMPI_INTERNAL
 
