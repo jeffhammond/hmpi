@@ -31,7 +31,6 @@
 #include <string.h>
 #include <pthread.h>
 #include <time.h>
-#include <papi.h>
 
 #if _PROFILE_MPI == 1
 #include <mpi.h>
@@ -44,6 +43,7 @@
 
 
 #if _PROFILE_PAPI_EVENTS == 1
+#include <papi.h>
 
 #define NUM_EVENTS 3
 
@@ -106,10 +106,10 @@ typedef struct profile_vars_t {
 
 static inline void PROFILE_INIT(int tid)
 {
-  int ret;
 
   if(tid == 0) {
-    ret = PAPI_library_init(PAPI_VER_CURRENT);
+#if _PROFILE_PAPI_EVENTS == 1
+    int ret = PAPI_library_init(PAPI_VER_CURRENT);
     if(ret < 0) {
         printf("PAPI init failure %s\n", PAPI_strerror(ret));
         fflush(stdout);
@@ -118,7 +118,6 @@ static inline void PROFILE_INIT(int tid)
 
     PAPI_thread_init((long unsigned int (*)())pthread_self);
 
-#if _PROFILE_PAPI_EVENTS == 1
     int num_hwcntrs = 0;
 
     if ((num_hwcntrs = PAPI_num_counters()) <= PAPI_OK) {
@@ -137,7 +136,7 @@ static inline void PROFILE_INIT(int tid)
 #endif
 
 #if _PROFILE_PAPI_EVENTS == 1
-    ret = PAPI_create_eventset(&_profile_eventset);
+    int ret = PAPI_create_eventset(&_profile_eventset);
     if(ret != PAPI_OK) {
         printf("PAPI create eventset error %s\n", PAPI_strerror(ret));
         fflush(stdout);
@@ -396,7 +395,7 @@ static void __PROFILE_SHOW_REDUCE(const char* name, struct profile_vars_t* v)
     if(rank == 0) {
         //printf("TIME %12s cnt %-7lu time %8.3f ms total %11.6f ms avg\n", name,
         //        v->count, (double)v->time / 1000.0, ((double)v->time / v->count) / 1000.0);
-        printf("TIME %12s cnt %-7lu time %8.3f ms total %11.6f ms avg\n", name,
+        printf("TIME %12s cnt %-7lu time %10.3f ms total %13.6f ms avg\n", name,
                 r_count, (double)r_time / 1000.0,
                 ((double)r_time / r_count) / 1000.0);
 

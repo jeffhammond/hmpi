@@ -3,6 +3,25 @@
 
 //#define CACHE_LINE 128
 
+//if *ptr == oldval, then write *newval
+#ifndef CAS_PTR
+#define CAS_PTR(ptr, oldval, newval) \
+  __sync_val_compare_and_swap((uintptr_t*)(ptr), \
+          (uintptr_t)(oldval), (uintptr_t)(newval))
+#endif
+
+#ifndef CAS_PTR_BOOL
+#define CAS_PTR_BOOL(ptr, oldval, newval) \
+  __sync_bool_compare_and_swap((uintptr_t*)(ptr), \
+          (uintptr_t)(oldval), (uintptr_t)(newval))
+#endif
+
+#ifndef FETCH_ADD
+#define FETCH_ADD(ptr, val) \
+    __sync_fetch_and_add(ptr, val)
+#endif
+
+
 typedef struct lock_t {
     volatile int lock;
 //    char padding[CACHE_LINE - sizeof(int)];

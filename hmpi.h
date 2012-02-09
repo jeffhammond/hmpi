@@ -28,13 +28,6 @@ typedef struct {
 typedef void* HMPI_Group;
 
 typedef struct {
-/*  volatile void *rootsbuf;
-  volatile void *rootrbuf;
-  volatile int rootscount;
-  volatile int rootrcount;
-  volatile MPI_Datatype rootstype;
-  volatile MPI_Datatype rootrtype;
-  */
   volatile void** sbuf;
   volatile int* scount;
   volatile MPI_Datatype* stype;
@@ -43,7 +36,7 @@ typedef struct {
   volatile MPI_Datatype* rtype;
   volatile void* mpi_sbuf; //Used by alltoall
   volatile void* mpi_rbuf; //Used by alltoall, gatherv
-  //volatile uint8_t* flag;
+  //volatile uint8_t* flag; //Used by allreduce
   barrier_t barr;
   MPI_Comm mpicomm;
   //MPI_Comm* tcomms;
@@ -76,12 +69,13 @@ typedef struct HMPI_Status {
 //ACTIVE and COMPLETE specifically chosen to match MPI test flags
 #define HMPI_REQ_ACTIVE 0
 #define HMPI_REQ_COMPLETE 1
-//#define HMPI_REQ_RECV_COMPLETE 2
+
 
 typedef struct HMPI_Item {
     struct HMPI_Item* next;
     struct HMPI_Item* prev;
 } HMPI_Item;
+
 
 //HMPI_Request is later defined as a pointer to this struct.
 typedef struct HMPI_Request_info {
@@ -308,3 +302,4 @@ static int HMPI_Comm_group(HMPI_Comm comm, HMPI_Group* group)
 }
 #endif
 #endif
+
