@@ -73,7 +73,7 @@ int tmain(int argc, char** argv){
   //int x=1, y=0;
   uint64_t x[4] = {1, 2, 3, 4};
   uint64_t y[4] = {0};
-  HMPI_Reduce(x, y, 4, MPI_UINT64_T, MPI_SUM, 0, HMPI_COMM_WORLD);
+  HMPI_Reduce(x, y, 4, MPI_UNSIGNED_LONG_LONG, MPI_SUM, 0, HMPI_COMM_WORLD);
   //printf("[%i] reduce buf: %i %d %d %d\n", r, y[0], y[1], y[2], y[3]);
 
   uint64_t* z = (uint64_t*)malloc(sizeof(uint64_t) * p * 2);
@@ -82,7 +82,7 @@ int tmain(int argc, char** argv){
   memset(w, 0, sizeof(uint64_t) * p * 2);
 
   x[0] = r;
-  HMPI_Allgather(x, 1, MPI_UINT64_T, z, 1, MPI_UINT64_T, HMPI_COMM_WORLD);
+  HMPI_Allgather(x, 1, MPI_UNSIGNED_LONG_LONG, z, 1, MPI_UNSIGNED_LONG_LONG, HMPI_COMM_WORLD);
 
   //for(int i = 0; i < p; i++) {
   //  printf("[%i] allgather buf: %d\n", r, z[i]);
@@ -98,8 +98,8 @@ int tmain(int argc, char** argv){
       //z[i * 2 + 1] = 0;
   }
 
-  HMPI_Allgatherv(x, 1, MPI_UINT64_T,
-          w, counts, displs, MPI_UINT64_T, HMPI_COMM_WORLD);
+  HMPI_Allgatherv(x, 1, MPI_UNSIGNED_LONG_LONG,
+          w, counts, displs, MPI_UNSIGNED_LONG_LONG, HMPI_COMM_WORLD);
 
   for(int i = 0; i < p; i++) {
     printf("[%i] allgatherv buf[%d]: %llu %llu\n", r, i * 2, w[i * 2], w[i * 2 + 1]);
