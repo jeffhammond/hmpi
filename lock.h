@@ -3,93 +3,122 @@
 
 //#define CACHE_LINE 128
 
-#if defined __IBMCPP__
-#include <builtins.h>
-#endif
+//AWF - I made my own primitives for several reasons:
+// - Referencing the OPA atomic types requires a pointer dereference.  The
+//   compiler probably eliminates them, but still results in less clean code.
+// - OPA lacks a size_t (64bit) integer atomic type.
 
-#ifdef __x86_64__
-#define STORE_FENCE() __asm__("sfence")
-#define LOAD_FENCE() __asm__("lfence")
-
-#elif defined (__IBMC__) || defined (__IBMCPP__)
-#define STORE_FENCE() __lwsync()
-#define LOAD_FENCE() __sync()
-
-#else //Default GCC builtins
-#define STORE_FENCE() __sync_synchronize()
-#define LOAD_FENCE() __sync_synchronize()
-#endif
-
-
-#if defined __IBMC__ || defined __IBMCPP__
-
-//TODO assumes 32bit pointers (true on BGP)
-//if *ptr == oldval, then write *newval
-#ifndef CAS_PTR_BOOL
-#define CAS_PTR_BOOL(ptr, oldval, newval) \
-  __compare_and_swap((uintptr_t*)(ptr), \
-          (uintptr_t)(oldval), (uintptr_t)(newval))
-#endif
-#ifndef FETCH_ADD
-
-#define FETCH_ADD(ptr, val) fetch_add((int*)ptr, (int)val)
-
-static inline unsigned int fetch_add(int* __restrict ptr, int val)
-{
-    int ret;
-
-    do {
-        ret = __lwarx((volatile int*)ptr);
-        //int tmp = ret + val;
-    } while(!__stwcx((volatile int*)ptr, ret + val));
-
-    return ret;
-#if 0
-    unsigned int ret;
-    register tmp = 0;
-
-    //TODO - rewrite using lwarx/stwcx builtins
-    asm volatile (
-            "1:\n\t"
-            "lwarx  %0,0,%1\n\t"
-            "add    %3,%2,%0\n\t"
-            "stwcx. %3,0,%1\n\t"
-            "bne-   1b\n\t"
-            : "=r" (ret) : "r" (ptr), "r" (val), "r" (tmp));
-
-    return ret;
-#endif
-}
-#endif //FETCH_ADD
-
-#else //GCC/ICC and compatible
-
-//if *ptr == oldval, then write *newval
-#ifndef CAS_PTR_BOOL
-#define CAS_PTR_BOOL(ptr, oldval, newval) \
-  __sync_bool_compare_and_swap((uintptr_t*)(ptr), \
-          (uintptr_t)(oldval), (uintptr_t)(newval))
-#endif
-
-#ifndef FETCH_ADD
-#define FETCH_ADD(ptr, val) \
-    __sync_fetch_and_add(ptr, val)
-#endif
-#endif // else GCC/ICC
-
-
+//TODO - make sure this is always aligned
 typedef struct lock_t {
     volatile int lock;
 //    char padding[CACHE_LINE - sizeof(int)];
 } lock_t;
 
+#if (defined __IBMC__ || defined __IBMCPP__) && defined __PPC__
+
+#if defined __IBMCPP__
+#include <builtins.h>
+#endif
+
+#define STORE_FENCE() __lwsync()
+#define LOAD_FENCE() __sync()
+
+//if *ptr == oldval, then write *newval
+#define CAS_PTR_BOOL(ptr, oldval, newval) \
+  __compare_and_swap((uintptr_t*)(ptr), \
+          (uintptr_t)(oldval), (uintptr_t)(newval))
+
+
+static inline int FETCH_ADD(volatile int* __restrict ptr, int val)
+{
+    int ret;
+
+    do {
+        ret = __lwarx(ptr);
+    } while(!__stwcx(ptr, ret + val));
+
+    return ret;
+}
+
+
+// Lock routines
+
 static inline void LOCK_INIT(lock_t* __restrict l, int locked) {
-//#ifdef __IBMC__
     l->lock = locked;
     STORE_FENCE();
-//#else
-//    __sync_lock_test_and_set(&l->lock, locked);
-//#endif
+}
+
+static inline void LOCK_SET(lock_t* __restrict l) {
+    while(__check_lock_mp((int*)(&l->lock), 0, 1));
+}
+
+//Returns non-zero if lock was acquired, 0 if not.
+static inline int LOCK_TRY(lock_t* __restrict l) {
+    return __check_lock_mp((int*)(&l->lock), 0, 1) == 0;
+}
+
+static inline void LOCK_CLEAR(lock_t* __restrict l) {
+    __clear_lock_mp((int*)(&l->lock), 0);
+}
+
+static inline int LOCK_GET(lock_t* __restrict l) {
+    return (int)l->lock;
+}
+
+
+#elif defined __GNUC__ //Should cover ICC too
+
+#ifdef __x86_64__ //Better x86 versions
+#define STORE_FENCE() __asm__("sfence")
+#define LOAD_FENCE() __asm__("lfence")
+#else //Default GCC builtins
+#define STORE_FENCE() __sync_synchronize()
+#define LOAD_FENCE() __sync_synchronize()
+#endif
+
+//if *ptr == oldval, then write *newval
+#define CAS_PTR_BOOL(ptr, oldval, newval) \
+  __sync_bool_compare_and_swap((uintptr_t*)(ptr), \
+          (uintptr_t)(oldval), (uintptr_t)(newval))
+
+#define FETCH_ADD(ptr, val) \
+    __sync_fetch_and_add(ptr, val)
+
+
+// Lock routines
+
+static inline void LOCK_INIT(lock_t* __restrict l, int locked) {
+    l->lock = locked;
+    STORE_FENCE();
+}
+
+static inline void LOCK_SET(lock_t* __restrict l) {
+    while(__sync_lock_test_and_set(&l->lock, 1) == 1);
+}
+
+//Returns non-zero if lock was acquired, 0 if not.
+static inline int LOCK_TRY(lock_t* __restrict l) {
+    return __sync_lock_test_and_set(&l->lock, 1) == 0;
+}
+
+static inline void LOCK_CLEAR(lock_t* __restrict l) {
+    __sync_lock_release(&l->lock);
+}
+
+static inline int LOCK_GET(lock_t* __restrict l) {
+    return (int)l->lock;
+}
+
+#else
+#error "Unrecognized platform; no atomics defined"
+#endif
+
+
+
+#if 0
+static inline void LOCK_INIT(lock_t* __restrict l, int locked) {
+    l->lock = locked;
+    STORE_FENCE();
 }
 
 static inline void LOCK_SET(lock_t* __restrict l) {
@@ -120,5 +149,6 @@ static inline void LOCK_CLEAR(lock_t* __restrict l) {
 static inline int LOCK_GET(lock_t* __restrict l) {
     return (int)l->lock;
 }
+#endif
 
 #endif

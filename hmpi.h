@@ -90,7 +90,7 @@ typedef struct HMPI_Request_info {
   void* buf;
   struct HMPI_Request_info* match_req;
 
-  size_t offset;
+  volatile ssize_t offset;
   lock_t match;
   volatile uint8_t stat;
 

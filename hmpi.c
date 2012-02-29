@@ -12,13 +12,6 @@
 #undef MPI
 #endif
 
-#ifdef __PPC__
-#warning "PPC set"
-#endif
-#ifdef __PPC64__
-#warning "PPC64 set"
-#endif
-
 //#define _PROFILE 1
 //#define _PROFILE_HMPI 1
 //#define _PROFILE_PAPI_EVENTS 1
@@ -563,8 +556,8 @@ static inline int HMPI_Progress_send(HMPI_Request send_req) {
         size_t size = (send_size < recv_size ? send_size : recv_size);
 
         uintptr_t sbuf = (uintptr_t)send_req->buf;
-        size_t* offsetptr = (size_t*)&send_req->offset;
-        size_t offset;
+        volatile ssize_t* offsetptr = &send_req->offset;
+        ssize_t offset;
 
         //length to copy is min of len - offset and BLOCK_SIZE
         while((offset = FETCH_ADD(offsetptr, BLOCK_SIZE)) < size) {
@@ -643,8 +636,8 @@ static inline int HMPI_Progress_recv(HMPI_Request recv_req) {
 
         uintptr_t rbuf = (uintptr_t)recv_req->buf;
         uintptr_t sbuf = (uintptr_t)send_req->buf;
-        size_t* offsetptr = (size_t*)&send_req->offset;
-        size_t offset = 0;
+        volatile ssize_t* offsetptr = &send_req->offset;
+        ssize_t offset = 0;
 
         //length to copy is min of len - offset and BLOCK_SIZE
         while((offset = FETCH_ADD(offsetptr, BLOCK_SIZE)) < size) {
