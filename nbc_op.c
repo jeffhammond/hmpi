@@ -72,7 +72,7 @@ int NBC_Operation(void *buf3, void *buf1, void *buf2, MPI_Op op, MPI_Datatype ty
       for(i=0; i<count; i++) {
         *(((int*)buf3) + i) = ((*(((int*)buf1) + i)) ^ (*(((int*)buf2) + i))); 
       }
-    } else return NBC_OP_NOT_SUPPORTED; 
+    } else MPI_Abort(MPI_COMM_WORLD, NBC_OP_NOT_SUPPORTED); 
   } else if(type == MPI_LONG) { 
     if(op == MPI_MIN) {
       for(i=0; i<count; i++) {
@@ -114,7 +114,7 @@ int NBC_Operation(void *buf3, void *buf1, void *buf2, MPI_Op op, MPI_Datatype ty
       for(i=0; i<count; i++) {
         *(((long*)buf3) + i) = ((*(((long*)buf1) + i)) ^ (*(((long*)buf2) + i))); 
       }
-    } else return NBC_OP_NOT_SUPPORTED; 
+    } else MPI_Abort(MPI_COMM_WORLD, NBC_OP_NOT_SUPPORTED); 
   } else if(type == MPI_LONG_LONG) { 
     if(op == MPI_MIN) {
       for(i=0; i<count; i++) {
@@ -156,7 +156,7 @@ int NBC_Operation(void *buf3, void *buf1, void *buf2, MPI_Op op, MPI_Datatype ty
       for(i=0; i<count; i++) {
         *(((long long*)buf3) + i) = ((*(((long long*)buf1) + i)) ^ (*(((long long*)buf2) + i))); 
       }
-    } else return NBC_OP_NOT_SUPPORTED; 
+    } else MPI_Abort(MPI_COMM_WORLD, NBC_OP_NOT_SUPPORTED); 
   } else if(type == MPI_LONG_LONG_INT) { 
     if(op == MPI_MIN) {
       for(i=0; i<count; i++) {
@@ -198,7 +198,7 @@ int NBC_Operation(void *buf3, void *buf1, void *buf2, MPI_Op op, MPI_Datatype ty
       for(i=0; i<count; i++) {
         *(((long long int*)buf3) + i) = ((*(((long long int*)buf1) + i)) ^ (*(((long long int*)buf2) + i))); 
       }
-    } else return NBC_OP_NOT_SUPPORTED; 
+    } else MPI_Abort(MPI_COMM_WORLD, NBC_OP_NOT_SUPPORTED); 
   } else if(type == MPI_SHORT) { 
     if(op == MPI_MIN) {
       for(i=0; i<count; i++) {
@@ -240,7 +240,7 @@ int NBC_Operation(void *buf3, void *buf1, void *buf2, MPI_Op op, MPI_Datatype ty
       for(i=0; i<count; i++) {
         *(((short*)buf3) + i) = ((*(((short*)buf1) + i)) ^ (*(((short*)buf2) + i))); 
       }
-    } else return NBC_OP_NOT_SUPPORTED; 
+    } else MPI_Abort(MPI_COMM_WORLD, NBC_OP_NOT_SUPPORTED); 
   } else if(type == MPI_UNSIGNED) { 
     if(op == MPI_MIN) {
       for(i=0; i<count; i++) {
@@ -282,7 +282,7 @@ int NBC_Operation(void *buf3, void *buf1, void *buf2, MPI_Op op, MPI_Datatype ty
       for(i=0; i<count; i++) {
         *(((unsigned int*)buf3) + i) = ((*(((unsigned int*)buf1) + i)) ^ (*(((unsigned int*)buf2) + i))); 
       }
-    } else return NBC_OP_NOT_SUPPORTED; 
+    } else MPI_Abort(MPI_COMM_WORLD, NBC_OP_NOT_SUPPORTED); 
   } else if(type == MPI_UNSIGNED_LONG) { 
     if(op == MPI_MIN) {
       for(i=0; i<count; i++) {
@@ -324,7 +324,49 @@ int NBC_Operation(void *buf3, void *buf1, void *buf2, MPI_Op op, MPI_Datatype ty
       for(i=0; i<count; i++) {
         *(((unsigned long*)buf3) + i) = ((*(((unsigned long*)buf1) + i)) ^ (*(((unsigned long*)buf2) + i))); 
       }
-    } else return NBC_OP_NOT_SUPPORTED; 
+    } else MPI_Abort(MPI_COMM_WORLD, NBC_OP_NOT_SUPPORTED); 
+  } else if(type == MPI_UNSIGNED_LONG_LONG) { 
+    if(op == MPI_MIN) {
+      for(i=0; i<count; i++) {
+        if(*(((unsigned long long*)buf1) + i) > *(((unsigned long long*)buf2) + i)) *(((unsigned long long*)buf3) + i) = *(((unsigned long long*)buf2) + i); else *(((unsigned long long*)buf3) + i) = *(((unsigned long long*)buf1) + i); 
+      }
+    } else if(op == MPI_MAX) {
+      for(i=0; i<count; i++) {
+        if(*(((unsigned long long*)buf1) + i) < *(((unsigned long long*)buf2) + i)) *(((unsigned long long*)buf3) + i) = *(((unsigned long long*)buf2) + i); else *(((unsigned long long*)buf3) + i) = *(((unsigned long long*)buf1) + i); 
+      }
+    } else if(op == MPI_SUM) {
+      for(i=0; i<count; i++) {
+        *(((unsigned long long*)buf3) + i) = *(((unsigned long long*)buf1) + i) + *(((unsigned long long*)buf2) + i); 
+      }
+    } else if(op == MPI_PROD) {
+      for(i=0; i<count; i++) {
+        *(((unsigned long long*)buf3) + i) = *(((unsigned long long*)buf1) + i) * *(((unsigned long long*)buf2) + i); 
+      }
+    } else if(op == MPI_LAND) {
+      for(i=0; i<count; i++) {
+        *(((unsigned long long*)buf3) + i) = *(((unsigned long long*)buf1) + i) && *(((unsigned long long*)buf2) + i); 
+      }
+    } else if(op == MPI_BAND) {
+      for(i=0; i<count; i++) {
+        *(((unsigned long long*)buf3) + i) = *(((unsigned long long*)buf1) + i) & *(((unsigned long long*)buf2) + i); 
+      }
+    } else if(op == MPI_LOR) {
+      for(i=0; i<count; i++) {
+        *(((unsigned long long*)buf3) + i) = *(((unsigned long long*)buf1) + i) || *(((unsigned long long*)buf2) + i); 
+      }
+    } else if(op == MPI_BOR) {
+      for(i=0; i<count; i++) {
+        *(((unsigned long long*)buf3) + i) = *(((unsigned long long*)buf1) + i) | *(((unsigned long long*)buf2) + i); 
+      }
+    } else if(op == MPI_LXOR) {
+      for(i=0; i<count; i++) {
+        *(((unsigned long long*)buf3) + i) = ((*(((unsigned long long*)buf1) + i) ? 1 : 0) ^ (*(((unsigned long long*)buf2) + i) ?  1 : 0)); 
+      }
+    } else if(op == MPI_BXOR) {
+      for(i=0; i<count; i++) {
+        *(((unsigned long long*)buf3) + i) = ((*(((unsigned long long*)buf1) + i)) ^ (*(((unsigned long long*)buf2) + i))); 
+      }
+    } else MPI_Abort(MPI_COMM_WORLD, NBC_OP_NOT_SUPPORTED); 
   } else if(type == MPI_UNSIGNED_SHORT) { 
     if(op == MPI_MIN) {
       for(i=0; i<count; i++) {
@@ -366,8 +408,7 @@ int NBC_Operation(void *buf3, void *buf1, void *buf2, MPI_Op op, MPI_Datatype ty
       for(i=0; i<count; i++) {
         *(((unsigned short*)buf3) + i) = ((*(((unsigned short*)buf1) + i)) ^ (*(((unsigned short*)buf2) + i))); 
       }
-    } else return NBC_OP_NOT_SUPPORTED; 
-#ifdef MPI_INT8_T
+    } else MPI_Abort(MPI_COMM_WORLD, NBC_OP_NOT_SUPPORTED); 
   } else if(type == MPI_INT8_T) { 
     if(op == MPI_MIN) {
       for(i=0; i<count; i++) {
@@ -409,9 +450,7 @@ int NBC_Operation(void *buf3, void *buf1, void *buf2, MPI_Op op, MPI_Datatype ty
       for(i=0; i<count; i++) {
         *(((int8_t*)buf3) + i) = ((*(((int8_t*)buf1) + i)) ^ (*(((int8_t*)buf2) + i))); 
       }
-    } else return NBC_OP_NOT_SUPPORTED; 
-#endif //MPI_INT8_T
-#ifdef MPI_INT16_T
+    } else MPI_Abort(MPI_COMM_WORLD, NBC_OP_NOT_SUPPORTED); 
   } else if(type == MPI_INT16_T) { 
     if(op == MPI_MIN) {
       for(i=0; i<count; i++) {
@@ -453,9 +492,7 @@ int NBC_Operation(void *buf3, void *buf1, void *buf2, MPI_Op op, MPI_Datatype ty
       for(i=0; i<count; i++) {
         *(((int16_t*)buf3) + i) = ((*(((int16_t*)buf1) + i)) ^ (*(((int16_t*)buf2) + i))); 
       }
-    } else return NBC_OP_NOT_SUPPORTED; 
-#endif //MPI_INT16_T
-#ifdef MPI_INT32_T
+    } else MPI_Abort(MPI_COMM_WORLD, NBC_OP_NOT_SUPPORTED); 
   } else if(type == MPI_INT32_T) { 
     if(op == MPI_MIN) {
       for(i=0; i<count; i++) {
@@ -497,9 +534,7 @@ int NBC_Operation(void *buf3, void *buf1, void *buf2, MPI_Op op, MPI_Datatype ty
       for(i=0; i<count; i++) {
         *(((int32_t*)buf3) + i) = ((*(((int32_t*)buf1) + i)) ^ (*(((int32_t*)buf2) + i))); 
       }
-    } else return NBC_OP_NOT_SUPPORTED; 
-#endif //MPI_INT32_T
-#ifdef MPI_INT64_T
+    } else MPI_Abort(MPI_COMM_WORLD, NBC_OP_NOT_SUPPORTED); 
   } else if(type == MPI_INT64_T) { 
     if(op == MPI_MIN) {
       for(i=0; i<count; i++) {
@@ -541,9 +576,7 @@ int NBC_Operation(void *buf3, void *buf1, void *buf2, MPI_Op op, MPI_Datatype ty
       for(i=0; i<count; i++) {
         *(((int64_t*)buf3) + i) = ((*(((int64_t*)buf1) + i)) ^ (*(((int64_t*)buf2) + i))); 
       }
-    } else return NBC_OP_NOT_SUPPORTED; 
-#endif //MPI_INT64_T
-#ifdef MPI_UINT8_T
+    } else MPI_Abort(MPI_COMM_WORLD, NBC_OP_NOT_SUPPORTED); 
   } else if(type == MPI_UINT8_T) { 
     if(op == MPI_MIN) {
       for(i=0; i<count; i++) {
@@ -585,9 +618,7 @@ int NBC_Operation(void *buf3, void *buf1, void *buf2, MPI_Op op, MPI_Datatype ty
       for(i=0; i<count; i++) {
         *(((uint8_t*)buf3) + i) = ((*(((uint8_t*)buf1) + i)) ^ (*(((uint8_t*)buf2) + i))); 
       }
-    } else return NBC_OP_NOT_SUPPORTED; 
-#endif //MPI_UINT8_T
-#ifdef MPI_UINT16_T
+    } else MPI_Abort(MPI_COMM_WORLD, NBC_OP_NOT_SUPPORTED); 
   } else if(type == MPI_UINT16_T) { 
     if(op == MPI_MIN) {
       for(i=0; i<count; i++) {
@@ -629,9 +660,7 @@ int NBC_Operation(void *buf3, void *buf1, void *buf2, MPI_Op op, MPI_Datatype ty
       for(i=0; i<count; i++) {
         *(((uint16_t*)buf3) + i) = ((*(((uint16_t*)buf1) + i)) ^ (*(((uint16_t*)buf2) + i))); 
       }
-    } else return NBC_OP_NOT_SUPPORTED; 
-#endif //MPI_UINT16_T
-#ifdef MPI_UINT32_T
+    } else MPI_Abort(MPI_COMM_WORLD, NBC_OP_NOT_SUPPORTED); 
   } else if(type == MPI_UINT32_T) { 
     if(op == MPI_MIN) {
       for(i=0; i<count; i++) {
@@ -673,9 +702,7 @@ int NBC_Operation(void *buf3, void *buf1, void *buf2, MPI_Op op, MPI_Datatype ty
       for(i=0; i<count; i++) {
         *(((uint32_t*)buf3) + i) = ((*(((uint32_t*)buf1) + i)) ^ (*(((uint32_t*)buf2) + i))); 
       }
-    } else return NBC_OP_NOT_SUPPORTED; 
-#endif //MPI_UINT32_T
-#ifdef MPI_UINT64_T
+    } else MPI_Abort(MPI_COMM_WORLD, NBC_OP_NOT_SUPPORTED); 
   } else if(type == MPI_UINT64_T) { 
     if(op == MPI_MIN) {
       for(i=0; i<count; i++) {
@@ -717,8 +744,7 @@ int NBC_Operation(void *buf3, void *buf1, void *buf2, MPI_Op op, MPI_Datatype ty
       for(i=0; i<count; i++) {
         *(((uint64_t*)buf3) + i) = ((*(((uint64_t*)buf1) + i)) ^ (*(((uint64_t*)buf2) + i))); 
       }
-    } else return NBC_OP_NOT_SUPPORTED; 
-#endif //MPI_UINT64_T
+    } else MPI_Abort(MPI_COMM_WORLD, NBC_OP_NOT_SUPPORTED); 
   } else if(type == MPI_FLOAT) { 
     if(op == MPI_MIN) {
       for(i=0; i<count; i++) {
@@ -736,7 +762,7 @@ int NBC_Operation(void *buf3, void *buf1, void *buf2, MPI_Op op, MPI_Datatype ty
       for(i=0; i<count; i++) {
         *(((float*)buf3) + i) = *(((float*)buf1) + i) * *(((float*)buf2) + i); 
       }
-    } else return NBC_OP_NOT_SUPPORTED; 
+    } else MPI_Abort(MPI_COMM_WORLD, NBC_OP_NOT_SUPPORTED); 
   } else if(type == MPI_DOUBLE) { 
     if(op == MPI_MIN) {
       for(i=0; i<count; i++) {
@@ -754,7 +780,7 @@ int NBC_Operation(void *buf3, void *buf1, void *buf2, MPI_Op op, MPI_Datatype ty
       for(i=0; i<count; i++) {
         *(((double*)buf3) + i) = *(((double*)buf1) + i) * *(((double*)buf2) + i); 
       }
-    } else return NBC_OP_NOT_SUPPORTED; 
+    } else MPI_Abort(MPI_COMM_WORLD, NBC_OP_NOT_SUPPORTED); 
   } else if(type == MPI_LONG_DOUBLE) { 
     if(op == MPI_MIN) {
       for(i=0; i<count; i++) {
@@ -772,7 +798,7 @@ int NBC_Operation(void *buf3, void *buf1, void *buf2, MPI_Op op, MPI_Datatype ty
       for(i=0; i<count; i++) {
         *(((long double*)buf3) + i) = *(((long double*)buf1) + i) * *(((long double*)buf2) + i); 
       }
-    } else return NBC_OP_NOT_SUPPORTED; 
+    } else MPI_Abort(MPI_COMM_WORLD, NBC_OP_NOT_SUPPORTED); 
   } else if(type == MPI_BYTE) { 
     if(op == MPI_BAND) {
       for(i=0; i<count; i++) {
@@ -786,7 +812,49 @@ int NBC_Operation(void *buf3, void *buf1, void *buf2, MPI_Op op, MPI_Datatype ty
       for(i=0; i<count; i++) {
         *(((char*)buf3) + i) = ((*(((char*)buf1) + i)) ^ (*(((char*)buf2) + i))); 
       }
-    } else return NBC_OP_NOT_SUPPORTED; 
+    } else MPI_Abort(MPI_COMM_WORLD, NBC_OP_NOT_SUPPORTED); 
+  } else if(type == MPI_CHAR) { 
+    if(op == MPI_BAND) {
+      for(i=0; i<count; i++) {
+        *(((char*)buf3) + i) = *(((char*)buf1) + i) & *(((char*)buf2) + i); 
+      }
+    } else if(op == MPI_BOR) {
+      for(i=0; i<count; i++) {
+        *(((char*)buf3) + i) = *(((char*)buf1) + i) | *(((char*)buf2) + i); 
+      }
+    } else if(op == MPI_BXOR) {
+      for(i=0; i<count; i++) {
+        *(((char*)buf3) + i) = ((*(((char*)buf1) + i)) ^ (*(((char*)buf2) + i))); 
+      }
+    } else MPI_Abort(MPI_COMM_WORLD, NBC_OP_NOT_SUPPORTED); 
+  } else if(type == MPI_SIGNED_CHAR) { 
+    if(op == MPI_BAND) {
+      for(i=0; i<count; i++) {
+        *(((signed char*)buf3) + i) = *(((signed char*)buf1) + i) & *(((signed char*)buf2) + i); 
+      }
+    } else if(op == MPI_BOR) {
+      for(i=0; i<count; i++) {
+        *(((signed char*)buf3) + i) = *(((signed char*)buf1) + i) | *(((signed char*)buf2) + i); 
+      }
+    } else if(op == MPI_BXOR) {
+      for(i=0; i<count; i++) {
+        *(((signed char*)buf3) + i) = ((*(((signed char*)buf1) + i)) ^ (*(((signed char*)buf2) + i))); 
+      }
+    } else MPI_Abort(MPI_COMM_WORLD, NBC_OP_NOT_SUPPORTED); 
+  } else if(type == MPI_UNSIGNED_CHAR) { 
+    if(op == MPI_BAND) {
+      for(i=0; i<count; i++) {
+        *(((unsigned char*)buf3) + i) = *(((unsigned char*)buf1) + i) & *(((unsigned char*)buf2) + i); 
+      }
+    } else if(op == MPI_BOR) {
+      for(i=0; i<count; i++) {
+        *(((unsigned char*)buf3) + i) = *(((unsigned char*)buf1) + i) | *(((unsigned char*)buf2) + i); 
+      }
+    } else if(op == MPI_BXOR) {
+      for(i=0; i<count; i++) {
+        *(((unsigned char*)buf3) + i) = ((*(((unsigned char*)buf1) + i)) ^ (*(((unsigned char*)buf2) + i))); 
+      }
+    } else MPI_Abort(MPI_COMM_WORLD, NBC_OP_NOT_SUPPORTED); 
   } else if(type == MPI_FLOAT_INT) { 
     if(op == MPI_MAXLOC) {
       for(i=0; i<count; i++) {
@@ -824,7 +892,7 @@ int NBC_Operation(void *buf3, void *buf1, void *buf2, MPI_Op op, MPI_Datatype ty
           ptr3->val = ptr1->val; ptr3->rank = ptr1->rank; 
         } 
       }  
-    } else return NBC_OP_NOT_SUPPORTED; 
+    } else MPI_Abort(MPI_COMM_WORLD, NBC_OP_NOT_SUPPORTED); 
   } else if(type == MPI_DOUBLE_INT) { 
     if(op == MPI_MAXLOC) {
       for(i=0; i<count; i++) {
@@ -862,7 +930,7 @@ int NBC_Operation(void *buf3, void *buf1, void *buf2, MPI_Op op, MPI_Datatype ty
           ptr3->val = ptr1->val; ptr3->rank = ptr1->rank; 
         } 
       }  
-    } else return NBC_OP_NOT_SUPPORTED; 
+    } else MPI_Abort(MPI_COMM_WORLD, NBC_OP_NOT_SUPPORTED); 
   } else if(type == MPI_LONG_INT) { 
     if(op == MPI_MAXLOC) {
       for(i=0; i<count; i++) {
@@ -900,7 +968,7 @@ int NBC_Operation(void *buf3, void *buf1, void *buf2, MPI_Op op, MPI_Datatype ty
           ptr3->val = ptr1->val; ptr3->rank = ptr1->rank; 
         } 
       }  
-    } else return NBC_OP_NOT_SUPPORTED; 
+    } else MPI_Abort(MPI_COMM_WORLD, NBC_OP_NOT_SUPPORTED); 
   } else if(type == MPI_2INT) { 
     if(op == MPI_MAXLOC) {
       for(i=0; i<count; i++) {
@@ -938,7 +1006,7 @@ int NBC_Operation(void *buf3, void *buf1, void *buf2, MPI_Op op, MPI_Datatype ty
           ptr3->val = ptr1->val; ptr3->rank = ptr1->rank; 
         } 
       }  
-    } else return NBC_OP_NOT_SUPPORTED; 
+    } else MPI_Abort(MPI_COMM_WORLD, NBC_OP_NOT_SUPPORTED); 
   } else if(type == MPI_SHORT_INT) { 
     if(op == MPI_MAXLOC) {
       for(i=0; i<count; i++) {
@@ -976,7 +1044,7 @@ int NBC_Operation(void *buf3, void *buf1, void *buf2, MPI_Op op, MPI_Datatype ty
           ptr3->val = ptr1->val; ptr3->rank = ptr1->rank; 
         } 
       }  
-    } else return NBC_OP_NOT_SUPPORTED; 
+    } else MPI_Abort(MPI_COMM_WORLD, NBC_OP_NOT_SUPPORTED); 
   } else if(type == MPI_LONG_DOUBLE_INT) { 
     if(op == MPI_MAXLOC) {
       for(i=0; i<count; i++) {
@@ -1014,8 +1082,8 @@ int NBC_Operation(void *buf3, void *buf1, void *buf2, MPI_Op op, MPI_Datatype ty
           ptr3->val = ptr1->val; ptr3->rank = ptr1->rank; 
         } 
       }  
-    } else return NBC_OP_NOT_SUPPORTED; 
-  } else return NBC_DATATYPE_NOT_SUPPORTED;
+    } else MPI_Abort(MPI_COMM_WORLD, NBC_OP_NOT_SUPPORTED); 
+  } else MPI_Abort(MPI_COMM_WORLD, NBC_DATATYPE_NOT_SUPPORTED);
   
   return NBC_OK;
 }

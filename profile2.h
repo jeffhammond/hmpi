@@ -343,13 +343,11 @@ static void __PROFILE_SHOW_REDUCE(const char* name, struct profile_vars_t* v)
     HMPI_Comm_rank(HMPI_COMM_WORLD, &rank);
     HMPI_Comm_size(HMPI_COMM_WORLD, &size);
 
-    //HMPI doesnt have reduce right now
-    HMPI_Allreduce(&v->count, &r_count, 1,
-            MPI_UNSIGNED_LONG_LONG, MPI_SUM, HMPI_COMM_WORLD);
-    HMPI_Allreduce(&v->time, &r_time, 1,
-            MPI_UNSIGNED_LONG_LONG, MPI_SUM, HMPI_COMM_WORLD);
-    HMPI_Allreduce(&a, &r_avg, 1,
-            MPI_DOUBLE, MPI_SUM, HMPI_COMM_WORLD);
+    HMPI_Reduce(&v->count, &r_count, 1,
+            MPI_UNSIGNED_LONG_LONG, MPI_SUM, 0, HMPI_COMM_WORLD);
+    HMPI_Reduce(&v->time, &r_time, 1,
+            MPI_UNSIGNED_LONG_LONG, MPI_SUM, 0, HMPI_COMM_WORLD);
+    HMPI_Reduce(&a, &r_avg, 1, MPI_DOUBLE, MPI_SUM, 0, HMPI_COMM_WORLD);
 #endif
 
 
@@ -380,14 +378,14 @@ static void __PROFILE_SHOW_REDUCE(const char* name, struct profile_vars_t* v)
 #elif _PROFILE_HMPI == 1
     //printf("allreduce %p %p %d\n", v->ctrs, rtc, NUM_EVENTS);
     //fflush(stdout);
-    HMPI_Allreduce(v->ctrs, rtc, NUM_EVENTS,
-            MPI_UNSIGNED_LONG_LONG, MPI_SUM, HMPI_COMM_WORLD);
-    HMPI_Allreduce(&avg_ctr, rac, NUM_EVENTS,
-            MPI_DOUBLE, MPI_SUM, HMPI_COMM_WORLD);
-    HMPI_Allreduce(v->ctr_min, min_ctr, NUM_EVENTS,
-            MPI_UNSIGNED_LONG_LONG, MPI_MIN, HMPI_COMM_WORLD);
-    HMPI_Allreduce(v->ctr_max, max_ctr, NUM_EVENTS,
-            MPI_UNSIGNED_LONG_LONG, MPI_MAX, HMPI_COMM_WORLD);
+    HMPI_Reduce(v->ctrs, rtc, NUM_EVENTS,
+            MPI_UNSIGNED_LONG_LONG, MPI_SUM, 0, HMPI_COMM_WORLD);
+    HMPI_Reduce(&avg_ctr, rac, NUM_EVENTS,
+            MPI_DOUBLE, MPI_SUM, 0, HMPI_COMM_WORLD);
+    HMPI_Reduce(v->ctr_min, min_ctr, NUM_EVENTS,
+            MPI_UNSIGNED_LONG_LONG, MPI_MIN, 0, HMPI_COMM_WORLD);
+    HMPI_Reduce(v->ctr_max, max_ctr, NUM_EVENTS,
+            MPI_UNSIGNED_LONG_LONG, MPI_MAX, 0, HMPI_COMM_WORLD);
 #endif
 
 #endif

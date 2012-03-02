@@ -164,185 +164,207 @@ define(m4_OPTYPE_MPI_INT, `define(m4_CTYPE_$1, `int')dnl
 m4_IF(MPI_MIN, $1) else m4_IF(MPI_MAX, $1) else dnl
 m4_IF(MPI_SUM, $1) else m4_IF(MPI_PROD, $1) else m4_IF(MPI_LAND, $1) else dnl
 m4_IF(MPI_BAND, $1) else m4_IF(MPI_LOR, $1) else m4_IF(MPI_BOR, $1) else dnl
-m4_IF(MPI_LXOR, $1) else m4_IF(MPI_BXOR, $1) else return NBC_OP_NOT_SUPPORTED;')dnl
+m4_IF(MPI_LXOR, $1) else m4_IF(MPI_BXOR, $1) else MPI_Abort(MPI_COMM_WORLD, NBC_OP_NOT_SUPPORTED);')dnl
 dnl
 dnl ####### MPI_INTEGER ########
 define(m4_OPTYPE_MPI_INTEGER, `define(m4_CTYPE_$1, `int')dnl
 m4_IF(MPI_MIN, $1) else m4_IF(MPI_MAX, $1) else dnl
 m4_IF(MPI_SUM, $1) else m4_IF(MPI_PROD, $1) else m4_IF(MPI_LAND, $1) else dnl
 m4_IF(MPI_BAND, $1) else m4_IF(MPI_LOR, $1) else m4_IF(MPI_BOR, $1) else dnl
-m4_IF(MPI_LXOR, $1) else m4_IF(MPI_BXOR, $1) else return NBC_OP_NOT_SUPPORTED;')dnl
+m4_IF(MPI_LXOR, $1) else m4_IF(MPI_BXOR, $1) else MPI_Abort(MPI_COMM_WORLD, NBC_OP_NOT_SUPPORTED);')dnl
 dnl
 dnl ####### MPI_LONG ########
 define(m4_OPTYPE_MPI_LONG, `define(m4_CTYPE_$1, `long')dnl
 m4_IF(MPI_MIN, $1) else m4_IF(MPI_MAX, $1) else dnl
 m4_IF(MPI_SUM, $1) else m4_IF(MPI_PROD, $1) else m4_IF(MPI_LAND, $1) else dnl
 m4_IF(MPI_BAND, $1) else m4_IF(MPI_LOR, $1) else m4_IF(MPI_BOR, $1) else dnl
-m4_IF(MPI_LXOR, $1) else m4_IF(MPI_BXOR, $1) else return NBC_OP_NOT_SUPPORTED;')dnl
+m4_IF(MPI_LXOR, $1) else m4_IF(MPI_BXOR, $1) else MPI_Abort(MPI_COMM_WORLD, NBC_OP_NOT_SUPPORTED);')dnl
 dnl
 dnl ####### MPI_LONG_LONG ########
 define(m4_OPTYPE_MPI_LONG_LONG, `define(m4_CTYPE_$1, `long long')dnl
 m4_IF(MPI_MIN, $1) else m4_IF(MPI_MAX, $1) else dnl
 m4_IF(MPI_SUM, $1) else m4_IF(MPI_PROD, $1) else m4_IF(MPI_LAND, $1) else dnl
 m4_IF(MPI_BAND, $1) else m4_IF(MPI_LOR, $1) else m4_IF(MPI_BOR, $1) else dnl
-m4_IF(MPI_LXOR, $1) else m4_IF(MPI_BXOR, $1) else return NBC_OP_NOT_SUPPORTED;')dnl
+m4_IF(MPI_LXOR, $1) else m4_IF(MPI_BXOR, $1) else MPI_Abort(MPI_COMM_WORLD, NBC_OP_NOT_SUPPORTED);')dnl
 dnl
 dnl ####### MPI_LONG_LONG_INT ########
 define(m4_OPTYPE_MPI_LONG_LONG_INT, `define(m4_CTYPE_$1, `long long int')dnl
 m4_IF(MPI_MIN, $1) else m4_IF(MPI_MAX, $1) else dnl
 m4_IF(MPI_SUM, $1) else m4_IF(MPI_PROD, $1) else m4_IF(MPI_LAND, $1) else dnl
 m4_IF(MPI_BAND, $1) else m4_IF(MPI_LOR, $1) else m4_IF(MPI_BOR, $1) else dnl
-m4_IF(MPI_LXOR, $1) else m4_IF(MPI_BXOR, $1) else return NBC_OP_NOT_SUPPORTED;')dnl
+m4_IF(MPI_LXOR, $1) else m4_IF(MPI_BXOR, $1) else MPI_Abort(MPI_COMM_WORLD, NBC_OP_NOT_SUPPORTED);')dnl
 dnl
 dnl ####### MPI_SHORT ########
 define(m4_OPTYPE_MPI_SHORT, `define(m4_CTYPE_$1, `short')dnl
 m4_IF(MPI_MIN, $1) else m4_IF(MPI_MAX, $1) else dnl
 m4_IF(MPI_SUM, $1) else m4_IF(MPI_PROD, $1) else m4_IF(MPI_LAND, $1) else dnl
 m4_IF(MPI_BAND, $1) else m4_IF(MPI_LOR, $1) else m4_IF(MPI_BOR, $1) else dnl
-m4_IF(MPI_LXOR, $1) else m4_IF(MPI_BXOR, $1) else return NBC_OP_NOT_SUPPORTED;')dnl
+m4_IF(MPI_LXOR, $1) else m4_IF(MPI_BXOR, $1) else MPI_Abort(MPI_COMM_WORLD, NBC_OP_NOT_SUPPORTED);')dnl
 dnl
 dnl ####### MPI_UNSIGNED ########
 define(m4_OPTYPE_MPI_UNSIGNED, `define(m4_CTYPE_$1, `unsigned int')dnl
 m4_IF(MPI_MIN, $1) else m4_IF(MPI_MAX, $1) else dnl
 m4_IF(MPI_SUM, $1) else m4_IF(MPI_PROD, $1) else m4_IF(MPI_LAND, $1) else dnl
 m4_IF(MPI_BAND, $1) else m4_IF(MPI_LOR, $1) else m4_IF(MPI_BOR, $1) else dnl
-m4_IF(MPI_LXOR, $1) else m4_IF(MPI_BXOR, $1) else return NBC_OP_NOT_SUPPORTED;')dnl
+m4_IF(MPI_LXOR, $1) else m4_IF(MPI_BXOR, $1) else MPI_Abort(MPI_COMM_WORLD, NBC_OP_NOT_SUPPORTED);')dnl
 dnl
 dnl ####### MPI_UNSIGNED_LONG ########
 define(m4_OPTYPE_MPI_UNSIGNED_LONG, `define(m4_CTYPE_$1, `unsigned long')dnl
 m4_IF(MPI_MIN, $1) else m4_IF(MPI_MAX, $1) else dnl
 m4_IF(MPI_SUM, $1) else m4_IF(MPI_PROD, $1) else m4_IF(MPI_LAND, $1) else dnl
 m4_IF(MPI_BAND, $1) else m4_IF(MPI_LOR, $1) else m4_IF(MPI_BOR, $1) else dnl
-m4_IF(MPI_LXOR, $1) else m4_IF(MPI_BXOR, $1) else return NBC_OP_NOT_SUPPORTED;')dnl
+m4_IF(MPI_LXOR, $1) else m4_IF(MPI_BXOR, $1) else MPI_Abort(MPI_COMM_WORLD, NBC_OP_NOT_SUPPORTED);')dnl
+dnl
+dnl ####### MPI_UNSIGNED_LONG_LONG ########
+define(m4_OPTYPE_MPI_UNSIGNED_LONG_LONG, `define(m4_CTYPE_$1, `unsigned long long')dnl
+m4_IF(MPI_MIN, $1) else m4_IF(MPI_MAX, $1) else dnl
+m4_IF(MPI_SUM, $1) else m4_IF(MPI_PROD, $1) else m4_IF(MPI_LAND, $1) else dnl
+m4_IF(MPI_BAND, $1) else m4_IF(MPI_LOR, $1) else m4_IF(MPI_BOR, $1) else dnl
+m4_IF(MPI_LXOR, $1) else m4_IF(MPI_BXOR, $1) else MPI_Abort(MPI_COMM_WORLD, NBC_OP_NOT_SUPPORTED);')dnl
 dnl
 dnl ####### MPI_UNSIGNED_SHORT ########
 define(m4_OPTYPE_MPI_UNSIGNED_SHORT, `define(m4_CTYPE_$1, `unsigned short')dnl
 m4_IF(MPI_MIN, $1) else m4_IF(MPI_MAX, $1) else dnl
 m4_IF(MPI_SUM, $1) else m4_IF(MPI_PROD, $1) else m4_IF(MPI_LAND, $1) else dnl
 m4_IF(MPI_BAND, $1) else m4_IF(MPI_LOR, $1) else m4_IF(MPI_BOR, $1) else dnl
-m4_IF(MPI_LXOR, $1) else m4_IF(MPI_BXOR, $1) else return NBC_OP_NOT_SUPPORTED;')dnl
+m4_IF(MPI_LXOR, $1) else m4_IF(MPI_BXOR, $1) else MPI_Abort(MPI_COMM_WORLD, NBC_OP_NOT_SUPPORTED);')dnl
 dnl
 dnl ####### MPI_INT8_T ########
 define(m4_OPTYPE_MPI_INT8_T, `define(m4_CTYPE_$1, `int8_t')dnl
 m4_IF(MPI_MIN, $1) else m4_IF(MPI_MAX, $1) else dnl
 m4_IF(MPI_SUM, $1) else m4_IF(MPI_PROD, $1) else m4_IF(MPI_LAND, $1) else dnl
 m4_IF(MPI_BAND, $1) else m4_IF(MPI_LOR, $1) else m4_IF(MPI_BOR, $1) else dnl
-m4_IF(MPI_LXOR, $1) else m4_IF(MPI_BXOR, $1) else return NBC_OP_NOT_SUPPORTED;')dnl
+m4_IF(MPI_LXOR, $1) else m4_IF(MPI_BXOR, $1) else MPI_Abort(MPI_COMM_WORLD, NBC_OP_NOT_SUPPORTED);')dnl
 dnl
 dnl ####### MPI_INT16_T ########
 define(m4_OPTYPE_MPI_INT16_T, `define(m4_CTYPE_$1, `int16_t')dnl
 m4_IF(MPI_MIN, $1) else m4_IF(MPI_MAX, $1) else dnl
 m4_IF(MPI_SUM, $1) else m4_IF(MPI_PROD, $1) else m4_IF(MPI_LAND, $1) else dnl
 m4_IF(MPI_BAND, $1) else m4_IF(MPI_LOR, $1) else m4_IF(MPI_BOR, $1) else dnl
-m4_IF(MPI_LXOR, $1) else m4_IF(MPI_BXOR, $1) else return NBC_OP_NOT_SUPPORTED;')dnl
+m4_IF(MPI_LXOR, $1) else m4_IF(MPI_BXOR, $1) else MPI_Abort(MPI_COMM_WORLD, NBC_OP_NOT_SUPPORTED);')dnl
 dnl
 dnl ####### MPI_INT32_T ########
 define(m4_OPTYPE_MPI_INT32_T, `define(m4_CTYPE_$1, `int32_t')dnl
 m4_IF(MPI_MIN, $1) else m4_IF(MPI_MAX, $1) else dnl
 m4_IF(MPI_SUM, $1) else m4_IF(MPI_PROD, $1) else m4_IF(MPI_LAND, $1) else dnl
 m4_IF(MPI_BAND, $1) else m4_IF(MPI_LOR, $1) else m4_IF(MPI_BOR, $1) else dnl
-m4_IF(MPI_LXOR, $1) else m4_IF(MPI_BXOR, $1) else return NBC_OP_NOT_SUPPORTED;')dnl
+m4_IF(MPI_LXOR, $1) else m4_IF(MPI_BXOR, $1) else MPI_Abort(MPI_COMM_WORLD, NBC_OP_NOT_SUPPORTED);')dnl
 dnl
 dnl ####### MPI_INT64_T ########
 define(m4_OPTYPE_MPI_INT64_T, `define(m4_CTYPE_$1, `int64_t')dnl
 m4_IF(MPI_MIN, $1) else m4_IF(MPI_MAX, $1) else dnl
 m4_IF(MPI_SUM, $1) else m4_IF(MPI_PROD, $1) else m4_IF(MPI_LAND, $1) else dnl
 m4_IF(MPI_BAND, $1) else m4_IF(MPI_LOR, $1) else m4_IF(MPI_BOR, $1) else dnl
-m4_IF(MPI_LXOR, $1) else m4_IF(MPI_BXOR, $1) else return NBC_OP_NOT_SUPPORTED;')dnl
+m4_IF(MPI_LXOR, $1) else m4_IF(MPI_BXOR, $1) else MPI_Abort(MPI_COMM_WORLD, NBC_OP_NOT_SUPPORTED);')dnl
 dnl
 dnl ####### MPI_UINT8_T ########
 define(m4_OPTYPE_MPI_UINT8_T, `define(m4_CTYPE_$1, `uint8_t')dnl
 m4_IF(MPI_MIN, $1) else m4_IF(MPI_MAX, $1) else dnl
 m4_IF(MPI_SUM, $1) else m4_IF(MPI_PROD, $1) else m4_IF(MPI_LAND, $1) else dnl
 m4_IF(MPI_BAND, $1) else m4_IF(MPI_LOR, $1) else m4_IF(MPI_BOR, $1) else dnl
-m4_IF(MPI_LXOR, $1) else m4_IF(MPI_BXOR, $1) else return NBC_OP_NOT_SUPPORTED;')dnl
+m4_IF(MPI_LXOR, $1) else m4_IF(MPI_BXOR, $1) else MPI_Abort(MPI_COMM_WORLD, NBC_OP_NOT_SUPPORTED);')dnl
 dnl
 dnl ####### MPI_UINT16_T ########
 define(m4_OPTYPE_MPI_UINT16_T, `define(m4_CTYPE_$1, `uint16_t')dnl
 m4_IF(MPI_MIN, $1) else m4_IF(MPI_MAX, $1) else dnl
 m4_IF(MPI_SUM, $1) else m4_IF(MPI_PROD, $1) else m4_IF(MPI_LAND, $1) else dnl
 m4_IF(MPI_BAND, $1) else m4_IF(MPI_LOR, $1) else m4_IF(MPI_BOR, $1) else dnl
-m4_IF(MPI_LXOR, $1) else m4_IF(MPI_BXOR, $1) else return NBC_OP_NOT_SUPPORTED;')dnl
+m4_IF(MPI_LXOR, $1) else m4_IF(MPI_BXOR, $1) else MPI_Abort(MPI_COMM_WORLD, NBC_OP_NOT_SUPPORTED);')dnl
 dnl
 dnl ####### MPI_UINT32_T ########
 define(m4_OPTYPE_MPI_UINT32_T, `define(m4_CTYPE_$1, `uint32_t')dnl
 m4_IF(MPI_MIN, $1) else m4_IF(MPI_MAX, $1) else dnl
 m4_IF(MPI_SUM, $1) else m4_IF(MPI_PROD, $1) else m4_IF(MPI_LAND, $1) else dnl
 m4_IF(MPI_BAND, $1) else m4_IF(MPI_LOR, $1) else m4_IF(MPI_BOR, $1) else dnl
-m4_IF(MPI_LXOR, $1) else m4_IF(MPI_BXOR, $1) else return NBC_OP_NOT_SUPPORTED;')dnl
+m4_IF(MPI_LXOR, $1) else m4_IF(MPI_BXOR, $1) else MPI_Abort(MPI_COMM_WORLD, NBC_OP_NOT_SUPPORTED);')dnl
 dnl
 dnl ####### MPI_UINT64_T ########
 define(m4_OPTYPE_MPI_UINT64_T, `define(m4_CTYPE_$1, `uint64_t')dnl
 m4_IF(MPI_MIN, $1) else m4_IF(MPI_MAX, $1) else dnl
 m4_IF(MPI_SUM, $1) else m4_IF(MPI_PROD, $1) else m4_IF(MPI_LAND, $1) else dnl
 m4_IF(MPI_BAND, $1) else m4_IF(MPI_LOR, $1) else m4_IF(MPI_BOR, $1) else dnl
-m4_IF(MPI_LXOR, $1) else m4_IF(MPI_BXOR, $1) else return NBC_OP_NOT_SUPPORTED;')dnl
+m4_IF(MPI_LXOR, $1) else m4_IF(MPI_BXOR, $1) else MPI_Abort(MPI_COMM_WORLD, NBC_OP_NOT_SUPPORTED);')dnl
 dnl
 dnl ####### MPI_FLOAT ########
 define(m4_OPTYPE_MPI_FLOAT, `define(m4_CTYPE_$1, `float')dnl
 m4_IF(MPI_MIN, $1) else m4_IF(MPI_MAX, $1) else dnl
-m4_IF(MPI_SUM, $1) else m4_IF(MPI_PROD, $1) else return NBC_OP_NOT_SUPPORTED;')dnl
+m4_IF(MPI_SUM, $1) else m4_IF(MPI_PROD, $1) else MPI_Abort(MPI_COMM_WORLD, NBC_OP_NOT_SUPPORTED);')dnl
 dnl
 dnl ####### MPI_REAL ########
 define(m4_OPTYPE_MPI_REAL, `define(m4_CTYPE_$1, `float')dnl
 m4_IF(MPI_MIN, $1) else m4_IF(MPI_MAX, $1) else dnl
-m4_IF(MPI_SUM, $1) else m4_IF(MPI_PROD, $1) else return NBC_OP_NOT_SUPPORTED;')dnl
+m4_IF(MPI_SUM, $1) else m4_IF(MPI_PROD, $1) else MPI_Abort(MPI_COMM_WORLD, NBC_OP_NOT_SUPPORTED);')dnl
 dnl
 dnl ####### MPI_DOUBLE ########
 define(m4_OPTYPE_MPI_DOUBLE, `define(m4_CTYPE_$1, `double')dnl
 m4_IF(MPI_MIN, $1) else m4_IF(MPI_MAX, $1) else dnl
-m4_IF(MPI_SUM, $1) else m4_IF(MPI_PROD, $1) else return NBC_OP_NOT_SUPPORTED;')dnl
+m4_IF(MPI_SUM, $1) else m4_IF(MPI_PROD, $1) else MPI_Abort(MPI_COMM_WORLD, NBC_OP_NOT_SUPPORTED);')dnl
 dnl
 dnl ####### MPI_DOUBLE_PRECISION ########
 define(m4_OPTYPE_MPI_DOUBLE_PRECISION, `define(m4_CTYPE_$1, `double')dnl
 m4_IF(MPI_MIN, $1) else m4_IF(MPI_MAX, $1) else dnl
-m4_IF(MPI_SUM, $1) else m4_IF(MPI_PROD, $1) else return NBC_OP_NOT_SUPPORTED;')dnl
+m4_IF(MPI_SUM, $1) else m4_IF(MPI_PROD, $1) else MPI_Abort(MPI_COMM_WORLD, NBC_OP_NOT_SUPPORTED);')dnl
 dnl
 dnl ####### MPI_LONG_DOUBLE ########
 define(m4_OPTYPE_MPI_LONG_DOUBLE, `define(m4_CTYPE_$1, `long double')dnl
 m4_IF(MPI_MIN, $1) else m4_IF(MPI_MAX, $1) else dnl
-m4_IF(MPI_SUM, $1) else m4_IF(MPI_PROD, $1) else return NBC_OP_NOT_SUPPORTED;')dnl
+m4_IF(MPI_SUM, $1) else m4_IF(MPI_PROD, $1) else MPI_Abort(MPI_COMM_WORLD, NBC_OP_NOT_SUPPORTED);')dnl
 dnl
 dnl ####### MPI_BYTE ########
 define(m4_OPTYPE_MPI_BYTE, `define(m4_CTYPE_$1, `char')dnl
 m4_IF(MPI_BAND, $1) else m4_IF(MPI_BOR, $1) else dnl
-m4_IF(MPI_BXOR, $1) else return NBC_OP_NOT_SUPPORTED;')dnl
+m4_IF(MPI_BXOR, $1) else MPI_Abort(MPI_COMM_WORLD, NBC_OP_NOT_SUPPORTED);')dnl
+dnl
+dnl ####### MPI_CHAR ########
+define(m4_OPTYPE_MPI_CHAR, `define(m4_CTYPE_$1, `char')dnl
+m4_IF(MPI_BAND, $1) else m4_IF(MPI_BOR, $1) else dnl
+m4_IF(MPI_BXOR, $1) else MPI_Abort(MPI_COMM_WORLD, NBC_OP_NOT_SUPPORTED);')dnl
+dnl
+dnl ####### MPI_SIGNED_CHAR ########
+define(m4_OPTYPE_MPI_SIGNED_CHAR, `define(m4_CTYPE_$1, `signed char')dnl
+m4_IF(MPI_BAND, $1) else m4_IF(MPI_BOR, $1) else dnl
+m4_IF(MPI_BXOR, $1) else MPI_Abort(MPI_COMM_WORLD, NBC_OP_NOT_SUPPORTED);')dnl
+dnl
+dnl ####### MPI_UNSIGNED_CHAR ########
+define(m4_OPTYPE_MPI_UNSIGNED_CHAR, `define(m4_CTYPE_$1, `unsigned char')dnl
+m4_IF(MPI_BAND, $1) else m4_IF(MPI_BOR, $1) else dnl
+m4_IF(MPI_BXOR, $1) else MPI_Abort(MPI_COMM_WORLD, NBC_OP_NOT_SUPPORTED);')dnl
 dnl
 dnl ####### MPI_COMPLEX ########
 define(m4_OPTYPE_MPI_COMPLEX, `define(m4_CTYPE1_$1, `float')define(m4_CTYPE2_$1, `floatcplx')dnl
-m4_COMPSUMIF($1) else m4_COMPPRODIF($1) else return NBC_OP_NOT_SUPPORTED;')dnl
+m4_COMPSUMIF($1) else m4_COMPPRODIF($1) else MPI_Abort(MPI_COMM_WORLD, NBC_OP_NOT_SUPPORTED);')dnl
 dnl
 dnl ####### MPI_DOUBLE_COMPLEX ########
 define(m4_OPTYPE_MPI_DOUBLE_COMPLEX, `define(m4_CTYPE1_$1, `double')define(m4_CTYPE2_$1, `doublecplx')dnl
-m4_COMPSUMIF($1) else m4_COMPPRODIF($1) else return NBC_OP_NOT_SUPPORTED;')dnl
+m4_COMPSUMIF($1) else m4_COMPPRODIF($1) else MPI_Abort(MPI_COMM_WORLD, NBC_OP_NOT_SUPPORTED);')dnl
 dnl
 dnl ####### MPI_LOGICAL ########
 define(m4_OPTYPE_MPI_LOGICAL, `define(m4_CTYPE_$1, `char')dnl
-m4_IF(MPI_LAND, $1) else m4_IF(MPI_LOR, $1) else m4_IF(MPI_LXOR, $1) return NBC_OP_NOT_SUPPORTED;')dnl
+m4_IF(MPI_LAND, $1) else m4_IF(MPI_LOR, $1) else m4_IF(MPI_LXOR, $1) MPI_Abort(MPI_COMM_WORLD, NBC_OP_NOT_SUPPORTED);')dnl
 dnl
 dnl ####### MPI_FLOAT_INT ########
 define(m4_OPTYPE_MPI_FLOAT_INT, `define(m4_CTYPE1_$1, `float')define(m4_CTYPE2_$1, `int')define(m4_CTYPE3_$1, `float_int')dnl
-m4_LOCIF(MPI_MAXLOC, $1) else m4_LOCIF(MPI_MINLOC, $1) else return NBC_OP_NOT_SUPPORTED;')dnl
+m4_LOCIF(MPI_MAXLOC, $1) else m4_LOCIF(MPI_MINLOC, $1) else MPI_Abort(MPI_COMM_WORLD, NBC_OP_NOT_SUPPORTED);')dnl
 dnl
 dnl ####### MPI_DOUBLE_INT ########
 define(m4_OPTYPE_MPI_DOUBLE_INT, `define(m4_CTYPE1_$1, `double')define(m4_CTYPE2_$1, `int')define(m4_CTYPE3_$1, `double_int')dnl
-m4_LOCIF(MPI_MAXLOC, $1) else m4_LOCIF(MPI_MINLOC, $1) else return NBC_OP_NOT_SUPPORTED;')dnl
+m4_LOCIF(MPI_MAXLOC, $1) else m4_LOCIF(MPI_MINLOC, $1) else MPI_Abort(MPI_COMM_WORLD, NBC_OP_NOT_SUPPORTED);')dnl
 dnl
 dnl ####### MPI_LONG_INT ########
 define(m4_OPTYPE_MPI_LONG_INT, `define(m4_CTYPE1_$1, `long')define(m4_CTYPE2_$1, `int')define(m4_CTYPE3_$1, `long_int')dnl
-m4_LOCIF(MPI_MAXLOC, $1) else m4_LOCIF(MPI_MINLOC, $1) else return NBC_OP_NOT_SUPPORTED;')dnl
+m4_LOCIF(MPI_MAXLOC, $1) else m4_LOCIF(MPI_MINLOC, $1) else MPI_Abort(MPI_COMM_WORLD, NBC_OP_NOT_SUPPORTED);')dnl
 dnl
 dnl ####### MPI_2INT ########
 define(m4_OPTYPE_MPI_2INT, `define(m4_CTYPE1_$1, `int')define(m4_CTYPE2_$1, `int')define(m4_CTYPE3_$1, `int_int')dnl
-m4_LOCIF(MPI_MAXLOC, $1) else m4_LOCIF(MPI_MINLOC, $1) else return NBC_OP_NOT_SUPPORTED;')dnl
+m4_LOCIF(MPI_MAXLOC, $1) else m4_LOCIF(MPI_MINLOC, $1) else MPI_Abort(MPI_COMM_WORLD, NBC_OP_NOT_SUPPORTED);')dnl
 dnl
 dnl ####### MPI_SHORT_INT ########
 define(m4_OPTYPE_MPI_SHORT_INT, `define(m4_CTYPE1_$1, `short')define(m4_CTYPE2_$1, `int')define(m4_CTYPE3_$1, `short_int')dnl
-m4_LOCIF(MPI_MAXLOC, $1) else m4_LOCIF(MPI_MINLOC, $1) else return NBC_OP_NOT_SUPPORTED;')dnl
+m4_LOCIF(MPI_MAXLOC, $1) else m4_LOCIF(MPI_MINLOC, $1) else MPI_Abort(MPI_COMM_WORLD, NBC_OP_NOT_SUPPORTED);')dnl
 dnl
 dnl ####### MPI_LONG_DOUBLE_INT ########
 define(m4_OPTYPE_MPI_LONG_DOUBLE_INT, `define(m4_CTYPE1_$1, `long double')define(m4_CTYPE2_$1, `int')define(m4_CTYPE3_$1, `long_double_int')dnl
-m4_LOCIF(MPI_MAXLOC, $1) else m4_LOCIF(MPI_MINLOC, $1) else return NBC_OP_NOT_SUPPORTED;')dnl
+m4_LOCIF(MPI_MAXLOC, $1) else m4_LOCIF(MPI_MINLOC, $1) else MPI_Abort(MPI_COMM_WORLD, NBC_OP_NOT_SUPPORTED);')dnl
 dnl
 dnl ####### begin the real program :-) #########
 dnl
@@ -387,6 +409,7 @@ m4_TYPE(MPI_LONG_LONG_INT) else dnl
 m4_TYPE(MPI_SHORT) else dnl
 m4_TYPE(MPI_UNSIGNED) else dnl
 m4_TYPE(MPI_UNSIGNED_LONG) else dnl
+m4_TYPE(MPI_UNSIGNED_LONG_LONG) else dnl
 m4_TYPE(MPI_UNSIGNED_SHORT) else dnl
 m4_TYPE(MPI_INT8_T) else dnl
 m4_TYPE(MPI_INT16_T) else dnl
@@ -402,16 +425,26 @@ m4_TYPE(MPI_DOUBLE) else dnl
 dnl m4_TYPE(MPI_DOUBLE_PRECISION) else dnl
 m4_TYPE(MPI_LONG_DOUBLE) else dnl
 m4_TYPE(MPI_BYTE) else dnl
+m4_TYPE(MPI_CHAR) else dnl
+m4_TYPE(MPI_SIGNED_CHAR) else dnl
+m4_TYPE(MPI_UNSIGNED_CHAR) else dnl
+dnl m4_TYPE(MPI_WCHAR) else dnl
+dnl m4_TYPE(MPI_C_BOOL) else dnl
 m4_TYPE(MPI_FLOAT_INT) else dnl
 m4_TYPE(MPI_DOUBLE_INT) else dnl
 m4_TYPE(MPI_LONG_INT) else dnl
 m4_TYPE(MPI_2INT) else dnl
 m4_TYPE(MPI_SHORT_INT) else dnl
 m4_TYPE(MPI_LONG_DOUBLE_INT) else dnl
+dnl m4_TYPE(MPI_C_COMPLEX) else dnl
+dnl m4_TYPE(MPI_C_FLOAT_COMPLEX) else dnl
+dnl m4_TYPE(MPI_C_DOUBLE_COMPLEX) else dnl
+dnl m4_TYPE(MPI_C_LONG_DOUBLE_COMPLEX) else dnl
 dnl m4_TYPE(MPI_LOGICAL) else dnl
 dnl m4_TYPE(MPI_COMPLEX) else dnl
 dnl m4_TYPE(MPI_DOUBLE_COMPLEX) else dnl
-return NBC_DATATYPE_NOT_SUPPORTED;
+MPI_Abort(MPI_COMM_WORLD, NBC_DATATYPE_NOT_SUPPORTED);
+dnl return NBC_DATATYPE_NOT_SUPPORTED;
   
   return NBC_OK;
 }
