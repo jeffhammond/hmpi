@@ -23,8 +23,8 @@ hmpi.a: hmpi.o nbc_op.o
 	ranlib $@
 
 main: hmpi.a main.c
-	$(CC) main.c $(CFLAGS) hmpi.a -o $@ 
-#$(CC) main.c $(CFLAGS) -lhwloc hmpi.a -o $@ 
+#	$(CC) main.c $(CFLAGS) hmpi.a -o $@ 
+	$(CC) main.c $(CFLAGS) -lhwloc hmpi.a -o $@ 
 
 #$(CC) main.c $(CFLAGS) -lhwloc -lpapi hmpi.a -o $@ 
 #$(CC) main.c $(CFLAGS) -lhwloc -lpmi -lpapi hmpi.a -o $@ 

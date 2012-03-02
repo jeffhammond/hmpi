@@ -70,7 +70,8 @@ static int (*g_entry)(int argc, char** argv);
 // that thread.  Other threads place their send requests on this list, and the
 // thread owning the list matches receives against them.
 
-static __thread HMPI_Item* g_recv_reqs = NULL;
+static __thread HMPI_Item g_recv_reqs_head = {NULL, NULL};
+static __thread HMPI_Item g_recv_reqs_tail = {NULL, NULL};
 //static HMPI_Item** g_recv_reqs = NULL;
 
 typedef struct HMPI_Request_list {
@@ -132,7 +133,13 @@ static inline void add_recv_req(HMPI_Request req) {
     HMPI_Item* item = (HMPI_Item*)req;
     //int tid = g_tl_tid;
 
-    //TODO - need to add at tail.
+    item->next = &g_recv_reqs_tail;
+    item->prev = g_recv_reqs_tail.prev;
+
+    g_recv_reqs_tail.prev->next = item;
+    g_recv_reqs_tail.prev = item;
+
+#if 0
     item->next = g_recv_reqs;
     item->prev = NULL;
 
@@ -141,6 +148,7 @@ static inline void add_recv_req(HMPI_Request req) {
     }
 
     g_recv_reqs = item;
+#endif
 }
 
 
@@ -148,6 +156,10 @@ static inline void remove_recv_req(HMPI_Request req) {
     HMPI_Item* item = (HMPI_Item*)req;
     //int tid = g_tl_tid;
 
+    item->next->prev = item->prev;
+    item->prev->next = item->next;
+
+#if 0
     if(item->prev == NULL) {
         //Head of list
         g_recv_reqs = item->next;
@@ -158,6 +170,7 @@ static inline void remove_recv_req(HMPI_Request req) {
     if(item->next != NULL) {
         item->next->prev = item->prev;
     }
+#endif
 }
 
 
@@ -339,7 +352,9 @@ void* trampoline(void* tid) {
     MPI_Comm_dup(MPI_COMM_WORLD, &g_tcomms[rank]);
 
     // Initialize send requests list and lock
-    g_recv_reqs = NULL;
+    //g_recv_reqs = NULL;
+    g_recv_reqs_head.next = &g_recv_reqs_tail;
+    g_recv_reqs_tail.prev = &g_recv_reqs_head;
 
     g_send_reqs[rank].head.next = NULL;
     g_send_reqs[rank].tail = &g_send_reqs[rank].head;
@@ -705,10 +720,11 @@ static inline void HMPI_Progress() {
     // to progress oldest receives first?
     HMPI_Item* cur;
     HMPI_Item* next;
+    HMPI_Item* tail = &g_recv_reqs_tail;
     HMPI_Request req;
 
     //Progress receive requests.
-    for(cur = g_recv_reqs; cur != NULL; cur = next) {
+    for(cur = g_recv_reqs_head.next; cur != tail; cur = next) {
         req = (HMPI_Request)cur;
         next = cur->next;
 

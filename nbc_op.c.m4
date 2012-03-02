@@ -410,15 +410,31 @@ m4_TYPE(MPI_SHORT) else dnl
 m4_TYPE(MPI_UNSIGNED) else dnl
 m4_TYPE(MPI_UNSIGNED_LONG) else dnl
 m4_TYPE(MPI_UNSIGNED_LONG_LONG) else dnl
-m4_TYPE(MPI_UNSIGNED_SHORT) else dnl
-m4_TYPE(MPI_INT8_T) else dnl
-m4_TYPE(MPI_INT16_T) else dnl
-m4_TYPE(MPI_INT32_T) else dnl
-m4_TYPE(MPI_INT64_T) else dnl
-m4_TYPE(MPI_UINT8_T) else dnl
-m4_TYPE(MPI_UINT16_T) else dnl
-m4_TYPE(MPI_UINT32_T) else dnl
-m4_TYPE(MPI_UINT64_T) else dnl
+m4_TYPE(MPI_UNSIGNED_SHORT) else
+#ifdef MPI_INT8_T
+m4_TYPE(MPI_INT8_T) else
+#endif
+#ifdef MPI_INT16_T
+m4_TYPE(MPI_INT16_T) else
+#endif
+#ifdef MPI_INT32_T
+m4_TYPE(MPI_INT32_T) else
+#endif
+#ifdef MPI_INT64_T
+m4_TYPE(MPI_INT64_T) else
+#endif
+#ifdef MPI_UINT8_T
+m4_TYPE(MPI_UINT8_T) else
+#endif
+#ifdef MPI_UINT16_T
+m4_TYPE(MPI_UINT16_T) else
+#endif
+#ifdef MPI_UINT32_T
+m4_TYPE(MPI_UINT32_T) else
+#endif
+#ifdef MPI_UINT64_T
+m4_TYPE(MPI_UINT64_T) else
+#endif
 m4_TYPE(MPI_FLOAT) else dnl
 dnl m4_TYPE(MPI_REAL) else dnl
 m4_TYPE(MPI_DOUBLE) else dnl

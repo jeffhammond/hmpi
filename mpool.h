@@ -4,7 +4,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
+#ifndef __bg__
 #include <hwloc.h>
+#endif
 #include "lock.h"
 
 //A normal lock is used, any number of threads can alloc and free safely.
@@ -36,7 +38,9 @@ typedef struct mpool_t {
 #ifdef LOCK_FULL
     lock_t lock;
 #endif
+#ifndef __bg__
     hwloc_cpuset_t cpuset;
+#endif
     size_t pagesize;
 //    uint64_t num_allocs;
 //    uint64_t num_reuses;
@@ -44,7 +48,9 @@ typedef struct mpool_t {
 
 static lock_t g_mpool_lock = {0};
 static int g_mpool_init = 0;
+#ifndef __bg__
 static hwloc_topology_t g_topo;
+#endif
 
 
 //Create a new mpool object.
@@ -55,6 +61,7 @@ static mpool_t* mpool_open(void)
     //TODO - could have one global topo object.
     LOCK_SET(&g_mpool_lock);
     if(g_mpool_init == 0) {
+#ifndef __bg__
         printf("doing hwloc init\n"); fflush(stdout);
         if(hwloc_topology_init(&g_topo) == -1) {
             printf("hwloc_topology_init error\n");
@@ -64,11 +71,14 @@ static mpool_t* mpool_open(void)
             printf("hwloc_topology_load error\n");
             fflush(stdout);
         }
+#endif
         g_mpool_init = 1;
     }
 
+#ifndef __bg__
     mp->cpuset = hwloc_bitmap_alloc();
     hwloc_get_cpubind(g_topo, mp->cpuset, HWLOC_CPUBIND_THREAD);
+#endif
     LOCK_CLEAR(&g_mpool_lock);
 
     mp->head = NULL;
@@ -102,12 +112,17 @@ static void mpool_close(mpool_t* mp)
         mpool_footer_t* cur = mp->head;
         //printf("%p close addr %p length %llu\n", mp, cur->base, (uint64_t)cur->length); fflush(stdout);
         mp->head = cur->next;
-        //free(cur);
+#ifdef __bg__
+        free(cur);
+#else
         hwloc_free(g_topo, cur, cur->length + sizeof(mpool_footer_t));
+#endif
     }
 
+#ifndef __bg__
     hwloc_bitmap_free(mp->cpuset);
     //hwloc_topology_destroy(mp->topo);
+#endif
     //printf("%p num_allocs %llu\n", mp, mp->num_allocs);
     //printf("%p num_reuses %llu\n", mp, mp->num_reuses);
     //fflush(stdout);
@@ -163,7 +178,7 @@ static void* mpool_alloc(mpool_t* mp, size_t length)
             //Good buffer, claim it.
             if(prev == NULL) {
                 //Head of list -- CAS to remove
-                if(!CAS_PTR_BOOL(&mp->head, cur, cur->next)) {
+                if(!CAS_PTR_BOOL((volatile void**)&mp->head, cur, cur->next)) {
                     //Element is no longer the head.. find its prev,
                     // then remove it.
                     for(prev = mp->head; prev->next != cur; prev = prev->next);
@@ -187,10 +202,13 @@ static void* mpool_alloc(mpool_t* mp, size_t length)
 
 
     //If no existing allocation is found, allocate a new one.
+#ifdef __bg__
+    mpool_footer_t* ft = (mpool_footer_t*)memalign(mp->pagesize, length + mp->pagesize);
+#else
     mpool_footer_t* ft = (mpool_footer_t*)hwloc_alloc_membind(g_topo,
             length + mp->pagesize,
             mp->cpuset, HWLOC_MEMBIND_BIND, HWLOC_MEMBIND_THREAD);
-    //mpool_footer_t* ft = (mpool_footer_t*)memalign(mp->pagesize, length + mp->pagesize);
+#endif
 
     //mpool_footer_t* ft = (mpool_footer_t*)((uintptr_t)ptr + length);
     ft->next = NULL;
@@ -236,7 +254,7 @@ static void mpool_free(mpool_t* mp, void* ptr)
     mpool_footer_t* next;
     do {
         next = ft->next = mp->head;
-    } while(!CAS_PTR_BOOL(&mp->head, next, ft));
+    } while(!CAS_PTR_BOOL((volatile void**)&mp->head, next, ft));
 #endif
 }
 
@@ -250,7 +268,7 @@ static void mpool_free(mpool_t* mp, void* ptr)
 //Allocate the buffer for a tag.
 // owner specifies which rank's memory it should reside in.
 //AMG - do the senders know the final size of receive buffers?
-void* mpool_alloc_buf(int tag, int owner, int size);
+//void* mpool_alloc_buf(int tag, int owner, int size);
 
 //Next, an atomic counter (semaphore?) is used to track when the buffer is rdy.
 
