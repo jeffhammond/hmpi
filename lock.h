@@ -98,7 +98,11 @@ static inline void LOCK_SET(lock_t* __restrict l) {
 
 //Returns non-zero if lock was acquired, 0 if not.
 static inline int LOCK_TRY(lock_t* __restrict l) {
-    return __sync_lock_test_and_set(&l->lock, 1) == 0;
+    if(l->lock == 0) {
+        return __sync_lock_test_and_set(&l->lock, 1) == 0;
+    } else {
+        return 0;
+    }
 }
 
 static inline void LOCK_CLEAR(lock_t* __restrict l) {
