@@ -2,6 +2,7 @@
 #define BARRIER_H
 #include <pthread.h>
 #include <stdint.h>
+
 #include "lock.h"
 
 //#define CACHE_LINE 64

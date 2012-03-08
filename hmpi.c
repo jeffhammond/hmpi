@@ -296,12 +296,15 @@ void* trampoline(void* tid) {
             num_cores = 1;
         }
 
+#if 0
         if(num_cores < g_nthreads) {
             printf("%d ERROR requested %d threads but only %d cores\n",
                     g_rank, g_nthreads, num_cores);
             MPI_Abort(MPI_COMM_WORLD, 0);
         }
+#endif
 
+        int core = rank % num_cores;
         num_cores /= num_sockets; //cores per socket
 
 #if 0
@@ -319,10 +322,10 @@ void* trampoline(void* tid) {
         int idx;
         int rms = g_nthreads % num_sockets;
         int rs = (g_nthreads / num_sockets) + 1;
-        if(rank < rms * rs) {
-            idx = ((rank / rs) * num_cores) + (rank % rs);
+        if(core < rms * rs) {
+            idx = ((core / rs) * num_cores) + (core % rs);
         } else {
-            int rmd = rank - (rms * rs);
+            int rmd = core - (rms * rs);
             rs -= 1;
             idx = (rmd / rs) * num_cores + (rmd % rs) + rms * num_cores;
         }
@@ -331,7 +334,7 @@ void* trampoline(void* tid) {
 
         obj = hwloc_get_obj_by_type(g_hwloc_topo, HWLOC_OBJ_CORE, idx);
         if(obj == NULL) {
-            printf("%d ERROR got NULL hwloc core object idx %d\n", rank, idx);
+            printf("%d ERROR got NULL hwloc core object idx %d\n", core, idx);
             MPI_Abort(MPI_COMM_WORLD, 0);
         }
 
@@ -347,9 +350,6 @@ void* trampoline(void* tid) {
     // save thread-id in thread-local storage
     g_tl_tid = rank;
     g_hmpi_rank = g_rank*g_nthreads+rank;
-
-    //Duplicate COMM_WORLD for this thread.
-    MPI_Comm_dup(MPI_COMM_WORLD, &g_tcomms[rank]);
 
     // Initialize send requests list and lock
     //g_recv_reqs = NULL;
@@ -411,7 +411,6 @@ int HMPI_Init(int *argc, char ***argv, int nthreads, int (*start_routine)(int ar
 
   threads = (pthread_t*)malloc(sizeof(pthread_t) * nthreads);
 
-  //g_recv_reqs = (HMPI_Item**)malloc(sizeof(HMPI_Item*) * nthreads);
   g_send_reqs = (HMPI_Request_list*)malloc(sizeof(HMPI_Request_list) * nthreads);
 
   g_tcomms = (MPI_Comm*)malloc(sizeof(MPI_Comm) * nthreads);
@@ -420,22 +419,18 @@ int HMPI_Init(int *argc, char ***argv, int nthreads, int (*start_routine)(int ar
   MPI_Comm_size(MPI_COMM_WORLD, &g_size);
 
 
-  //Do per-thread initialization that must be complete for all threads before
-  // actually starting the threads. 
-#if 0
-  for(thr=0; thr < nthreads; thr++) {
-    // create one world communicator for each thread 
-
-  }
-#endif
-
-
   //Ranks set their own affinity in trampoline.
 #ifndef __bg__
   hwloc_topology_init(&g_hwloc_topo);
   hwloc_topology_load(g_hwloc_topo);
 #endif
 
+
+  //Do per-thread initialization that must be done before threads are started.
+  for(thr = 0; thr < nthreads; thr++) {
+    //Duplicate COMM_WORLD for this thread.
+    MPI_Comm_dup(MPI_COMM_WORLD, &g_tcomms[thr]);
+  }
 
   //Bluegene has a 1-thread/core limit, so this thread will run as rank 0.
   for(thr=1; thr < nthreads; thr++) {
@@ -453,7 +448,6 @@ int HMPI_Init(int *argc, char ***argv, int nthreads, int (*start_routine)(int ar
     pthread_join(threads[thr], NULL);
   }
 
-  //free(g_recv_reqs);
   free(g_send_reqs);
   free(threads);
   free(g_tcomms);
@@ -934,20 +928,24 @@ int HMPI_Wait(HMPI_Request *request, HMPI_Status *status) {
     if(req->type == HMPI_SEND) {
         do {
             HMPI_Progress();
+            //sched_yield();
         } while(HMPI_Progress_send(req) != HMPI_REQ_COMPLETE);
     } else if(req->type == HMPI_RECV) {
         do {
             HMPI_Progress();
+            //sched_yield();
         } while(get_reqstat(req) != HMPI_REQ_COMPLETE);
     } else if(req->type == MPI_RECV || req->type == MPI_SEND) {
         do {
             HMPI_Progress();
+            //sched_yield();
         } while(HMPI_Progress_mpi(req) != HMPI_REQ_COMPLETE);
         //Shortcut for now -- put progress for MPI types in its own fn
         //while(HMPI_Progress_request(req) != HMPI_REQ_COMPLETE);
     } else { //HMPI_RECV_ANY_SOURCE
         do {
             HMPI_Progress();
+            //sched_yield();
         } while(get_reqstat(req) != HMPI_REQ_COMPLETE);
     }
 
