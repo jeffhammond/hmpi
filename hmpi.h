@@ -2,14 +2,9 @@
 #define _HMPI_H_
 #include <stdint.h>
 #include <mpi.h>
-#include <pthread.h>
-#include <stdlib.h>
-#include <stdio.h>
 #include <assert.h>
-#include <string.h>
 #include "barrier.h"
 #include "lock.h"
-//#include "opa_primitives.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -24,10 +19,11 @@ typedef struct {
 } cache_line_t;
 
 
-//Placeholder typedef
+//Placeholder typedef - groups aren't implemented yet
 typedef void* HMPI_Group;
 
 typedef struct {
+  //Used for intra-node sharing in various collectives
   volatile void** sbuf;
   volatile int* scount;
   volatile MPI_Datatype* stype;
@@ -36,24 +32,15 @@ typedef struct {
   volatile MPI_Datatype* rtype;
   volatile void* mpi_sbuf; //Used by alltoall
   volatile void* mpi_rbuf; //Used by alltoall, gatherv
-  //volatile uint8_t* flag; //Used by allreduce
-  barrier_t barr;
-  MPI_Comm mpicomm;
+
+  barrier_t barr;       //Barrier for local ranks in this comm
+  MPI_Comm mpicomm;     //Underyling MPI comm
   //MPI_Comm* tcomms;
 } HMPI_Comm_info;
 
 typedef HMPI_Comm_info* HMPI_Comm;
 
 extern HMPI_Comm HMPI_COMM_WORLD;
-
-#define HMPI_SEND 1
-#define HMPI_RECV 2
-#define MPI_SEND 3
-#define MPI_RECV 4
-#define HMPI_RECV_ANY_SOURCE 5
-
-//#define HMPI_ANY_SOURCE -55
-//#define HMPI_ANY_TAG -55
 
 #define HMPI_STATUS_IGNORE NULL
 #define HMPI_STATUSES_IGNORE NULL
@@ -66,6 +53,14 @@ typedef struct HMPI_Status {
 } HMPI_Status;
 
 
+//HMPI request types
+#define HMPI_SEND 1
+#define HMPI_RECV 2
+#define MPI_SEND 3
+#define MPI_RECV 4
+#define HMPI_RECV_ANY_SOURCE 5
+
+//HMPI request states
 //ACTIVE and COMPLETE specifically chosen to match MPI test flags
 #define HMPI_REQ_ACTIVE 0
 #define HMPI_REQ_COMPLETE 1
@@ -79,29 +74,22 @@ typedef struct HMPI_Item {
 
 //HMPI_Request is later defined as a pointer to this struct.
 typedef struct HMPI_Request_info {
-  HMPI_Item item;
+    HMPI_Item item; //Linked list subtype
 
-  int type;
-  int proc;
-  int tag;
-  size_t size;  //Message size in bytes
-  MPI_Datatype datatype;
+    int type;       //Request type
+    int proc;       //Always the source's rank regardless of type.
+    int tag;        //MPI tag
+    MPI_Datatype datatype;  //MPI datatype
+    size_t size;    //Message size in bytes
 
-  void* buf;
-  struct HMPI_Request_info* match_req;
+    void* buf;      //User buffer
+    struct HMPI_Request_info* match_req; //Set only sends; matching recv req
 
-  volatile ssize_t offset;
-  lock_t match;
-  volatile uint8_t stat;
+    volatile ssize_t offset;  //Copy offset for shared sender/recver copying
+    lock_t match;             //Synchornization for sender/recver copying
+    volatile uint8_t stat;    //Request state
 
-  //struct HMPI_Request_info* next;
-  //struct HMPI_Request_info* prev;
-
-  //pthread_mutex_t statlock;
-  MPI_Request req;
-  //MPI_Status* status;
-  // following only for HMPI_RECV_ANY_SOURCE
-  //MPI_Comm comm;
+    MPI_Request req;  //Used only for off-node messages via underlying MPI
 } HMPI_Request_info;
 
 typedef HMPI_Request_info* HMPI_Request;
@@ -112,12 +100,16 @@ typedef HMPI_Request_info* HMPI_Request;
 
 int HMPI_Init(int *argc, char ***argv, int nthreads, int (*start_routine)(int argc, char** argv));
 
+int HMPI_Finalize();
+
+int HMPI_Abort( HMPI_Comm comm, int errorcode );
+
 int HMPI_Comm_rank ( HMPI_Comm comm, int *rank );
 int HMPI_Comm_size ( HMPI_Comm comm, int *size );
 
+
 //AWF new function -- return true (nonzero) if rank is another thread in the
 // same process.
-
 static inline int HMPI_Comm_local(HMPI_Comm comm, int rank)
 {
 #ifdef HMPI_SAFE
@@ -131,7 +123,7 @@ static inline int HMPI_Comm_local(HMPI_Comm comm, int rank)
 }
 
 
-//AWF new function -- set the thread ID of the specified rank.
+//AWF new function -- return the thread ID of the specified rank.
 static inline void HMPI_Comm_thread(HMPI_Comm comm, int rank, int* tid)
 {
 #ifdef HMPI_SAFE
@@ -143,10 +135,6 @@ static inline void HMPI_Comm_thread(HMPI_Comm comm, int rank, int* tid)
 
   *tid = rank % g_nthreads;
 }
-
-
-// AWF new function - barrier only among local threads
-void HMPI_Barrier_local(HMPI_Comm comm);
 
 
 int HMPI_Send(void *buf, int count, MPI_Datatype datatype, int dest, int tag, HMPI_Comm comm );
@@ -165,6 +153,13 @@ int HMPI_Waitall(int count, HMPI_Request* requests, HMPI_Status* statuses);
 int HMPI_Waitany(int count, HMPI_Request* requests, int* index, HMPI_Status *status);
 
 int HMPI_Get_count(HMPI_Status* status, MPI_Datatype datatype, int* count);
+
+//
+// Collectives
+//
+
+// AWF new function - barrier only among local threads
+void HMPI_Barrier_local(HMPI_Comm comm);
 
 int HMPI_Barrier(HMPI_Comm comm);
 
@@ -191,9 +186,6 @@ int HMPI_Alltoall(void* sendbuf, int sendcount, MPI_Datatype sendtype, void* rec
 //Assumes all ranks are local.
 int HMPI_Alltoall_local(void* sendbuf, int sendcount, MPI_Datatype sendtype, void* recvbuf, int recvcount, MPI_Datatype recvtype, HMPI_Comm comm);
 
-int HMPI_Abort( HMPI_Comm comm, int errorcode );
-
-int HMPI_Finalize();
 
 //TODO NOT IMPLEMENTED YET
 // Added to catch apps that call these routines.
@@ -211,6 +203,8 @@ static int HMPI_Comm_group(HMPI_Comm comm, HMPI_Group* group)
 }
 
 
+//Defines to redirect MPI calls to HMPI.
+//Set HMPI_INTERNAL to turn this off.
 #ifndef HMPI_INTERNAL
 
 #define MPI_Comm HMPI_Comm

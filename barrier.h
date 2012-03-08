@@ -1,7 +1,8 @@
 #ifndef BARRIER_H
 #define BARRIER_H
-#include <pthread.h>
+//#include <pthread.h>
 #include <stdint.h>
+#include <stdlib.h>
 
 #include "lock.h"
 
@@ -32,6 +33,7 @@ static int barrier_destroy(barrier_t *barrier) {
 }
 
 
+//Standard barrier
 static inline void barrier(barrier_t *barrier, int tid) {
   int32_t local_sense = barrier->local_sense[tid] = ~barrier->local_sense[tid];
 
@@ -52,6 +54,7 @@ static inline void barrier(barrier_t *barrier, int tid) {
 }
 
 
+//Barrier with a callback -- usually used to poll MPI to prevent deadlock
 static inline void barrier_cb(barrier_t *barrier, int tid, void (*cbfn)(void)) {
   int32_t local_sense = barrier->local_sense[tid] = ~barrier->local_sense[tid];
 

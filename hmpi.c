@@ -17,6 +17,7 @@
 //#define _PROFILE_PAPI_EVENTS 1
 #include "profile2.h"
 
+#include <pthread.h>
 #include <sched.h>
 #include <malloc.h>
 #include <stdlib.h>
@@ -37,8 +38,6 @@
 
 PROFILE_DECLARE();
 PROFILE_VAR(memcpy);
-//PROFILE_VAR(cpy_send);
-//PROFILE_VAR(cpy_recv);
 PROFILE_VAR(allreduce);
 PROFILE_VAR(op);
 
@@ -490,16 +489,6 @@ int HMPI_Finalize() {
 
   HMPI_Barrier(HMPI_COMM_WORLD);
 
-  //HMPI_Comm_rank(HMPI_COMM_WORLD, &r);
-  //PROFILE_SHOW(memcpy);
-  //PROFILE_SHOW(cpy_send);
-  //PROFILE_SHOW(cpy_recv);
-
-  //PROFILE_SHOW_REDUCE(copy, r);
-  //PROFILE_SHOW_REDUCE(send, r);
-  //PROFILE_SHOW_REDUCE(add_send_req, r);
-  //PROFILE_SHOW_REDUCE(barrier, r);
-  //PROFILE_SHOW_REDUCE(alltoall, r);
   PROFILE_SHOW_REDUCE(allreduce);
   PROFILE_SHOW_REDUCE(op);
   PROFILE_SHOW_REDUCE(memcpy);
@@ -543,7 +532,6 @@ static inline int HMPI_Progress_send(HMPI_Request send_req) {
     // instead just does the copy and marks completion.
 
     if(LOCK_TRY(&send_req->match)) {
-        //PROFILE_START(cpy_send);
         HMPI_Request recv_req = (HMPI_Request)send_req->match_req;
         uintptr_t rbuf = (uintptr_t)recv_req->buf;
 
@@ -561,7 +549,6 @@ static inline int HMPI_Progress_send(HMPI_Request send_req) {
             memcpy((void*)(rbuf + offset), (void*)(sbuf + offset),
                     (left < BLOCK_SIZE ? left : BLOCK_SIZE));
         }
-        //PROFILE_STOP(cpy_send);
 
         //Signal that the sender is done copying.
         //Possible for the receiver to still be copying here.
@@ -619,13 +606,10 @@ static inline int HMPI_Progress_recv(HMPI_Request recv_req) {
     if(size < BLOCK_SIZE * 2) {
     //if(size < 128) {
     //if(size < 1024 * 1024) {
-        //PROFILE_START(memcpy);
         memcpy((void*)recv_req->buf, send_req->buf, size);
-        //PROFILE_STOP(memcpy);
     } else {
         //The setting of send_req->match_req signals to sender that they can
         // start doing copying as well, if they are testing the req.
-        //PROFILE_START(cpy_recv);
 
         //recv_req->match_req = send_req; //TODO - keep this here?
         send_req->match_req = recv_req;
@@ -643,8 +627,6 @@ static inline int HMPI_Progress_recv(HMPI_Request recv_req) {
             memcpy((void*)(rbuf + offset), (void*)(sbuf + offset),
                     (left < BLOCK_SIZE ? left : BLOCK_SIZE));
         }
-
-        //PROFILE_STOP(cpy_recv);
 
         //Wait if the sender is copying.
         LOCK_SET(&send_req->match);
@@ -670,9 +652,7 @@ static inline int HMPI_Progress_mpi(HMPI_Request req)
 {
     int flag;
 
-    //PROFILE_START(mpi);
     MPI_Test(&req->req, &flag, MPI_STATUS_IGNORE);
-    //PROFILE_STOP(mpi);
 
     update_reqstat(req, flag);
 
@@ -788,9 +768,7 @@ static inline int HMPI_Progress_request(HMPI_Request req)
   } else if(req->type == MPI_SEND || req->type == MPI_RECV) {
     int flag;
 
-    //PROFILE_START(mpi);
     MPI_Test(&req->req, &flag, MPI_STATUS_IGNORE);
-    //PROFILE_STOP(mpi);
 
     update_reqstat(req, flag);
 #ifdef DEBUG
@@ -1254,9 +1232,7 @@ int HMPI_Irecv(void* buf, int count, MPI_Datatype datatype, int source, int tag,
     //printf("%d MPI recv buf %p count %d src %d (%d) tag %d req %p\n", g_hmpi_rank, buf, count, source, source_mpi_rank, tag, req);
     //fflush(stdout);
 
-    //PROFILE_START(mpi);
     MPI_Irecv(buf, count, datatype, source_mpi_rank, tag, g_tcomms[g_tl_tid], &req->req);
-    //PROFILE_STOP(mpi);
 
     req->type = MPI_RECV;
     //add_recv_req(req);
