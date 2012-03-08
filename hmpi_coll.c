@@ -96,10 +96,8 @@ int HMPI_Reduce(void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype, 
     }
 #endif
 
-    //Root rank mod g_nthreads takes lead.
-    //Root rank allocs a buffer for local ranks to reduce into.
-    //Then does an MPI reduce into the receive buf, and we're done.
     if(g_tl_tid == root % g_nthreads) {
+        //The true root uses its recv buf; others alloc a temp buf.
         void* localbuf;
         if(g_hmpi_rank == root) {
             localbuf = recvbuf;
@@ -107,7 +105,7 @@ int HMPI_Reduce(void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype, 
             localbuf = memalign(4096, size * count);
         }
 
-        //TODO eliminate this memcpy by folding into a reduce call
+        //TODO eliminate this memcpy by folding into a reduce call?
         memcpy(localbuf, sendbuf, size * count);
 
         barrier_cb(&comm->barr, 0, barrier_iprobe);
@@ -173,7 +171,7 @@ int HMPI_Allreduce(void *sendbuf, void *recvbuf, int count, MPI_Datatype datatyp
 
         barrier_cb(&comm->barr, 0, barrier_iprobe);
 
-        //TODO eliminate this memcpy by folding into a reduce call
+        //TODO eliminate this memcpy by folding into a reduce call?
         memcpy(recvbuf, sendbuf, size * count);
 
         for(i=1; i<g_nthreads; ++i) {
@@ -188,19 +186,19 @@ int HMPI_Allreduce(void *sendbuf, void *recvbuf, int count, MPI_Datatype datatyp
         //barrier_cb(&comm->barr, g_tl_tid, barrier_iprobe);
         barrier(&comm->barr, 0);
     } else {
+        //Put up our send buffer for the root thread to reduce from.
         comm->sbuf[g_tl_tid] = sendbuf;
-
         barrier_cb(&comm->barr, g_tl_tid, barrier_iprobe);
 
-        //Threads cannot start until 0 arrives -- OK if others havent arrived
-        //barrier_cb(&comm->barr, g_tl_tid, barrier_iprobe);
+        //Wait for the root rank to do its thing.
         barrier(&comm->barr, g_tl_tid);
 
+        //Copy reduced data to our own buffer.
         memcpy(recvbuf, (void*)comm->rbuf[0], count*size);
     }
 
-    // protect from early leave (rootrbuf)
-    //0 can't leave until all threads arrive.. all others can go
+    //Potential optimization -- 0 can't leave until all threads arrive.. all
+    //others can go
     barrier(&comm->barr, g_tl_tid);
     return MPI_SUCCESS;
 }
@@ -264,6 +262,7 @@ int HMPI_Scan(void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype, MP
 
     barrier(&comm->barr, g_tl_tid);
 
+    //Thread 0 has no more reduce work to do.
     if(g_rank > 0) {
         NBC_Operation(recvbuf,
                 recvbuf, (void*)comm->rbuf[0], op, datatype, count);
@@ -286,18 +285,20 @@ int HMPI_Scan(void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype, MP
 
 
 int HMPI_Bcast(void *buffer, int count, MPI_Datatype datatype, int root, HMPI_Comm comm) {
-    MPI_Aint extent, lb;
+    //MPI_Aint extent, lb;
     int size;
 
     MPI_Type_size(datatype, &size);
-    MPI_Type_get_extent(datatype, &lb, &extent);
+    //MPI_Type_get_extent(datatype, &lb, &extent);
     //MPI_Type_extent(datatype, &extent);
 
+#if 0
 #ifdef HMPI_SAFE
     if(extent != size) {
         printf("bcast non-contiguous derived datatypes are not supported yet!\n");
         MPI_Abort(comm->mpicomm, 0);
     }
+#endif
 #endif
   
 #ifdef DEBUG
@@ -311,6 +312,7 @@ int HMPI_Bcast(void *buffer, int count, MPI_Datatype datatype, int root, HMPI_Co
 
     barrier_cb(&comm->barr, g_tl_tid, barrier_iprobe);
 
+    //Only do an MPI-level bcast and barrier if more the one node.
     if(g_size > 1) {
         if(g_tl_tid == 0) {
             MPI_Bcast((void*)comm->sbuf[0],
@@ -320,6 +322,7 @@ int HMPI_Bcast(void *buffer, int count, MPI_Datatype datatype, int root, HMPI_Co
         barrier(&comm->barr, g_tl_tid);
     }
 
+    //All ranks other than the root copy the recv buffer.
     if(root % g_nthreads != g_tl_tid) {
         memcpy(buffer, (void*)comm->sbuf[0], count*size);
     }
@@ -367,6 +370,7 @@ int HMPI_Scatter(void* sendbuf, int sendcount, MPI_Datatype sendtype, void* recv
   }
 
   if(g_tl_tid == 0) {
+    //Grab a temp recv buf and make it available to other threads.
     comm->rbuf[0] = memalign(4096, size * g_nthreads);
 
     if(root / g_nthreads != g_rank) {
@@ -390,7 +394,6 @@ int HMPI_Scatter(void* sendbuf, int sendcount, MPI_Datatype sendtype, void* recv
 
   //Each thread copies out of the root buffer
   if(recvbuf == MPI_IN_PLACE) {
-      printf("in place scatter\n");
     memcpy(sendbuf, (void*)((uintptr_t)comm->rbuf[0] + size * g_tl_tid), size);
   } else {
     memcpy(recvbuf, (void*)((uintptr_t)comm->rbuf[0] + size * g_tl_tid), size);
@@ -437,7 +440,6 @@ int HMPI_Gather(void* sendbuf, int sendcount, MPI_Datatype sendtype, void* recvb
   printf("[%i] HMPI_Gather(%p, %i, %p, %p, %i, %p, %i, %p)\n", g_rank*g_nthreads+g_tl_tid, sendbuf, sendcount, sendtype, recvbuf, recvcount, recvtype, root, comm);
 #endif
 
-  //How do I want to do this?
   //Gather using the root threads, then pass the buffer pointer to the root
   //On the proc with the root, pass the send buffer to thread 0
   if(g_rank * g_nthreads + g_tl_tid == root) {
@@ -479,9 +481,9 @@ int HMPI_Gather(void* sendbuf, int sendcount, MPI_Datatype sendtype, void* recvb
 #define HMPI_GATHERV_TAG 76361347
 int HMPI_Gatherv(void* sendbuf, int sendcnt, MPI_Datatype sendtype, void* recvbuf, int* recvcnts, int* displs, MPI_Datatype recvtype, int root, HMPI_Comm comm)
 {
-    //each sender can have a different send count.
+    //Each sender can have a different send count.
     //recvcnts[i] must be equal to rank i's sendcnt.
-    //only sendbuf, sendcnt, sendtype, root, comm meaningful on senders
+    //Only sendbuf, sendcnt, sendtype, root, comm meaningful on senders
 
     //How do I want to do this?
     //Challenge is that only the root knows the displacements.
@@ -497,9 +499,6 @@ int HMPI_Gatherv(void* sendbuf, int sendcnt, MPI_Datatype sendtype, void* recvbu
     //Root receives from all non-local ranks, waits for completion.
     //Root waits for local threads to finish their copy.
 
-    //Do it like this -- root on each node builds a dtype
-    //Then just call MPI_Gatherv
-
     //Everybody posts their send info
     int tid = g_tl_tid;
     comm->sbuf[tid] = sendbuf;
@@ -510,33 +509,27 @@ int HMPI_Gatherv(void* sendbuf, int sendcnt, MPI_Datatype sendtype, void* recvbu
 
     barrier_cb(&comm->barr, tid, barrier_iprobe);
 
-    //One rank on each node builds the dtypes and does the MPI_Gatherv
+    //One rank on each node builds the dtypes and does the MPI-level gatherv
+    //using sends/receives.
     if(tid == root % g_nthreads) {
-        MPI_Datatype dtsend;
-
-        //I have g_nthreads blocks, with their own buf, cnt, type.
-        MPI_Type_create_struct(g_nthreads, (int*)comm->scount, (MPI_Aint*)comm->sbuf, (MPI_Datatype*)comm->stype, &dtsend);
-        MPI_Type_commit(&dtsend);
-
+        //One root rank on each node.
         if(root == g_hmpi_rank) {
             //I am root; create recv dtype.
-            //It'll have an entry for each other node.
-            //Blah.. this is a lot of dtypes..
-            //Even if I do just send/recvs, I have to create all of these..
-            //Build one datatype for every other node.
             int rank = g_rank;
             MPI_Datatype* dtrecvs = (MPI_Datatype*)alloca(sizeof(MPI_Datatype) * g_size);
             MPI_Request* reqs = (MPI_Request*)alloca(sizeof(MPI_Request) * g_size);
 
-
             for(int i = 0; i < g_size; i++) {
-                if(rank == g_rank) {
+                if(i == rank) {
                     //We do local copies in the root rank's node.
                     dtrecvs[i] = MPI_DATATYPE_NULL;
                     reqs[i] = MPI_REQUEST_NULL;
                     continue;
                 }
 
+                //Build a dtype to receive from this node -- combine the
+                //displacements we expect from each rank in that node into one
+                //dtype.
                 MPI_Type_indexed(g_nthreads,
                         &recvcnts[i * g_nthreads], &displs[i * g_nthreads],
                         recvtype, &dtrecvs[i]);
@@ -559,9 +552,16 @@ int HMPI_Gatherv(void* sendbuf, int sendcnt, MPI_Datatype sendtype, void* recvbu
                 MPI_Type_free(&dtrecvs[i]);
             }
         } else {
+            MPI_Datatype dtsend;
+
+            //I have g_nthreads blocks, with their own buf, cnt, type.
+            MPI_Type_create_struct(g_nthreads, (int*)comm->scount, (MPI_Aint*)comm->sbuf, (MPI_Datatype*)comm->stype, &dtsend);
+            MPI_Type_commit(&dtsend);
+
+            MPI_Send(MPI_BOTTOM, 1, dtsend, root / g_nthreads, HMPI_GATHERV_TAG, comm->mpicomm);
+
             //MPI_Gatherv(MPI_BOTTOM, 1, dtsend, NULL, NULL, MPI_DATATYPE_NULL,
             //        root, comm->mpicomm);
-            MPI_Send(MPI_BOTTOM, 1, dtsend, root / g_nthreads, HMPI_GATHERV_TAG, comm->mpicomm);
         }
 
         MPI_Type_free(&dtsend);
@@ -569,13 +569,14 @@ int HMPI_Gatherv(void* sendbuf, int sendcnt, MPI_Datatype sendtype, void* recvbu
         //Meanwhile, all local non-root ranks do memcpys.
         int root_tid;
         HMPI_Comm_thread(comm, root, &root_tid);
+
         int* displs = (int*)comm->mpi_rbuf;
         void* buf = (void*)comm->rbuf[root_tid];
         int size;
 
         MPI_Type_size(sendtype, &size);
 
-        //Copy my data from sendbuf to the root.
+        //Copy data from my sendbuf to the root.
         memcpy((void*)((uintptr_t)buf + displs[g_hmpi_rank]),
                 sendbuf, size * sendcnt);
     }
@@ -622,11 +623,10 @@ int HMPI_Allgather(void* sendbuf, int sendcount, MPI_Datatype sendtype, void* re
   // MPI allgather to rbuf[0]
   // Each thread copies into its own rbuf, except 0.
   if(g_tl_tid == 0) {
-      //Use this node's spot rank in tid 0's recvbuf, as the send buffer.
+      //Use this node's spot in tid 0's recvbuf, as the send buffer.
       comm->sbuf[0] =
           (void*)((uintptr_t)recvbuf + (size * g_nthreads * g_rank));
 
-      //root is not on this node, set the recv type to something
       comm->rbuf[0] = recvbuf;
       //comm->rcount[0] = recvcount;
       //comm->rtype[0] = recvtype;
@@ -640,6 +640,7 @@ int HMPI_Allgather(void* sendbuf, int sendcount, MPI_Datatype sendtype, void* re
   barrier(&comm->barr, g_tl_tid);
 
   if(g_size > 1) {
+    //Do the MPI-level inter-node gather.
     if(g_tl_tid == 0) {
         MPI_Allgather(MPI_IN_PLACE, 0, MPI_DATATYPE_NULL,
                 recvbuf, recvcount * g_nthreads, recvtype, comm->mpicomm);
@@ -693,13 +694,13 @@ int HMPI_Allgatherv(void *sendbuf, int sendcount, MPI_Datatype sendtype, void *r
   //Gather locally to sbuf[0]
   // MPI allgather to rbuf[0]
   // Each thread copies into its own rbuf, except 0.
+
   if(g_tl_tid == 0) {
-      //Use this node's spot rank in tid 0's recvbuf, as the send buffer.
+      //Use this node's spot in tid 0's recvbuf, as the send buffer.
       //Have to use the displacements to get the right spot.
       comm->sbuf[0] = recvbuf;
           //(void*)((uintptr_t)recvbuf + (size * displs[g_hmpi_rank]));
 
-      //root is not on this node, set the recv type to something
       comm->rbuf[0] = recvbuf;
       //comm->rcount[0] = recvcount;
       //comm->rtype[0] = recvtype;
@@ -715,16 +716,12 @@ int HMPI_Allgatherv(void *sendbuf, int sendcount, MPI_Datatype sendtype, void *r
 
   if(g_size > 1) {
     if(g_tl_tid == 0) {
-        //Need to make a new displacements list, grouping threads in each proc.
-        //TODO - this only works if the displacements were contiguous!
-        //Well that's kind of silly, might was well just use allgather.
-        //The right thing to do would be to build a datatype... shouldnt be bad
         MPI_Datatype dtype;
         MPI_Datatype* basetype;
         int i;
 
         //Do a series of bcasts, rotating the root to each node.
-        //Have to build a dtype for each node to cover its uniques displs.
+        //Have to build a dtype for each node to cover its unique displs.
         for(i = 0; i < g_size; i++) {
             if(i == g_rank) {
                 basetype = &sendtype;
@@ -745,13 +742,13 @@ int HMPI_Allgatherv(void *sendbuf, int sendcount, MPI_Datatype sendtype, void *r
     barrier(&comm->barr, g_tl_tid);
   }
 
+
   if(g_tl_tid != 0) {
-      //All threads but 0 copy from 0's receive buffer
-      //memcpy(recvbuf, (void*)comm->rbuf[0], size * g_nthreads * g_size);
       //Ugh, have to do one memcpy per rank.
       int i;
 
       //TODO - copy from sendbuf for self rank, not recvbuf
+      // Wouldn't have to wait, and maybe beter locality.
       for(i = 0; i < g_size * g_nthreads; i++) {
         int offset = displs[i] * send_size;
         memcpy((void*)((uintptr_t)recvbuf + offset),
@@ -807,27 +804,13 @@ int HMPI_Alltoall(void* sendbuf, int sendcount, MPI_Datatype sendtype, void* rec
   fflush(stdout);
 #endif
 
-  //TODO how do I change this to have each thread do local copies?
-  // Maybe I should even just use a bunch of sends and receives.
-  //  Then we do P*T sends and receives
-  // Could go in between and build a MPI datatype to allow one send/recv
-  //  per other process.
-
-  //Each thread memcpy's into a single send buffer
-  //Root thread creates contiguous datatypes to span each thread, then does alltoall
-  //Each thread memcpy's out of a single receive buffer
-
-  //Can use alltoallv, or replace it with sends/receives.
-  //Either way:
-  // Thread 0 mallocs shared buffer?
-
   uint64_t comm_size = g_nthreads * g_size;
   uint64_t data_size = send_size * sendcount;
 
   comm->sbuf[g_tl_tid] = sendbuf;
 
-  //Alloc a temp buffer
   if(g_tl_tid == 0) {
+      //Alloc temp send/recv buffers
       comm->mpi_sbuf = memalign(4096, data_size * g_nthreads * comm_size);
       comm->mpi_rbuf = memalign(4096, data_size * g_nthreads * comm_size);
 
@@ -843,7 +826,7 @@ int HMPI_Alltoall(void* sendbuf, int sendcount, MPI_Datatype sendtype, void* rec
       MPI_Type_contiguous(recvcount * g_nthreads * g_nthreads, recvtype, &dt_recv);
       MPI_Type_commit(&dt_recv);
 
-      //Post receives
+      //Post receives from each other rank, except self.
       int len = data_size * g_nthreads * g_nthreads;
       for(int i = 0; i < g_size; i++) {
           if(i != g_rank) {
@@ -855,7 +838,6 @@ int HMPI_Alltoall(void* sendbuf, int sendcount, MPI_Datatype sendtype, void* rec
   }
 
   barrier_cb(&comm->barr, g_tl_tid, barrier_iprobe);
-  //barrier_wait(&comm->barr);
 
   //Copy into the shared send buffer on a stride by g_nthreads
   //This way our temp buffer has all the data going to proc 0, then proc 1, etc
@@ -875,7 +857,6 @@ int HMPI_Alltoall(void* sendbuf, int sendcount, MPI_Datatype sendtype, void* rec
 
   //Start sends to each other rank
   barrier_cb(&comm->barr, g_tl_tid, barrier_iprobe);
-  //barrier_wait(&comm->barr);
 
   if(g_tl_tid == 0) {
       int len = data_size * g_nthreads * g_nthreads;
@@ -910,32 +891,6 @@ int HMPI_Alltoall(void* sendbuf, int sendcount, MPI_Datatype sendtype, void* rec
   }
 
   barrier_cb(&comm->barr, g_tl_tid, barrier_iprobe);
-  //barrier_wait(&comm->barr);
-
-  //Do the MPI alltoall
-#if 0
-  if(g_tl_tid == 0) {
-      //Seems like we should multiply by comm_size, but alltoall already
-      // assumes one element per process.  We do have g_nthreads per process
-      // though, so we multiply by that.
-      MPI_Type_contiguous(sendcount * g_nthreads * g_nthreads, sendtype, &dt_send);
-      MPI_Type_commit(&dt_send);
-
-      MPI_Type_contiguous(recvcount * g_nthreads * g_nthreads, recvtype, &dt_recv);
-      MPI_Type_commit(&dt_recv);
-
-      //This should now be alltoallv, with my mpi rank being 0 data,
-      // and 1 for all other ranks... or can i stick with alltoall?  try both
-      MPI_Alltoall((void*)comm->mpi_sbuf, 1, dt_send,
-              (void*)comm->mpi_rbuf, 1, dt_recv, comm->mpicomm);
-
-      MPI_Type_free(&dt_send);
-      MPI_Type_free(&dt_recv);
-  }
-
-  barrier(&comm->barr);
-  barrier_wait(&comm->barr);
-#endif
 
   //Need to do g_size memcpy's -- one block of data per MPI process.
   // We copy g_nthreads * data_size at a time.
@@ -964,121 +919,14 @@ int HMPI_Alltoall(void* sendbuf, int sendcount, MPI_Datatype sendtype, void* rec
 }
 
 
-#if 0
-int HMPI_Alltoall(void* sendbuf, int sendcount, MPI_Datatype sendtype, void* recvbuf, int recvcount, MPI_Datatype recvtype, HMPI_Comm comm) 
-{
-  MPI_Aint send_extent, recv_extent, lb;
-  //void* rbuf;
-  int32_t send_size;
-  int32_t recv_size;
-  //uint64_t t1, t2, tmp;
-  //HRT_TIMESTAMP_T t1, t2;
-  //uint64_t tmp;
-
-//  PROFILE_START(g_profile_info[g_tl_tid], alltoall);
-
-  MPI_Type_size(sendtype, &send_size);
-  MPI_Type_size(recvtype, &recv_size);
-  MPI_Type_get_extent(sendtype, &lb, &send_extent);
-  MPI_Type_get_extent(recvtype, &lb, &recv_extent);
-
-  if(send_extent != send_size || recv_extent != recv_size) {
-    printf("alltoall non-contiguous derived datatypes are not supported yet!\n");
-    MPI_Abort(comm->mpicomm, 0);
-  }
-
-  if(send_size * sendcount != recv_size * recvcount) {
-    printf("different send and receive size is not supported!\n");
-    MPI_Abort(comm->mpicomm, 0);
-  }
-
-#ifdef DEBUG
-  printf("[%i] HMPI_Alltoall(%p, %i, %p, %p, %i, %p, %p)\n", g_rank*g_nthreads+g_tl_tid, sendbuf, sendcount, sendtype, recvbuf, recvcount, recvtype, comm);
-#endif
-
-  uint64_t data_size = send_size * sendcount;
-
-  //Construct a vector type for the send side.
-  // We use this to interleave the data from each local thread.
-
-  MPI_Address(sendbuf, (MPI_Aint*)&comm->sbuf[g_tl_tid]);
-  comm->scount[g_tl_tid] = sendcount;
-  comm->stype[g_tl_tid] = sendtype;
-
-  MPI_Address(recvbuf, (MPI_Aint*)&comm->rbuf[g_tl_tid]);
-  comm->rcount[g_tl_tid] = recvcount * g_nthreads;
-  comm->rtype[g_tl_tid] = recvtype;
-
-  //PROFILE_START(g_profile_info[g_tl_tid], barrier);
-  barrier(&comm->barr);
-  barrier_wait(&comm->barr);
-  //PROFILE_STOP(g_profile_info[g_tl_tid], barrier);
-
-  //Do the MPI alltoall
-  if(g_tl_tid == 0) {
-      MPI_Datatype dt_send;
-      MPI_Datatype dt_recv;
-      MPI_Datatype dt_tmp;
-      //MPI_Datatype dt_tmp2;
-      MPI_Aint lb;
-      MPI_Aint extent;
-
-      //For the send side, we create an hindexed type to stride across each
-      //thread's send buffer first, then build a contiguous type to group the
-      //data for the different threads of each process.
-      MPI_Type_create_hindexed(g_nthreads,
-              (int*)comm->scount, (MPI_Aint*)comm->sbuf, sendtype, &dt_tmp);
-
-      MPI_Type_get_extent(dt_tmp, &lb, &extent);
-      MPI_Type_create_resized(dt_tmp, lb, data_size, &dt_send);
-      //MPI_Type_contiguous(g_nthreads, dt_tmp2, &dt_send);
-
-      MPI_Type_commit(&dt_send);
-      MPI_Type_free(&dt_tmp);
-      //MPI_Type_free(&dt_tmp2);
-
-      //MPI_Type_commit(&dt_send);
-
-      //For the receive side, we build a contiguous datatype (actually, just
-      //the recvtype and recvcount * numthreads) representing all the data from
-      //all threads on another process.  An hindexed type is used to split the
-      //data across the receive buffers of each local thread.
-
-      //We have g_nthreads receive buffers, one from each thread.
-      //Each buffer holds recvcount * g_nthreads elements per process.
-      MPI_Type_create_hindexed(g_nthreads,
-              (int*)comm->rcount, (MPI_Aint*)comm->rbuf, recvtype, &dt_tmp);
-
-      MPI_Type_get_extent(dt_tmp, &lb, &extent);
-      MPI_Type_create_resized(dt_tmp, lb, data_size * g_nthreads, &dt_recv);
-
-      MPI_Type_commit(&dt_recv);
-      MPI_Type_free(&dt_tmp);
-
-      MPI_Alltoall(MPI_BOTTOM, g_nthreads, dt_send,
-              MPI_BOTTOM, 1, dt_recv, comm->mpicomm);
-
-      MPI_Type_free(&dt_send);
-      MPI_Type_free(&dt_recv);
-  }
-
-//  PROFILE_START(g_profile_info[g_tl_tid], barrier);
-  barrier(&comm->barr);
-  barrier_wait(&comm->barr);
-//  PROFILE_STOP(g_profile_info[g_tl_tid], barrier);
-
-//  PROFILE_STOP(g_profile_info[g_tl_tid], alltoall);
-  return MPI_SUCCESS;
-}
-#endif
-
-
 int HMPI_Abort( HMPI_Comm comm, int errorcode ) {
   printf("HMPI: user code called MPI_Abort!\n");
   return MPI_Abort(comm->mpicomm, errorcode);
 }
 
 
+//AWF - this version of alltoall assumes only one node, so no need to mess with
+//MPI stuff.  Made to be as fast as possible for the local case..
 int HMPI_Alltoall_local(void* sendbuf, int sendcount, MPI_Datatype sendtype, void* recvbuf, int recvcount, MPI_Datatype recvtype, HMPI_Comm comm) 
 {
     int32_t send_size;

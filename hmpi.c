@@ -64,14 +64,13 @@ static char** g_argv;
 static int (*g_entry)(int argc, char** argv);
 
 //Each thread has a list of send and receive requests.
-//The receive requests are managed only by the owning thread.
+//The receive requests are managed privately by the owning thread.
 //The send requests list for a particular thread contains sends whose target is
 // that thread.  Other threads place their send requests on this list, and the
-// thread owning the list matches receives against them.
+// thread owning the list matches receives against them in match_recv().
 
 static __thread HMPI_Item g_recv_reqs_head = {NULL, NULL};
 static __thread HMPI_Item g_recv_reqs_tail = {NULL, NULL};
-//static HMPI_Item** g_recv_reqs = NULL;
 
 typedef struct HMPI_Request_list {
     HMPI_Item head;
@@ -82,11 +81,12 @@ typedef struct HMPI_Request_list {
 static HMPI_Request_list* g_send_reqs = NULL;
 static __thread HMPI_Item* g_tl_send_reqs_head;
 
+//Pool of unused reqs to save malloc time.
 static __thread HMPI_Item* g_free_reqs = NULL;
-
 
 static inline HMPI_Request acquire_req(void)
 {
+    //Malloc a new req only if none are in the pool.
     if(g_free_reqs == NULL) {
         return (HMPI_Request)malloc(sizeof(HMPI_Request_info));
     } else {
@@ -99,6 +99,7 @@ static inline HMPI_Request acquire_req(void)
 
 static inline void release_req(HMPI_Request req)
 {
+    //Return a req to the pool -- once allocated, a req is never freed.
     HMPI_Item* item = (HMPI_Item*)req;
 
     item->next = g_free_reqs;
@@ -130,46 +131,22 @@ static inline void add_send_req(HMPI_Request req, int tid) {
 
 static inline void add_recv_req(HMPI_Request req) {
     HMPI_Item* item = (HMPI_Item*)req;
-    //int tid = g_tl_tid;
 
+    //Add at tail to ensure matching occurs in order.
+    //Double-linked list is necessary for quick removals.
     item->next = &g_recv_reqs_tail;
     item->prev = g_recv_reqs_tail.prev;
 
     g_recv_reqs_tail.prev->next = item;
     g_recv_reqs_tail.prev = item;
-
-#if 0
-    item->next = g_recv_reqs;
-    item->prev = NULL;
-
-    if(item->next != NULL) {
-        item->next->prev = item;
-    }
-
-    g_recv_reqs = item;
-#endif
 }
 
 
 static inline void remove_recv_req(HMPI_Request req) {
     HMPI_Item* item = (HMPI_Item*)req;
-    //int tid = g_tl_tid;
 
     item->next->prev = item->prev;
     item->prev->next = item->next;
-
-#if 0
-    if(item->prev == NULL) {
-        //Head of list
-        g_recv_reqs = item->next;
-    } else {
-        item->prev->next = item->next;
-    }
-
-    if(item->next != NULL) {
-        item->next->prev = item->prev;
-    }
-#endif
 }
 
 
@@ -237,7 +214,6 @@ static inline int match_recv(HMPI_Request recv_req, HMPI_Request* send_req) {
 
 
 static inline int match_probe(int source, int tag, HMPI_Comm comm, HMPI_Request* send_req) {
-    //HMPI_Request_list* req_list = &g_send_reqs[g_tl_tid];
     HMPI_Item* cur;
     HMPI_Request req;
 
@@ -281,7 +257,6 @@ void* trampoline(void* tid) {
         //         idx = s * num_cores + c
         hwloc_obj_t obj;
         hwloc_cpuset_t cpuset;
-        //hwloc_cpuset_t* cpuset = &g_hwloc_cpuset[rank];
 
         int num_sockets =
             hwloc_get_nbobjs_by_type(g_hwloc_topo, HWLOC_OBJ_SOCKET);
@@ -351,7 +326,6 @@ void* trampoline(void* tid) {
     g_hmpi_rank = g_rank*g_nthreads+rank;
 
     // Initialize send requests list and lock
-    //g_recv_reqs = NULL;
     g_recv_reqs_head.next = &g_recv_reqs_tail;
     g_recv_reqs_tail.prev = &g_recv_reqs_head;
 
@@ -360,8 +334,6 @@ void* trampoline(void* tid) {
     g_tl_send_reqs_head = &g_send_reqs[rank].head;
     LOCK_INIT(&g_send_reqs[rank].lock, 0);
     PROFILE_INIT(g_tl_tid);
-
-    //printf("%d:%d entered trampoline\n", g_rank, g_tl_tid); fflush(stdout);
 
     // Don't head off to user land until all threads are ready 
     barrier(&HMPI_COMM_WORLD->barr, g_tl_tid);
@@ -379,13 +351,8 @@ int HMPI_Init(int *argc, char ***argv, int nthreads, int (*start_routine)(int ar
   int provided;
   long int thr;
 
-  //printf("before MPI_Init\n"); fflush(stdout);
   MPI_Init_thread(argc, argv, MPI_THREAD_MULTIPLE, &provided);
   assert(MPI_THREAD_MULTIPLE == provided);
-  //printf("HMPI INIT %d threads\n", nthreads); fflush(stdout);
-#ifdef DEBUG
-  printf("after MPI_Init\n"); fflush(stdout);
-#endif
 
   g_argc = *argc;
   g_argv = *argv; 
@@ -403,10 +370,6 @@ int HMPI_Init(int *argc, char ***argv, int nthreads, int (*start_routine)(int ar
   HMPI_COMM_WORLD->rcount = (volatile int*)malloc(sizeof(int) * nthreads);
   HMPI_COMM_WORLD->stype = (volatile MPI_Datatype*)malloc(sizeof(MPI_Datatype) * nthreads);
   HMPI_COMM_WORLD->rtype = (volatile MPI_Datatype*)malloc(sizeof(MPI_Datatype) * nthreads);
-  //HMPI_COMM_WORLD->flag = (volatile uint8_t*)malloc(sizeof(uint8_t) * nthreads);
-
-  //Allreduce requires sbuf be initialized to NULL
-  //memset((void*)HMPI_COMM_WORLD->flag, 0, sizeof(uint8_t) * nthreads);
 
   threads = (pthread_t*)malloc(sizeof(pthread_t) * nthreads);
 
