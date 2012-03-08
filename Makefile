@@ -1,40 +1,37 @@
 CC=mpicc -std=gnu99
 #CC=mpixlc
 
+WARN=-Wall -Wuninitialized
+CFLAGS+=$(WARN)
+
 HWLOC=/g/g19/friedley/local
 
-#CFLAGS=-O0 -g -Wall -Wuninitialized -I$(HWLOC)/include -L$(HWLOC)/lib -L/usr/local/tools/papi/lib -I/usr/local/tools/papi/include
-CFLAGS=-O3 -march=native -fomit-frame-pointer -Wall -Wuninitialized -I$(HWLOC)/include -L$(HWLOC)/lib
-#CFLAGS=-O5 -qarch=450d
-#CFLAGS=-O0 -g 
-#CFLAGS=-march=k8 -O2 -fomit-frame-pointer
-#CFLAGS=-march=native -O3 -fomit-frame-pointer -Iopenpa-1.0.2/src -L/usr/local/tools/papi/lib -I/usr/local/tools/papi/include
+#PROG=lulesh
+LIBS=-L$(HWLOC)/lib -lhwloc
+INCS=-I$(HWLOC)/include
+SRCS=hmpi.c hmpi_coll.c nbc_op.c
+HDRS=hmpi.h barrier.h lock.h profile2.h
 
-all: main
-
-nbc_op.o: nbc_op.c
-	$(CC) $(CFLAGS) -c nbc_op.c -o nbc_op.o 
-
-hmpi.o: hmpi.c hmpi.h
-	$(CC) $(CFLAGS) -c hmpi.c -o hmpi.o
-
-hmpi.a: hmpi.o nbc_op.o
+all: $(SRCS:%.c=%.o)
 	ar r $@ hmpi.o nbc_op.o
 	ranlib $@
 
-main: hmpi.a main.c
-#	$(CC) main.c $(CFLAGS) hmpi.a -o $@ 
-	$(CC) main.c $(CFLAGS) -lhwloc hmpi.a -o $@ 
+udawn: LIBS =
+udawn: $(SRCS:%.c=%.o)
+	ar r $@ hmpi.o nbc_op.o
+	ranlib $@
 
-#$(CC) main.c $(CFLAGS) -lhwloc -lpapi hmpi.a -o $@ 
-#$(CC) main.c $(CFLAGS) -lhwloc -lpmi -lpapi hmpi.a -o $@ 
+main: CFLAGS = -g -O
+main: all main.c
+	$(CC) $(CCFLAGS) $(LDFLAGS) -o main hmpi.a $(LIBS)
 
-hmpi.S: hmpi.c hmpi.h
-	$(CC) hmpi.c -S -fverbose-asm -o $@
+debug: CFLAGS = -g -O
+debug: $(SRCS:%.c=%.o) 
+	$(CC) $(INCS) $(CFLAGS) $(LDFLAGS) -o $(PROG) $(SRCS:%.c=%.o) $(LIBS)
 
-hmpi.tgz: hmpi*
-	tar czf hmpi.tgz hmpi.c hmpi.h main.c Makefile nbc_op.c
-
+.c.o: $(HDRS)
+	$(CC) $(INCS) $(CFLAGS) $(CPPFLAGS) -c $<
 
 clean:
-	rm -f hmpi.a hmpi.o main nbc_op.o
+	rm -f *.o $(PROG)
+
