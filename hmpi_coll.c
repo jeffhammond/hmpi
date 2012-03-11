@@ -31,9 +31,9 @@ PROFILE_EXTERN(allreduce);
 PROFILE_EXTERN(op);
 
 
-extern int g_size=-1;               //Underlying MPI world size
-extern __thread int g_hmpi_rank=-1; //HMPI rank for this thread
-extern __thread int g_tl_tid=-1;    //HMPI node-local rank for this thread (tid)
+extern int g_size;                  //Underlying MPI world size
+extern __thread int g_hmpi_rank;    //HMPI rank for this thread
+extern __thread int g_tl_tid;       //HMPI node-local rank for this thread (tid)
 
 
 //Callback used in barriers to cause MPI library progress while waiting
@@ -562,9 +562,9 @@ int HMPI_Gatherv(void* sendbuf, int sendcnt, MPI_Datatype sendtype, void* recvbu
 
             //MPI_Gatherv(MPI_BOTTOM, 1, dtsend, NULL, NULL, MPI_DATATYPE_NULL,
             //        root, comm->mpicomm);
+            MPI_Type_free(&dtsend);
         }
 
-        MPI_Type_free(&dtsend);
     } else if(HMPI_Comm_local(comm, root)) {
         //Meanwhile, all local non-root ranks do memcpys.
         int root_tid;

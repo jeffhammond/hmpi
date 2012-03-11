@@ -75,7 +75,8 @@ static __thread HMPI_Item g_recv_reqs_tail = {NULL, NULL};
 typedef struct HMPI_Request_list {
     HMPI_Item head;
     HMPI_Item* tail;
-    lock_t lock;
+    //lock_t lock;
+    mcs_lock_t lock;
 } HMPI_Request_list;
 
 static HMPI_Request_list* g_send_reqs = NULL;
@@ -112,13 +113,23 @@ static inline void add_send_req(HMPI_Request req, int tid) {
     //Insert req at tail.
     HMPI_Request_list* req_list = &g_send_reqs[tid];
     HMPI_Item* item = (HMPI_Item*)req;
+    printf("%d add req %p req_list %p tid %d\n", g_hmpi_rank, req, req_list, tid);
+    fflush(stdout);
 
     item->next = NULL;
 
-    LOCK_SET(&req_list->lock);
+    mcs_qnode_t q;
+
+    printf("%d acquire\n", g_hmpi_rank); fflush(stdout);
+    MCS_LOCK_ACQUIRE(&req_list->lock, &q, g_hmpi_rank);
+    printf("%d done acquire\n", g_hmpi_rank); fflush(stdout);
+    //LOCK_SET(&req_list->lock);
     req_list->tail->next = item;
     req_list->tail = item;
-    LOCK_CLEAR(&req_list->lock);
+    //LOCK_CLEAR(&req_list->lock);
+    printf("%d release\n", g_hmpi_rank); fflush(stdout);
+    MCS_LOCK_RELEASE(&req_list->lock, &q, g_hmpi_rank);
+    printf("%d done release\n", g_hmpi_rank); fflush(stdout);
 
 #if 0
     HMPI_Item* next;
@@ -172,15 +183,19 @@ static inline int match_recv(HMPI_Request recv_req, HMPI_Request* send_req) {
 
                 //cur is tail, lock to update tail.
                 prev->next = NULL;
-                LOCK_SET(&req_list->lock);
+                //LOCK_SET(&req_list->lock);
+                mcs_qnode_t q;
+                MCS_LOCK_ACQUIRE(&req_list->lock, &q, g_hmpi_rank);
 
                 //Check again, may have had another insert since checking.
                 if(cur->next == NULL) {
                     //Still tail.
                     req_list->tail = prev;
-                    LOCK_CLEAR(&req_list->lock);
+                    //LOCK_CLEAR(&req_list->lock);
+                    MCS_LOCK_RELEASE(&req_list->lock, &q, g_hmpi_rank);
                 } else {
-                    LOCK_CLEAR(&req_list->lock);
+                    //LOCK_CLEAR(&req_list->lock);
+                    MCS_LOCK_RELEASE(&req_list->lock, &q, g_hmpi_rank);
                     prev->next = cur->next;
                 }
             } else {
@@ -332,7 +347,8 @@ void* trampoline(void* tid) {
     g_send_reqs[rank].head.next = NULL;
     g_send_reqs[rank].tail = &g_send_reqs[rank].head;
     g_tl_send_reqs_head = &g_send_reqs[rank].head;
-    LOCK_INIT(&g_send_reqs[rank].lock, 0);
+    //LOCK_INIT(&g_send_reqs[rank].lock, 0);
+    MCS_LOCK_INIT(&g_send_reqs[rank].lock);
     PROFILE_INIT(g_tl_tid);
 
     // Don't head off to user land until all threads are ready 
@@ -479,21 +495,15 @@ int HMPI_Finalize() {
 
 
 //We assume req->type == HMPI_SEND and req->stat == 0 (uncompleted send)
-static inline int HMPI_Progress_send(HMPI_Request send_req) {
-
-    //Poll local receives in the recv reqs list.
-    // We do this to prevent deadlock when local threads are exchange messages
-    // with each other.  Normally no work is done on a send request, but if
-    // the app blocks waiting for it to complete, a neighbor thread could also
-    // block on its send and neither of their receives are ever completed.
-
-    //TODO - this visits most rescent receives first.  maybe iterate backwards
-    // to progress oldest receives first?
+static inline int HMPI_Progress_send(HMPI_Request send_req)
+{
+    if(get_reqstat(send_req) == HMPI_REQ_COMPLETE) {
+        return HMPI_REQ_COMPLETE;
+    }
 
     //Write blocks on this send req if receiver has matched it.
     //If mesage is short, receiver won't bother clearing the match lock, and
     // instead just does the copy and marks completion.
-
     if(LOCK_TRY(&send_req->match)) {
         HMPI_Request recv_req = (HMPI_Request)send_req->match_req;
         uintptr_t rbuf = (uintptr_t)recv_req->buf;
@@ -518,16 +528,17 @@ static inline int HMPI_Progress_send(HMPI_Request send_req) {
         LOCK_CLEAR(&send_req->match);
 
         //Receiver will set completion soon, wait rather than running off.
-        while(get_reqstat(send_req) != 1);
-        return 1;
+        while(get_reqstat(send_req) != HMPI_REQ_COMPLETE);
+        return HMPI_REQ_COMPLETE;
     }
 
-    return get_reqstat(send_req);
+    return HMPI_REQ_ACTIVE;
 }
 
 
 //For req->type == HMPI_RECV
-static inline int HMPI_Progress_recv(HMPI_Request recv_req) {
+static inline int HMPI_Progress_recv(HMPI_Request recv_req)
+{
     //Try to match from the local send reqs list
     HMPI_Request send_req = NULL;
 

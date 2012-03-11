@@ -1,6 +1,6 @@
 #ifndef _LOCK_H_
 #define _LOCK_H_
-
+#include <stdio.h>
 //#define CACHE_LINE 128
 
 //AWF - I made my own primitives for several reasons:
@@ -74,8 +74,8 @@ static inline int LOCK_GET(lock_t* __restrict l) {
 #elif defined __GNUC__ //Should cover ICC too
 
 #ifdef __x86_64__ //Better x86 versions
-#define STORE_FENCE() __asm__("sfence")
-#define LOAD_FENCE() __asm__("lfence")
+#define STORE_FENCE() __asm__ volatile ("sfence")
+#define LOAD_FENCE() __asm__ volatile ("lfence")
 #else //Default GCC builtins
 #define STORE_FENCE() __sync_synchronize()
 #define LOAD_FENCE() __sync_synchronize()
@@ -118,46 +118,86 @@ static inline int LOCK_GET(lock_t* __restrict l) {
     return (int)l->lock;
 }
 
+
+
+typedef struct mcs_qnode_t {
+    volatile struct mcs_qnode_t* next;
+    volatile int locked;
+} mcs_qnode_t;
+
+typedef mcs_qnode_t* mcs_lock_t;
+
+
+static inline void MCS_LOCK_INIT(mcs_lock_t* __restrict l) {
+    *l = NULL;
+    STORE_FENCE();
+}
+
+static inline void* fetch_and_store(void** ptr, void* val)
+{
+    void* out;
+    //asm volatile ("mov %2, %0\n"
+    //              "lock xchg %0, (%1)" : "=r" (out) : "r" (ptr), "r" (val));
+    //printf("before ptr %p *ptr %p val %p\n", ptr, *ptr, val);
+    asm volatile ("lock xchg %0, (%1)" : "=r" (out) : "r" (ptr), "0" (val));
+    //printf("after ptr %p *ptr %p out %p\n", ptr, *ptr, out);
+    //fflush(stdout);
+    return out;
+}
+
+static /*inline*/ void MCS_LOCK_ACQUIRE(mcs_lock_t* __restrict l, mcs_qnode_t* q, int tid) {
+    q->next = NULL;
+    STORE_FENCE();
+
+    mcs_qnode_t* pred;
+
+    //printf("%d lock %p qnode %p\n", tid, l, q); fflush(stdout);
+    //Replace node at head of lock with our own, saving the previous node.
+    pred = (mcs_qnode_t*)fetch_and_store((void**)l, q);
+
+    STORE_FENCE();
+    printf("%d f-s worked pred %p\n", tid, pred); fflush(stdout);
+
+    //Was there actually a previous node?  If not, we got the lock.
+    if(pred != NULL) {
+        //Otherwise we need to wait -- set our node locked, and wait for
+        //the thread that owns the lock to release it.
+        q->locked = 1;
+        STORE_FENCE();  //Prevent q->locked from being set afer pred->next
+        pred->next = q;
+        LOAD_FENCE();
+        while(q->locked == 1);
+    }
+}
+
+static /*inline*/ void MCS_LOCK_RELEASE(mcs_lock_t* __restrict l, mcs_qnode_t* q, int tid) {
+    //Is another thread waiting on the lock?
+    if(q->next == NULL) {
+        //Doesn't look like it -- CAS NULL into the lock
+        if(CAS_PTR_BOOL(l, q, NULL)) {
+            return;
+        }
+
+        //A thread jumped in between the branch and the CAS --
+        //wait for them to set our next pointer.
+        STORE_FENCE();
+        LOAD_FENCE();
+        printf("%d waiting for other thread to set next\n", tid); fflush(stdout);
+        while(q->next == NULL);
+        //q->next is going to NULL between here and below.
+    }
+
+    //q isn't null, nor is next..
+    STORE_FENCE();
+    LOAD_FENCE();
+    printf("%d q %p q->next %p\n", tid, q, q->next); fflush(stdout);
+    q->next->locked = 0; //segfault here
+    STORE_FENCE();
+}
+
 #else
 #error "Unrecognized platform; no atomics defined"
 #endif
 
-
-
-#if 0
-static inline void LOCK_INIT(lock_t* __restrict l, int locked) {
-    l->lock = locked;
-    STORE_FENCE();
-}
-
-static inline void LOCK_SET(lock_t* __restrict l) {
-#if defined __IBMC__ || defined __IBMCPP__
-    while(__check_lock_mp((int*)(&l->lock), 0, 1));
-#else
-    while(__sync_lock_test_and_set(&l->lock, 1) == 1);
-#endif
-}
-
-//Returns non-zero if lock was acquired, 0 if not.
-static inline int LOCK_TRY(lock_t* __restrict l) {
-#if defined __IBMC__ || defined __IBMCPP__
-    return __check_lock_mp((int*)(&l->lock), 0, 1) == 0;
-#else
-    return __sync_lock_test_and_set(&l->lock, 1) == 0;
-#endif
-}
-
-static inline void LOCK_CLEAR(lock_t* __restrict l) {
-#if defined __IBMC__ || defined __IBMCPP__
-    __clear_lock_mp((int*)(&l->lock), 0);
-#else
-    __sync_lock_release(&l->lock);
-#endif
-}
-
-static inline int LOCK_GET(lock_t* __restrict l) {
-    return (int)l->lock;
-}
-#endif
 
 #endif
