@@ -121,8 +121,8 @@ static inline int LOCK_GET(lock_t* __restrict l) {
 
 
 typedef struct mcs_qnode_t {
-    volatile struct mcs_qnode_t* next;
-    volatile int locked;
+    struct mcs_qnode_t* next;
+    int locked;
 } mcs_qnode_t;
 
 typedef mcs_qnode_t* mcs_lock_t;
@@ -132,47 +132,45 @@ static inline void MCS_LOCK_INIT(mcs_lock_t* __restrict l) {
     *l = NULL;
     STORE_FENCE();
 }
+    
 
 static inline void* fetch_and_store(void** ptr, void* val)
 {
     void* out;
-    //asm volatile ("mov %2, %0\n"
-    //              "lock xchg %0, (%1)" : "=r" (out) : "r" (ptr), "r" (val));
-    //printf("before ptr %p *ptr %p val %p\n", ptr, *ptr, val);
     asm volatile ("lock xchg %0, (%1)" : "=r" (out) : "r" (ptr), "0" (val));
-    //printf("after ptr %p *ptr %p out %p\n", ptr, *ptr, out);
-    //fflush(stdout);
+
     return out;
 }
 
-static /*inline*/ void MCS_LOCK_ACQUIRE(mcs_lock_t* __restrict l, mcs_qnode_t* q, int tid) {
+static inline void MCS_LOCK_ACQUIRE(mcs_lock_t* __restrict l, mcs_qnode_t* q, int tid) {
     q->next = NULL;
-    STORE_FENCE();
 
     mcs_qnode_t* pred;
 
-    //printf("%d lock %p qnode %p\n", tid, l, q); fflush(stdout);
     //Replace node at head of lock with our own, saving the previous node.
     pred = (mcs_qnode_t*)fetch_and_store((void**)l, q);
-
-    STORE_FENCE();
-    printf("%d f-s worked pred %p\n", tid, pred); fflush(stdout);
 
     //Was there actually a previous node?  If not, we got the lock.
     if(pred != NULL) {
         //Otherwise we need to wait -- set our node locked, and wait for
         //the thread that owns the lock to release it.
-        q->locked = 1;
-        STORE_FENCE();  //Prevent q->locked from being set afer pred->next
+        volatile int* locked = &q->locked;
+
+        *locked = 1;
+
+        //TODO - fence isn't necessary here on x86, but maybe is on PPC?
+        //STORE_FENCE();  //Prevent q->locked from being set afer pred->next
+
         pred->next = q;
-        LOAD_FENCE();
-        while(q->locked == 1);
+        while(*locked == 1);
     }
 }
 
-static /*inline*/ void MCS_LOCK_RELEASE(mcs_lock_t* __restrict l, mcs_qnode_t* q, int tid) {
+static inline void MCS_LOCK_RELEASE(mcs_lock_t* __restrict l, mcs_qnode_t* q, int tid) {
+    mcs_qnode_t* next = q->next;
+
     //Is another thread waiting on the lock?
-    if(q->next == NULL) {
+    if(next == NULL) {
         //Doesn't look like it -- CAS NULL into the lock
         if(CAS_PTR_BOOL(l, q, NULL)) {
             return;
@@ -180,19 +178,14 @@ static /*inline*/ void MCS_LOCK_RELEASE(mcs_lock_t* __restrict l, mcs_qnode_t* q
 
         //A thread jumped in between the branch and the CAS --
         //wait for them to set our next pointer.
-        STORE_FENCE();
-        LOAD_FENCE();
-        printf("%d waiting for other thread to set next\n", tid); fflush(stdout);
-        while(q->next == NULL);
-        //q->next is going to NULL between here and below.
+
+        //AWF - the way this type is declared is CRITICAL for correctness!!!
+        mcs_qnode_t* volatile * vol_next = (mcs_qnode_t* volatile *)&q->next;
+
+        while((next = *vol_next) == NULL);
     }
 
-    //q isn't null, nor is next..
-    STORE_FENCE();
-    LOAD_FENCE();
-    printf("%d q %p q->next %p\n", tid, q, q->next); fflush(stdout);
-    q->next->locked = 0; //segfault here
-    STORE_FENCE();
+    next->locked = 0;
 }
 
 #else

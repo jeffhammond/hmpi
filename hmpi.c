@@ -113,23 +113,17 @@ static inline void add_send_req(HMPI_Request req, int tid) {
     //Insert req at tail.
     HMPI_Request_list* req_list = &g_send_reqs[tid];
     HMPI_Item* item = (HMPI_Item*)req;
-    printf("%d add req %p req_list %p tid %d\n", g_hmpi_rank, req, req_list, tid);
-    fflush(stdout);
 
     item->next = NULL;
 
     mcs_qnode_t q;
 
-    printf("%d acquire\n", g_hmpi_rank); fflush(stdout);
     MCS_LOCK_ACQUIRE(&req_list->lock, &q, g_hmpi_rank);
-    printf("%d done acquire\n", g_hmpi_rank); fflush(stdout);
     //LOCK_SET(&req_list->lock);
     req_list->tail->next = item;
     req_list->tail = item;
     //LOCK_CLEAR(&req_list->lock);
-    printf("%d release\n", g_hmpi_rank); fflush(stdout);
     MCS_LOCK_RELEASE(&req_list->lock, &q, g_hmpi_rank);
-    printf("%d done release\n", g_hmpi_rank); fflush(stdout);
 
 #if 0
     HMPI_Item* next;
