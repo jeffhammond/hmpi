@@ -68,7 +68,7 @@ typedef struct HMPI_Status {
 
 typedef struct HMPI_Item {
     struct HMPI_Item* next;
-    struct HMPI_Item* prev;
+//    struct HMPI_Item* prev;
 } HMPI_Item;
 
 

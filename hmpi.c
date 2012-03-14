@@ -26,7 +26,6 @@
 #ifndef __bg__
 #include <hwloc.h>
 #endif
-//#include "pipelinecopy.h"
 #include "lock.h"
 
 #define BLOCK_SIZE 8192
@@ -69,14 +68,24 @@ static int (*g_entry)(int argc, char** argv);
 // that thread.  Other threads place their send requests on this list, and the
 // thread owning the list matches receives against them in match_recv().
 
-static __thread HMPI_Item g_recv_reqs_head = {NULL, NULL};
-static __thread HMPI_Item g_recv_reqs_tail = {NULL, NULL};
+static __thread HMPI_Item g_recv_reqs_head = {NULL};
+static __thread HMPI_Item* g_recv_reqs_tail = NULL;
+
+
+//The send request lists are based on the MCS lock, see:
+// Algorithms for Scalable Synchronization on Shared-Memory Multiprocessors
+// by John Mellor-Crummey and Michael Scott
+//Rather than protecting with a lock, the list itself is implemented like an
+//MCS spin lock.  add_send_req() is equivalent to acquiring the lock, but our
+//version doesn't block if there are already nodes in the queue (or in MCS
+//terms, the lock is already 'held').  match_recv() contains code to remove a
+//send request from the queue, which is equivalen to releasing the lock.  Our
+//version is a little different in that we try to swap in the previous req for
+//the tail rather than NULL.
 
 typedef struct HMPI_Request_list {
     HMPI_Item head;
     HMPI_Item* tail;
-    //lock_t lock;
-    mcs_lock_t lock;
 } HMPI_Request_list;
 
 static HMPI_Request_list* g_send_reqs = NULL;
@@ -116,21 +125,20 @@ static inline void add_send_req(HMPI_Request req, int tid) {
 
     item->next = NULL;
 
-    mcs_qnode_t q;
+    HMPI_Item* pred =
+        (HMPI_Item*)fetch_and_store((void**)&req_list->tail, item);
 
-    MCS_LOCK_ACQUIRE(&req_list->lock, &q, g_hmpi_rank);
-    //LOCK_SET(&req_list->lock);
-    req_list->tail->next = item;
-    req_list->tail = item;
-    //LOCK_CLEAR(&req_list->lock);
-    MCS_LOCK_RELEASE(&req_list->lock, &q, g_hmpi_rank);
+    if(pred != NULL) {
+        //Another req is ahead of us in the queue.
+        pred->next = item;
 
-#if 0
-    HMPI_Item* next;
-    do {
-        next = item->next = req_list->head.next;
-    } while (!CAS_PTR_BOOL(&req_list->head.next, next, item));
-#endif
+        //Skip waiting on locked to clear -- no blocking here.
+    } else {
+        //Set the head -- err, this is a race isnt it?
+        //Actually this should never happen, since tail is initialized to head.
+        printf("ERROR hit bad case in add_send_req\n");
+        MPI_Abort(MPI_COMM_WORLD, 0);
+    }
 }
 
 
@@ -138,20 +146,19 @@ static inline void add_recv_req(HMPI_Request req) {
     HMPI_Item* item = (HMPI_Item*)req;
 
     //Add at tail to ensure matching occurs in order.
-    //Double-linked list is necessary for quick removals.
-    item->next = &g_recv_reqs_tail;
-    item->prev = g_recv_reqs_tail.prev;
-
-    g_recv_reqs_tail.prev->next = item;
-    g_recv_reqs_tail.prev = item;
+    item->next = NULL;
+    g_recv_reqs_tail->next = item;
+    g_recv_reqs_tail = item;
 }
 
 
-static inline void remove_recv_req(HMPI_Request req) {
-    HMPI_Item* item = (HMPI_Item*)req;
-
-    item->next->prev = item->prev;
-    item->prev->next = item->next;
+static inline void remove_recv_req(HMPI_Item* prev, HMPI_Item* cur) {
+    if(cur == g_recv_reqs_tail) {
+        g_recv_reqs_tail = prev;
+        prev->next = NULL;
+    } else {
+        prev->next = cur->next;
+    }
 }
 
 
@@ -173,43 +180,26 @@ static inline int match_recv(HMPI_Request recv_req, HMPI_Request* send_req) {
                 (req->tag == tag || tag == MPI_ANY_TAG)) {
 
             if(cur->next == NULL) {
+                //Looks like this is the tail -- CAS prev in.
                 HMPI_Request_list* req_list = &g_send_reqs[g_tl_tid];
-
-                //cur is tail, lock to update tail.
                 prev->next = NULL;
-                //LOCK_SET(&req_list->lock);
-                mcs_qnode_t q;
-                MCS_LOCK_ACQUIRE(&req_list->lock, &q, g_hmpi_rank);
 
-                //Check again, may have had another insert since checking.
-                if(cur->next == NULL) {
-                    //Still tail.
-                    req_list->tail = prev;
-                    //LOCK_CLEAR(&req_list->lock);
-                    MCS_LOCK_RELEASE(&req_list->lock, &q, g_hmpi_rank);
-                } else {
-                    //LOCK_CLEAR(&req_list->lock);
-                    MCS_LOCK_RELEASE(&req_list->lock, &q, g_hmpi_rank);
-                    prev->next = cur->next;
+                //STORE_FENCE(); //TODO - necessary? does CAS imply fence?
+
+                HMPI_Item* ptr = CAS_PTR_VAL(&req_list->tail, cur, prev);
+                if(ptr != cur) {
+                    //A new req was added between the branch and the CAS.
+                    //Wait for cur->next to go non-NULL -- shouldnt take long.
+                    HMPI_Item* volatile* vol_next = &cur->next;
+                    HMPI_Item* next;
+
+                    while((next = *vol_next) == NULL);
+                    prev->next = next;
                 }
             } else {
-                //Not at tail; just remove.
+                //Not the tail; just remove.
                 prev->next = cur->next;
             }
-#if 0
-            if(cur == req_list->head.next) {
-                //cur is head, CAS to update.
-                if(!CAS_PTR_BOOL(&req_list->head.next, cur, cur->next)) {
-                    //No longer the head, just update.
-                    for(prev = req_list->head.next;
-                            prev->next != cur; prev = prev->next);
-                    prev->next = cur->next;
-                }
-            } else {
-                prev->next = cur->next;
-            }
-#endif
-
 
             recv_req->proc = req->proc;
             recv_req->tag = req->tag;
@@ -335,14 +325,12 @@ void* trampoline(void* tid) {
     g_hmpi_rank = g_rank*g_nthreads+rank;
 
     // Initialize send requests list and lock
-    g_recv_reqs_head.next = &g_recv_reqs_tail;
-    g_recv_reqs_tail.prev = &g_recv_reqs_head;
+    g_recv_reqs_tail = &g_recv_reqs_head;
 
     g_send_reqs[rank].head.next = NULL;
     g_send_reqs[rank].tail = &g_send_reqs[rank].head;
     g_tl_send_reqs_head = &g_send_reqs[rank].head;
-    //LOCK_INIT(&g_send_reqs[rank].lock, 0);
-    MCS_LOCK_INIT(&g_send_reqs[rank].lock);
+
     PROFILE_INIT(g_tl_tid);
 
     // Don't head off to user land until all threads are ready 
@@ -483,11 +471,6 @@ int HMPI_Finalize() {
 }
 
 
-// global progress function
-//static inline int HMPI_Progress_request(HMPI_Request req);
-//static inline int HMPI_Progress_recv(HMPI_Request recv_req);
-
-
 //We assume req->type == HMPI_SEND and req->stat == 0 (uncompleted send)
 static inline int HMPI_Progress_send(HMPI_Request send_req)
 {
@@ -541,7 +524,7 @@ static inline int HMPI_Progress_recv(HMPI_Request recv_req)
     }
 
     //Remove the recv from the pending recv list
-    remove_recv_req(recv_req);
+    //remove_recv_req(recv_req);
 
 #ifdef DEBUG
     printf("[%i] [recv] found send from %i (%p) for buf %p in uq (tag: %i, size: %ld, status: %d)\n",
@@ -640,24 +623,27 @@ static inline int HMPI_Progress_mpi(HMPI_Request req)
 
 
 static inline void HMPI_Progress() {
-    //TODO - this visits most recent receives first.  maybe iterate backwards
-    // to progress oldest receives first?
     HMPI_Item* cur;
-    HMPI_Item* next;
-    HMPI_Item* tail = &g_recv_reqs_tail;
+    HMPI_Item* prev;
     HMPI_Request req;
 
     //Progress receive requests.
-    for(cur = g_recv_reqs_head.next; cur != tail; cur = next) {
+    //We remove items from the list, but they are still valid; nothing in this
+    //function will free or overwrite a req.
+    //So, it's safe to do cur = cur->next.
+    for(prev = &g_recv_reqs_head, cur = prev->next;
+            cur != NULL; prev = cur, cur = cur->next) {
         req = (HMPI_Request)cur;
-        next = cur->next;
 
 //        if(get_reqstat(req) == HMPI_REQ_COMPLETE) {
 //            printf("%d req %p type %d proc %d complete but is on recv_reqs list\n", g_hmpi_rank, req, req->type, req->proc);
 //        }
 
         if(likely(req->type == HMPI_RECV)) {
-            HMPI_Progress_recv(req);
+            //TODO - this branch could be eliminated by passing prev in.
+            if(HMPI_Progress_recv(req) == 1) {
+                remove_recv_req(prev, cur);
+            }
 #if 0
         //Currently this never happens; MPI recvs aren't added to g_recv_reqs.
         } else if(cur->type == MPI_RECV) {
@@ -667,8 +653,9 @@ static inline void HMPI_Progress() {
             remove_recv_req(cur);
 #endif
         } else { //req->type == HMPI_RECV_ANY_SOURCE
-            if(HMPI_Progress_recv(req)) {
+            if(HMPI_Progress_recv(req) == 1) {
                 //Local match & completion
+                remove_recv_req(prev, cur);
                 continue;
             } else if(g_size > 1) {
                 // check if we can get something via the MPI library
@@ -687,7 +674,7 @@ static inline void HMPI_Progress() {
                           g_tcomms[g_tl_tid], &status);
                     LOCK_CLEAR(&g_mpi_lock);
 
-                    remove_recv_req(req);
+                    remove_recv_req(prev, cur);
 
                     int type_size;
                     MPI_Type_size(req->datatype, &type_size);
@@ -707,57 +694,6 @@ static inline void HMPI_Progress() {
         }
     }
 }
-
-
-#if 0
-static inline int HMPI_Progress_request(HMPI_Request req)
-{
-#if 0
-  if(req->stat == HMPI_REQ_COMPLETE) {
-      //This is possible but unlikely -- another thread can complete the req
-      //between the check outside this function, and then here.
-      printf("%d A progressing complete req %p\n", g_hmpi_rank, req);
-  }
-#endif
-  HMPI_Progress();
-
-#if 0
-  if(req->stat == HMPI_REQ_COMPLETE) {
-      //This happens more often, since progress can finish req if it is a recv
-      // or a send to self.  Or another thread can race and complete.
-      printf("%d B progressing complete req %p type %d\n", g_hmpi_rank, req, req->type);
-  }
-#endif
-
-  if(req->type == HMPI_SEND) {
-      return HMPI_Progress_send(req);
-  } else if(req->type == HMPI_RECV) {
-      return get_reqstat(req);
-  } else if(req->type == MPI_SEND || req->type == MPI_RECV) {
-    int flag;
-
-    MPI_Test(&req->req, &flag, MPI_STATUS_IGNORE);
-
-    update_reqstat(req, flag);
-#ifdef DEBUG
-    if(flag) {
-        if(req->type == MPI_SEND) {
-            printf("[%d] completed MPI-level SEND %d proc %d tag %d\n", g_hmpi_rank, req->type, req->proc, req->tag);
-        } else {
-            printf("[%d] completed MPI-level RECV %d proc %d tag %d\n", g_hmpi_rank, req->type, req->proc, req->tag);
-        }
-        fflush(stdout);
-    }
-#endif
-
-    return flag;
-  } else /*if(req->type == HMPI_RECV_ANY_SOURCE)*/ {
-      return get_reqstat(req);
-  } //HMPI_RECV_ANY_SOURCE
-
-  return 0;
-}
-#endif
 
 
 int HMPI_Test(HMPI_Request *request, int *flag, HMPI_Status *status)
@@ -1189,13 +1125,13 @@ int HMPI_Irecv(void* buf, int count, MPI_Datatype datatype, int source, int tag,
     req->proc = MPI_ANY_SOURCE;
 
     add_recv_req(req);
-    HMPI_Progress_recv(req);
+    //HMPI_Progress_recv(req);
   } else if(source_mpi_rank == g_rank) { //Recv on-node, but not ANY_SOURCE
     // recv from other thread in my process
     req->type = HMPI_RECV;
 
     add_recv_req(req);
-    HMPI_Progress_recv(req);
+    //HMPI_Progress_recv(req);
   } else { //Recv off-node, but not ANY_SOURCE
     //printf("%d MPI recv buf %p count %d src %d (%d) tag %d req %p\n", g_hmpi_rank, buf, count, source, source_mpi_rank, tag, req);
     //fflush(stdout);
@@ -1216,1144 +1152,4 @@ int HMPI_Recv(void* buf, int count, MPI_Datatype datatype, int source, int tag, 
   HMPI_Wait(&req, status);
   return MPI_SUCCESS;
 }
-
-
-//
-// Collectives
-//
-
-#if 0
-int HMPI_Barrier(HMPI_Comm comm) {
-#ifdef DEBUG
-    printf("in HMPI_Barrier\n"); fflush(stdout);
-#endif
-
-    barrier_cb(&comm->barr, g_tl_tid, barrier_iprobe);
-
-    if(g_size > 1) {
-        // all root-threads perform MPI_Barrier 
-        if(g_tl_tid == 0) {
-            MPI_Barrier(comm->mpicomm);
-        }
-
-        barrier_cb(&comm->barr, g_tl_tid, barrier_iprobe);
-    }
-
-    return MPI_SUCCESS;
-}
-
-
-// declaration
-//extern "C" {
-int NBC_Operation(void *buf3, void *buf1, void *buf2, MPI_Op op, MPI_Datatype type, int count);
-//}
-
-int HMPI_Reduce(void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype, MPI_Op op, int root, HMPI_Comm comm)
-{
-    int size;
-    int i;
-
-    MPI_Type_size(datatype, &size);
-
-#ifdef DEBUG
-    if(g_tl_tid == 0) {
-    printf("[%i %i] HMPI_Reduce(%p, %p, %i, %p, %p, %d, %p)\n", g_hmpi_rank, g_tl_tid, sendbuf, recvbuf, count, datatype, op, root, comm);
-    fflush(stdout);
-    }
-#endif
-
-    //Root rank mod g_nthreads takes lead.
-    //Root rank allocs a buffer for local ranks to reduce into.
-    //Then does an MPI reduce into the receive buf, and we're done.
-    if(g_tl_tid == root % g_nthreads) {
-        void* localbuf;
-        if(g_hmpi_rank == root) {
-            localbuf = recvbuf;
-        } else {
-            localbuf = memalign(4096, size * count);
-        }
-
-        //TODO eliminate this memcpy by folding into a reduce call
-        memcpy(localbuf, sendbuf, size * count);
-
-        barrier_cb(&comm->barr, 0, barrier_iprobe);
-
-        for(i=0; i<g_nthreads; ++i) {
-            if(i == g_tl_tid) continue;
-            NBC_Operation(localbuf,
-                    localbuf, (void*)comm->sbuf[i], op, datatype, count);
-        }
-
-        //Other local ranks are free to go.
-        barrier(&comm->barr, 0);
-
-        if(g_size > 1) {
-            MPI_Reduce(MPI_IN_PLACE,
-                    localbuf, count, datatype, op, root / g_nthreads, comm->mpicomm);
-        }
-
-        if(g_hmpi_rank != root) {
-            free(localbuf);
-        }
-    } else {
-        //First barrier signals to root that all buffers are ready.
-        comm->sbuf[g_tl_tid] = sendbuf;
-        barrier_cb(&comm->barr, g_tl_tid, barrier_iprobe);
-
-        //Wait for root to copy our data; were free when it's done.
-        barrier(&comm->barr, g_tl_tid);
-    }
-
-    return MPI_SUCCESS;
-}
-
-
-int HMPI_Allreduce(void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype, MPI_Op op, HMPI_Comm comm)
-{
-    //MPI_Aint extent, lb;
-    int size;
-    int i;
-
-    MPI_Type_size(datatype, &size);
-    //MPI_Type_get_extent(datatype, &lb, &extent);
-    //MPI_Type_extent(datatype, &extent);
-
-#if 0
-    if(extent != size) {
-        printf("allreduce non-contiguous derived datatypes are not supported yet!\n");
-        fflush(stdout);
-        MPI_Abort(comm->mpicomm, 0);
-    }
-#endif
-
-#ifdef DEBUG
-    if(g_tl_tid == 0) {
-    printf("[%i %i] HMPI_Allreduce(%p, %p, %i, %p, %p, %p)\n", g_hmpi_rank, g_tl_tid, sendbuf, recvbuf,  count, datatype, op, comm);
-    fflush(stdout);
-    }
-#endif
-
-    //barrier_cb(&comm->barr, g_tl_tid, barrier_iprobe);
-
-    // Do the MPI allreduce, then each rank can copy out.
-    if(g_tl_tid == 0) {
-        comm->rbuf[0] = recvbuf;
-
-        barrier_cb(&comm->barr, 0, barrier_iprobe);
-
-        //TODO eliminate this memcpy by folding into a reduce call
-        memcpy(recvbuf, sendbuf, size * count);
-        //while(comm->flag[1] == 0);
-        //NBC_Operation(recvbuf, sendbuf, (void*)comm->sbuf[1], op, datatype, count);
-        //comm->flag[1] = 0;
-
-        for(i=1; i<g_nthreads; ++i) {
-            //Wait for flag to be set by each thread before reading their buf
-            //while(comm->flag[i] == 0);
-            NBC_Operation(recvbuf, recvbuf, (void*)comm->sbuf[i], op, datatype, count);
-            //comm->flag[i] = 0;
-        }
-
-        if(g_size > 1) {
-            MPI_Allreduce(MPI_IN_PLACE, recvbuf, count, datatype, op, comm->mpicomm);
-        }
-
-        //STORE_FENCE();
-        //comm->flag[0] = 1;
-        //barrier_cb(&comm->barr, g_tl_tid, barrier_iprobe);
-        barrier(&comm->barr, 0);
-    } else {
-        comm->sbuf[g_tl_tid] = sendbuf;
-        //STORE_FENCE();
-        //comm->flag[g_tl_tid] = 1;
-
-        barrier_cb(&comm->barr, g_tl_tid, barrier_iprobe);
-
-        //Threads cannot start until 0 arrives -- OK if others havent arrived
-        //barrier_cb(&comm->barr, g_tl_tid, barrier_iprobe);
-        barrier(&comm->barr, g_tl_tid);
-        //while(comm->flag[0] == 0);
-
-        //printf("%d doing allreduce copy\n", g_tl_tid); fflush(stdout);
-        //while(comm->flag[0] == 0);
-        memcpy(recvbuf, (void*)comm->rbuf[0], count*size);
-    }
-
-    // protect from early leave (rootrbuf)
-    //0 can't leave until all threads arrive.. all others can go
-    //barrier_cb(&comm->barr, g_tl_tid, barrier_iprobe);
-
-    barrier(&comm->barr, g_tl_tid);
-    //if(g_tl_tid == 0) {
-    //    comm->flag[0] = 0;
-    //}
-
-    //printf("%d done with allreduce\n", g_tl_tid); fflush(stdout);
-    return MPI_SUCCESS;
-}
-
-
-#define HMPI_SCAN_TAG 7546348
-
-int HMPI_Scan(void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype, MPI_Op op, HMPI_Comm comm)
-{
-    //MPI_Aint extent, lb;
-    MPI_Request req;
-    int size;
-    int i;
-
-    MPI_Type_size(datatype, &size);
-    //MPI_Type_get_extent(datatype, &lb, &extent);
-    //MPI_Type_extent(datatype, &extent);
-
-#if 0
-    if(extent != size) {
-        printf("allreduce non-contiguous derived datatypes are not supported yet!\n");
-        fflush(stdout);
-        MPI_Abort(comm->mpicomm, 0);
-    }
-#endif
-
-#ifdef DEBUG
-    if(g_tl_tid == 0) {
-    printf("[%i %i] HMPI_Scan(%p, %p, %i, %p, %p, %d, %p)\n", g_hmpi_rank, g_tl_tid, sendbuf, recvbuf, count, datatype, op, root, comm);
-    fflush(stdout);
-    }
-#endif
-
-
-    //Each rank makes its send buffer available
-    comm->sbuf[g_tl_tid] = sendbuf;
-
-    barrier_cb(&comm->barr, g_tl_tid, barrier_iprobe);
-
-    //One rank posts a recv if mpi rank > 0
-    if(g_tl_tid == 0 && g_rank > 0) {
-        comm->rbuf[0] = memalign(4096, size * count);
-        MPI_Irecv((void*)comm->rbuf[0], count, datatype,
-                g_rank - 1, HMPI_SCAN_TAG, MPI_COMM_WORLD, &req);
-    }
-
-    //Each rank reduces local ranks below it
-    //Copy my own receive buffer first
-    memcpy(recvbuf, sendbuf, size * count);
-
-    //Intentionally skip reducing self due to copy above
-    for(i = 0; i < g_tl_tid; i++) {
-        NBC_Operation(recvbuf,
-                recvbuf, (void*)comm->sbuf[i], op, datatype, count);
-    }
-
-    //Wait on recv; all ranks reduce if mpi rank > 0
-    if(g_tl_tid == 0 && g_rank > 0) {
-        MPI_Wait(&req, MPI_STATUS_IGNORE);
-    }
-
-    barrier(&comm->barr, g_tl_tid);
-
-    if(g_rank > 0) {
-        NBC_Operation(recvbuf,
-                recvbuf, (void*)comm->rbuf[0], op, datatype, count);
-
-        barrier(&comm->barr, g_tl_tid);
-
-        if(g_tl_tid == 0) {
-            free((void*)comm->rbuf[0]);
-        }
-    }
-
-    //Last rank sends result to next mpi rank if < size - 1
-    if(g_tl_tid == g_nthreads - 1 && g_rank < g_size - 1) {
-        MPI_Send(recvbuf, count, datatype,
-                g_rank + 1, HMPI_SCAN_TAG, MPI_COMM_WORLD);
-    }
-   
-    return MPI_SUCCESS;
-}
-
-
-int HMPI_Bcast(void *buffer, int count, MPI_Datatype datatype, int root, HMPI_Comm comm) {
-  MPI_Aint extent, lb;
-  int size;
-
-  MPI_Type_size(datatype, &size);
-  MPI_Type_get_extent(datatype, &lb, &extent);
-  //MPI_Type_extent(datatype, &extent);
-
-#ifdef HMPI_SAFE
-  if(extent != size) {
-    printf("bcast non-contiguous derived datatypes are not supported yet!\n");
-    MPI_Abort(comm->mpicomm, 0);
-  }
-#endif
-  
-#ifdef DEBUG
-  printf("[%i] HMPI_Bcast(%x, %i, %x, %i, %x)\n", g_rank*g_nthreads+g_tl_tid, buffer, count, datatype, root, comm);
-#endif
-
-  //We need a buffer set on all MPI ranks, so use thread root % tid
-  //if(root == g_nthreads*g_rank+g_tl_tid) {
-  if(root % g_nthreads == g_tl_tid) {
-//      printf("%d set buffer\n", g_tl_tid);
-      comm->sbuf[0] = buffer;
-  }
-
-  barrier_cb(&comm->barr, g_tl_tid, barrier_iprobe);
-  //barrier_wait(&comm->barr);
-
-  if(g_tl_tid == 0) {
-    MPI_Bcast((void*)comm->sbuf[0], count, datatype, root, comm->mpicomm);
-  }
-
-  barrier(&comm->barr, g_tl_tid);
-  //barrier_cb(&comm->barr, g_tl_tid, barrier_iprobe);
-  //barrier_wait(&comm->barr);
-
-  //TODO - skip if g_rank == root / g_nthreads
-  if(root % g_nthreads != g_tl_tid) {
-//      printf("%d copy buffer\n", g_tl_tid);
-    memcpy(buffer, (void*)comm->sbuf[0], count*size);
-  }
-
-//  fflush(stdout);
-  barrier(&comm->barr, g_tl_tid);
-  //barrier_cb(&comm->barr, g_tl_tid, barrier_iprobe);
-  //barrier_wait(&comm->barr);
-
-#if 0
-  //TODO AWF -- uhh this wont work when root != 0
-  if(g_tl_tid == 0) {
-    comm->sbuf[0]=buffer;
-    MPI_Bcast(buffer, count, datatype, root, comm->mpicomm);
-  }
-
-  barrier(&comm->barr);
-  barrier_wait(&comm->barr);
-
-  if(g_tl_tid != 0) memcpy(buffer, (void*)comm->sbuf[0], count*size);
-
-  barrier(&comm->barr);
-  barrier_wait(&comm->barr);
-#endif
-  return MPI_SUCCESS;
-}
-
-
-// TODO - scatter and gather may not work right for count > 1
-
-int HMPI_Scatter(void* sendbuf, int sendcount, MPI_Datatype sendtype, void* recvbuf, int recvcount, MPI_Datatype recvtype, int root, HMPI_Comm comm) {
-  MPI_Aint send_extent, recv_extent, lb;
-  int send_size;
-  int recv_size;
-  int size;
-
-  MPI_Type_size(sendtype, &send_size);
-  MPI_Type_size(recvtype, &recv_size);
-  MPI_Type_get_extent(sendtype, &lb, &send_extent);
-  MPI_Type_get_extent(recvtype, &lb, &recv_extent);
-  //MPI_Type_extent(sendtype, &send_extent);
-  //MPI_Type_extent(recvtype, &recv_extent);
-  size = recv_size * recvcount;
-
-  if(send_extent != send_size || recv_extent != recv_size) {
-    printf("scatter non-contiguous derived datatypes are not supported yet!\n");
-    MPI_Abort(comm->mpicomm, 0);
-  }
-
-  if(size != send_size * sendcount) {
-    printf("different send and receive size is not supported!\n");
-    MPI_Abort(comm->mpicomm, 0);
-  }
- 
-#ifdef DEBUG
-  printf("[%i] HMPI_Scatter(%p, %i, %p, %p, %i, %p, %i, %p)\n", g_rank*g_nthreads+g_tl_tid, sendbuf, sendcount, sendtype, recvbuf, recvcount, recvtype, root, comm);
-#endif
-
-  //On the proc with the root, pass the send buffer to thread 0
-  if(g_rank * g_nthreads + g_tl_tid == root) {
-      comm->sbuf[0] = sendbuf;
-      comm->scount[0] = sendcount;
-      comm->stype[0] = sendtype;
-  }
-
-  if(g_tl_tid == 0) {
-    comm->rbuf[0] = memalign(4096, size * g_nthreads);
-
-    if(root / g_nthreads != g_rank) {
-        //root is not on this node, set the send type to something
-        comm->sbuf[0] = NULL;
-        comm->scount[0] = recvcount;
-        comm->stype[0] = recvtype;
-    }
-  }
-
-  barrier_cb(&comm->barr, g_tl_tid, barrier_iprobe);
-  //barrier_wait(&comm->barr);
-
-  //Just do a scatter!
-  if(g_tl_tid == 0) {
-    MPI_Scatter((void*)comm->sbuf[0], (int)comm->scount[0] * g_nthreads,
-            (MPI_Datatype)comm->stype[0], (void*)comm->rbuf[0],
-            recvcount * g_nthreads, recvtype, root / g_nthreads, comm->mpicomm);
-  }
-
-  barrier_cb(&comm->barr, g_tl_tid, barrier_iprobe);
-  //barrier_wait(&comm->barr);
-
-  //Each thread copies out of the root buffer
-  if(recvbuf == MPI_IN_PLACE) {
-      printf("in place scatter\n");
-    memcpy(sendbuf, (void*)((uintptr_t)comm->rbuf[0] + size * g_tl_tid), size);
-  } else {
-    memcpy(recvbuf, (void*)((uintptr_t)comm->rbuf[0] + size * g_tl_tid), size);
-  }
-
-  barrier_cb(&comm->barr, g_tl_tid, barrier_iprobe);
-  //barrier_wait(&comm->barr);
-
-  if(g_tl_tid == 0) {
-      free((void*)comm->rbuf[0]);
-  }
-
-  return MPI_SUCCESS;
-}
-
-
-// TODO - scatter and gather may not work right for count > 1
-
-int HMPI_Gather(void* sendbuf, int sendcount, MPI_Datatype sendtype, void* recvbuf, int recvcount, MPI_Datatype recvtype, int root, HMPI_Comm comm)
-{
-  MPI_Aint send_extent, recv_extent, lb;
-  int send_size;
-  int recv_size;
-  int size;
-
-  MPI_Type_size(sendtype, &send_size);
-  MPI_Type_size(recvtype, &recv_size);
-  MPI_Type_get_extent(sendtype, &lb, &send_extent);
-  MPI_Type_get_extent(recvtype, &lb, &recv_extent);
-  //MPI_Type_extent(sendtype, &send_extent);
-  //MPI_Type_extent(recvtype, &recv_extent);
-  size = send_size * sendcount;
-
-  if(send_extent != send_size || recv_extent != recv_size) {
-    printf("gather non-contiguous derived datatypes are not supported yet!\n");
-    MPI_Abort(comm->mpicomm, 0);
-  }
-
-  if(size != recv_size * recvcount) {
-    printf("different send and receive size is not supported!\n");
-    MPI_Abort(comm->mpicomm, 0);
-  }
- 
-#ifdef DEBUG
-  printf("[%i] HMPI_Gather(%p, %i, %p, %p, %i, %p, %i, %p)\n", g_rank*g_nthreads+g_tl_tid, sendbuf, sendcount, sendtype, recvbuf, recvcount, recvtype, root, comm);
-#endif
-
-  //How do I want to do this?
-  //Gather using the root threads, then pass the buffer pointer to the root
-  //On the proc with the root, pass the send buffer to thread 0
-  if(g_rank * g_nthreads + g_tl_tid == root) {
-      comm->rbuf[0] = recvbuf;
-      comm->rcount[0] = recvcount;
-      comm->rtype[0] = recvtype;
-  }
-
-  if(g_tl_tid == 0) {
-      comm->sbuf[0] = memalign(4096, size * g_nthreads);
-
-    if(root / g_nthreads != g_rank) {
-        //root is not on this node, set the recv type to something
-        comm->rbuf[0] = NULL;
-        comm->rcount[0] = sendcount;
-        comm->rtype[0] = sendtype;
-    }
-  }
-
-  barrier_cb(&comm->barr, g_tl_tid, barrier_iprobe);
-  //barrier_wait(&comm->barr);
-
-  //Each thread copies into the send buffer
-  memcpy((void*)((uintptr_t)comm->sbuf[0] + size * g_tl_tid), sendbuf, size);
-
-  barrier_cb(&comm->barr, g_tl_tid, barrier_iprobe);
-  //barrier_wait(&comm->barr);
-
-  if(g_tl_tid == 0) {
-    MPI_Gather((void*)comm->sbuf[0], sendcount * g_nthreads,
-            sendtype, (void*)comm->rbuf[0],
-            recvcount * g_nthreads, recvtype, root / g_nthreads, comm->mpicomm);
-    free((void*)comm->sbuf[0]);
-  }
-
-  barrier_cb(&comm->barr, g_tl_tid, barrier_iprobe);
-  return MPI_SUCCESS;
-}
-
-
-#define HMPI_GATHERV_TAG 76361347
-int HMPI_Gatherv(void* sendbuf, int sendcnt, MPI_Datatype sendtype, void* recvbuf, int* recvcnts, int* displs, MPI_Datatype recvtype, int root, HMPI_Comm comm)
-{
-    //each sender can have a different send count.
-    //recvcnts[i] must be equal to rank i's sendcnt.
-    //only sendbuf, sendcnt, sendtype, root, comm meaningful on senders
-
-    //How do I want to do this?
-    //Challenge is that only the root knows the displacements.
-    //Could simply have each HMPI rank send to the root.
-    //Except for local ranks -- root can copy those.
-    // Actually, root can post its displ list locally, and locals copy.
-    //To reduce messages, each node builds a dtype covering its senders.
-    // Root then builds a dtype for each remote node.
-    // Results in one message from each node.
-    // May not be any better due to dtype overhead and less overlap.
-
-    //Root posts displs to local threads, who can then start copying.
-    //Root receives from all non-local ranks, waits for completion.
-    //Root waits for local threads to finish their copy.
-
-    //Do it like this -- root on each node builds a dtype
-    //Then just call MPI_Gatherv
-
-    //Everybody posts their send info
-    int tid = g_tl_tid;
-    comm->sbuf[tid] = sendbuf;
-    comm->scount[tid] = sendcnt;
-    comm->stype[tid] = sendtype;
-    comm->rbuf[tid] = recvbuf;
-    comm->mpi_rbuf = displs;
-
-    barrier_cb(&comm->barr, tid, barrier_iprobe);
-
-    //One rank on each node builds the dtypes and does the MPI_Gatherv
-    if(tid == root % g_nthreads) {
-        MPI_Datatype dtsend;
-
-        //I have g_nthreads blocks, with their own buf, cnt, type.
-        MPI_Type_create_struct(g_nthreads, (int*)comm->scount, (MPI_Aint*)comm->sbuf, (MPI_Datatype*)comm->stype, &dtsend);
-        MPI_Type_commit(&dtsend);
-
-        if(root == g_hmpi_rank) {
-            //I am root; create recv dtype.
-            //It'll have an entry for each other node.
-            //Blah.. this is a lot of dtypes..
-            //Even if I do just send/recvs, I have to create all of these..
-            //Build one datatype for every other node.
-            int rank = g_rank;
-            MPI_Datatype* dtrecvs = (MPI_Datatype*)alloca(sizeof(MPI_Datatype) * g_size);
-            MPI_Request* reqs = (MPI_Request*)alloca(sizeof(MPI_Request) * g_size);
-
-
-            for(int i = 0; i < g_size; i++) {
-                if(rank == g_rank) {
-                    //We do local copies in the root rank's node.
-                    dtrecvs[i] = MPI_DATATYPE_NULL;
-                    reqs[i] = MPI_REQUEST_NULL;
-                    continue;
-                }
-
-                MPI_Type_indexed(g_nthreads,
-                        &recvcnts[i * g_nthreads], &displs[i * g_nthreads],
-                        recvtype, &dtrecvs[i]);
-
-                MPI_Type_commit(&dtrecvs[i]);
-
-                MPI_Irecv((void*)((uintptr_t)recvbuf + displs[i * g_nthreads]),
-                            1, dtrecvs[i],
-                            i, HMPI_GATHERV_TAG, comm->mpicomm, &reqs[i]);
-            }
-
-            //Is it possible to use MPI_Gatherv at all?
-            //I have to flatten a list of per-rank displs into per-node,
-            //with one base dtype.  Might be possible with extent ugliness
-            //On the other hand, sends/recvs allow me to make a dtype for
-            //each sender.  More simple..
-
-            MPI_Waitall(g_size, reqs, MPI_STATUSES_IGNORE);
-            for(int i = 0; i < g_size; i++) {
-                MPI_Type_free(&dtrecvs[i]);
-            }
-        } else {
-            //MPI_Gatherv(MPI_BOTTOM, 1, dtsend, NULL, NULL, MPI_DATATYPE_NULL,
-            //        root, comm->mpicomm);
-            MPI_Send(MPI_BOTTOM, 1, dtsend, root / g_nthreads, HMPI_GATHERV_TAG, comm->mpicomm);
-        }
-
-        MPI_Type_free(&dtsend);
-    } else if(HMPI_Comm_local(comm, root)) {
-        //Meanwhile, all local non-root ranks do memcpys.
-        int root_tid;
-        HMPI_Comm_thread(comm, root, &root_tid);
-        int* displs = (int*)comm->mpi_rbuf;
-        void* buf = (void*)comm->rbuf[root_tid];
-        int size;
-
-        MPI_Type_size(sendtype, &size);
-
-        //Copy my data from sendbuf to the root.
-        memcpy((void*)((uintptr_t)buf + displs[g_hmpi_rank]),
-                sendbuf, size * sendcnt);
-    }
-
-    barrier(&comm->barr, tid);
-    return MPI_SUCCESS;
-}
-
-
-int HMPI_Allgather(void* sendbuf, int sendcount, MPI_Datatype sendtype, void* recvbuf, int recvcount, MPI_Datatype recvtype, HMPI_Comm comm)
-{
-  MPI_Aint send_extent, recv_extent, lb;
-  int send_size;
-  int recv_size;
-  int size;
-
-  MPI_Type_size(sendtype, &send_size);
-  MPI_Type_size(recvtype, &recv_size);
-
-  MPI_Type_get_extent(sendtype, &lb, &send_extent);
-  MPI_Type_get_extent(recvtype, &lb, &recv_extent);
-  //MPI_Type_extent(sendtype, &send_extent);
-  //MPI_Type_extent(recvtype, &recv_extent);
-  size = send_size * sendcount;
-
-#ifdef HMPI_SAFE
-  if(send_extent != send_size || recv_extent != recv_size) {
-    printf("gather non-contiguous derived datatypes are not supported yet!\n");
-    MPI_Abort(comm->mpicomm, 0);
-  }
-
-  if(size != recv_size * recvcount) {
-    printf("different send and receive size is not supported!\n");
-    MPI_Abort(comm->mpicomm, 0);
-  }
-#endif
- 
-#ifdef DEBUG
-  printf("[%i] HMPI_Allgather(%p, %i, %p, %p, %i, %p, %p)\n", g_rank*g_nthreads+g_tl_tid, sendbuf, sendcount, sendtype, recvbuf, recvcount, recvtype, comm);
-#endif
-
-  //How do I want to do this?
-  //Gather locally to sbuf[0]
-  // MPI allgather to rbuf[0]
-  // Each thread copies into its own rbuf, except 0.
-  if(g_tl_tid == 0) {
-      //Use this node's spot rank in tid 0's recvbuf, as the send buffer.
-      comm->sbuf[0] =
-          (void*)((uintptr_t)recvbuf + (size * g_nthreads * g_rank));
-
-      //root is not on this node, set the recv type to something
-      comm->rbuf[0] = recvbuf;
-      //comm->rcount[0] = recvcount;
-      //comm->rtype[0] = recvtype;
-  }
-
-  barrier_cb(&comm->barr, g_tl_tid, barrier_iprobe);
-
-  //Each thread copies into the send buffer
-  memcpy((void*)((uintptr_t)comm->sbuf[0] + size * g_tl_tid), sendbuf, size);
-
-  barrier(&comm->barr, g_tl_tid);
-
-  if(g_size > 1) {
-    if(g_tl_tid == 0) {
-        MPI_Allgather(MPI_IN_PLACE, 0, MPI_DATATYPE_NULL,
-                recvbuf, recvcount * g_nthreads, recvtype, comm->mpicomm);
-    }
-
-    barrier(&comm->barr, g_tl_tid);
-  }
-
-  if(g_tl_tid != 0) {
-      //All threads but 0 copy from 0's receive buffer
-      memcpy(recvbuf, (void*)comm->rbuf[0], size * g_nthreads * g_size);
-  }
-
-  barrier(&comm->barr, g_tl_tid);
-
-  return MPI_SUCCESS;
-}
-
-
-int HMPI_Allgatherv(void *sendbuf, int sendcount, MPI_Datatype sendtype, void *recvbuf, int* recvcounts, int *displs, MPI_Datatype recvtype, HMPI_Comm comm)
-{
-  MPI_Aint send_extent, recv_extent, lb;
-  int send_size;
-  int recv_size;
-  int size;
-
-  MPI_Type_size(sendtype, &send_size);
-  MPI_Type_size(recvtype, &recv_size);
-
-  MPI_Type_get_extent(sendtype, &lb, &send_extent);
-  MPI_Type_get_extent(recvtype, &lb, &recv_extent);
-  //MPI_Type_extent(sendtype, &send_extent);
-  //MPI_Type_extent(recvtype, &recv_extent);
-  size = send_size * sendcount;
-
-  if(send_extent != send_size || recv_extent != recv_size) {
-    printf("gather non-contiguous derived datatypes are not supported yet!\n");
-    MPI_Abort(comm->mpicomm, 0);
-  }
-
-  if(size != recv_size * recvcounts[g_hmpi_rank]) {
-    printf("different send and receive size is not supported!\n");
-    MPI_Abort(comm->mpicomm, 0);
-  }
- 
-#ifdef DEBUG
-  printf("[%i] HMPI_Allgatherv(%p, %i, %p, %p, %i, %p, %p, %p)\n", g_rank*g_nthreads+g_tl_tid, sendbuf, sendcount, sendtype, recvbuf, recvcount, displs, recvtype, comm);
-#endif
-
-  //How do I want to do this?
-  //Gather locally to sbuf[0]
-  // MPI allgather to rbuf[0]
-  // Each thread copies into its own rbuf, except 0.
-  if(g_tl_tid == 0) {
-      //Use this node's spot rank in tid 0's recvbuf, as the send buffer.
-      //Have to use the displacements to get the right spot.
-      comm->sbuf[0] = recvbuf;
-          //(void*)((uintptr_t)recvbuf + (size * displs[g_hmpi_rank]));
-
-      //root is not on this node, set the recv type to something
-      comm->rbuf[0] = recvbuf;
-      //comm->rcount[0] = recvcount;
-      //comm->rtype[0] = recvtype;
-  }
-
-  barrier_cb(&comm->barr, g_tl_tid, barrier_iprobe);
-
-  //Each thread copies into the send buffer
-  memcpy((void*)((uintptr_t)comm->sbuf[0] + (send_size * displs[g_hmpi_rank])),
-          sendbuf, size);
-
-  barrier(&comm->barr, g_tl_tid);
-
-  if(g_size > 1) {
-    if(g_tl_tid == 0) {
-        //Need to make a new displacements list, grouping threads in each proc.
-        //TODO - this only works if the displacements were contiguous!
-        //Well that's kind of silly, might was well just use allgather.
-        //The right thing to do would be to build a datatype... shouldnt be bad
-        MPI_Datatype dtype;
-        MPI_Datatype* basetype;
-        int i;
-
-        //Do a series of bcasts, rotating the root to each node.
-        //Have to build a dtype for each node to cover its uniques displs.
-        for(i = 0; i < g_size; i++) {
-            if(i == g_rank) {
-                basetype = &sendtype;
-            } else {
-                basetype = &recvtype;
-            }
-
-            MPI_Type_indexed(g_nthreads, &recvcounts[i * g_nthreads],
-                    &displs[i * g_nthreads], *basetype, &dtype);
-            MPI_Type_commit(&dtype);
-
-            MPI_Bcast(recvbuf, 1, dtype, i, MPI_COMM_WORLD);
-      
-            MPI_Type_free(&dtype);
-        }
-    }
-
-    barrier(&comm->barr, g_tl_tid);
-  }
-
-  if(g_tl_tid != 0) {
-      //All threads but 0 copy from 0's receive buffer
-      //memcpy(recvbuf, (void*)comm->rbuf[0], size * g_nthreads * g_size);
-      //Ugh, have to do one memcpy per rank.
-      int i;
-
-      //TODO - copy from sendbuf for self rank, not recvbuf
-      for(i = 0; i < g_size * g_nthreads; i++) {
-        int offset = displs[i] * send_size;
-        memcpy((void*)((uintptr_t)recvbuf + offset),
-                (void*)((uintptr_t)comm->rbuf[0] + offset), recvcounts[i] * recv_size);
-      }
-  }
-
-  barrier(&comm->barr, g_tl_tid);
-
-  return MPI_SUCCESS;
-}
-
-
-//TODO - the proper thing would be to have our own internal MPI comm for colls
-#define HMPI_ALLTOALL_TAG 7546347
-
-int HMPI_Alltoall(void* sendbuf, int sendcount, MPI_Datatype sendtype, void* recvbuf, int recvcount, MPI_Datatype recvtype, HMPI_Comm comm) 
-{
-  //void* rbuf;
-  int32_t send_size;
-  uint64_t size;
-  MPI_Request* send_reqs = NULL;
-  MPI_Request* recv_reqs = NULL;
-  MPI_Datatype dt_send;
-  MPI_Datatype dt_recv;
-
-  MPI_Type_size(sendtype, &send_size);
-
-#ifdef HMPI_SAFE
-  int32_t recv_size;
-  MPI_Aint send_extent, recv_extent, lb;
-
-  MPI_Type_size(recvtype, &recv_size);
-
-  //MPI_Type_extent(sendtype, &send_extent);
-  //MPI_Type_extent(recvtype, &recv_extent);
-  MPI_Type_get_extent(sendtype, &lb, &send_extent);
-  MPI_Type_get_extent(recvtype, &lb, &recv_extent);
-
-  if(send_extent != send_size || recv_extent != recv_size) {
-    printf("alltoall non-contiguous derived datatypes are not supported yet!\n");
-    MPI_Abort(comm->mpicomm, 0);
-  }
-
-  if(send_size * sendcount != recv_size * recvcount) {
-    printf("different send and receive size is not supported!\n");
-    MPI_Abort(comm->mpicomm, 0);
-  }
-#endif
-
-#ifdef DEBUG
-  printf("[%i] HMPI_Alltoall(%p, %i, %p, %p, %i, %p, %p)\n", g_rank*g_nthreads+g_tl_tid, sendbuf, sendcount, sendtype, recvbuf, recvcount, recvtype, comm);
-  fflush(stdout);
-#endif
-
-  //TODO how do I change this to have each thread do local copies?
-  // Maybe I should even just use a bunch of sends and receives.
-  //  Then we do P*T sends and receives
-  // Could go in between and build a MPI datatype to allow one send/recv
-  //  per other process.
-
-  //Each thread memcpy's into a single send buffer
-  //Root thread creates contiguous datatypes to span each thread, then does alltoall
-  //Each thread memcpy's out of a single receive buffer
-
-  //Can use alltoallv, or replace it with sends/receives.
-  //Either way:
-  // Thread 0 mallocs shared buffer?
-
-  uint64_t comm_size = g_nthreads * g_size;
-  uint64_t data_size = send_size * sendcount;
-
-  comm->sbuf[g_tl_tid] = sendbuf;
-
-  //Alloc a temp buffer
-  if(g_tl_tid == 0) {
-      comm->mpi_sbuf = memalign(4096, data_size * g_nthreads * comm_size);
-      comm->mpi_rbuf = memalign(4096, data_size * g_nthreads * comm_size);
-
-      send_reqs = (MPI_Request*)malloc(sizeof(MPI_Request) * g_size);
-      recv_reqs = (MPI_Request*)malloc(sizeof(MPI_Request) * g_size);
-
-      //Seems like we should multiply by comm_size, but alltoall already
-      // assumes one element per process.  We do have g_nthreads per process
-      // though, so we multiply by that.
-      MPI_Type_contiguous(sendcount * g_nthreads * g_nthreads, sendtype, &dt_send);
-      MPI_Type_commit(&dt_send);
-
-      MPI_Type_contiguous(recvcount * g_nthreads * g_nthreads, recvtype, &dt_recv);
-      MPI_Type_commit(&dt_recv);
-
-      //Post receives
-      int len = data_size * g_nthreads * g_nthreads;
-      for(int i = 0; i < g_size; i++) {
-          if(i != g_rank) {
-              MPI_Irecv((void*)((uintptr_t)comm->mpi_rbuf + (len * i)), 1,
-                      dt_recv, i, HMPI_ALLTOALL_TAG, comm->mpicomm, &recv_reqs[i]);
-          }
-      }
-      recv_reqs[g_rank] = MPI_REQUEST_NULL;
-  }
-
-  barrier_cb(&comm->barr, g_tl_tid, barrier_iprobe);
-  //barrier_wait(&comm->barr);
-
-  //Copy into the shared send buffer on a stride by g_nthreads
-  //This way our temp buffer has all the data going to proc 0, then proc 1, etc
-  uintptr_t offset = g_tl_tid * data_size;
-  uintptr_t scale = data_size * g_nthreads;
-
-  //Verified from (now missing) prints, this is correct
-  //TODO - try staggering
-  // Data is pushed here -- remote thread can't read it
-  for(uintptr_t i = 0; i < comm_size; i++) {
-      if(!HMPI_Comm_local(comm, i)) {
-          //Copy to send buffer to go out over network
-          memcpy((void*)((uintptr_t)(comm->mpi_sbuf) + (scale * i) + offset),
-                  (void*)((uintptr_t)sendbuf + data_size * i), data_size);
-      }
-  }
-
-  //Start sends to each other rank
-  barrier_cb(&comm->barr, g_tl_tid, barrier_iprobe);
-  //barrier_wait(&comm->barr);
-
-  if(g_tl_tid == 0) {
-      int len = data_size * g_nthreads * g_nthreads;
-      for(int i = 1; i < g_size; i++) {
-          int r = (g_rank + i) % g_size;
-          if(r != g_rank) {
-              MPI_Isend((void*)((uintptr_t)comm->mpi_sbuf + (len * r)), 1,
-                      dt_send, r, HMPI_ALLTOALL_TAG, comm->mpicomm, &send_reqs[r]);
-          }
-      }
-
-      send_reqs[g_rank] = MPI_REQUEST_NULL;
-  }
-
-  //Pull local data from other threads' send buffers.
-  //For each thread, memcpy from their send buffer into my receive buffer.
-  int r = g_rank * g_nthreads; //Base rank
-  for(uintptr_t thr = 0; thr < g_nthreads; thr++) {
-      //Note careful use of addition by r to get the right offsets
-      int t = (g_tl_tid + thr) % g_nthreads;
-      memcpy((void*)((uintptr_t)recvbuf + ((r + t) * data_size)),
-             (void*)((uintptr_t)comm->sbuf[t] + ((r + g_tl_tid) * data_size)),
-             data_size);
-  }
-
-  //Wait on sends and receives to complete
-  if(g_tl_tid == 0) {
-      MPI_Waitall(g_size, recv_reqs, MPI_STATUSES_IGNORE);
-      MPI_Waitall(g_size, send_reqs, MPI_STATUSES_IGNORE);
-      MPI_Type_free(&dt_send);
-      MPI_Type_free(&dt_recv);
-  }
-
-  barrier_cb(&comm->barr, g_tl_tid, barrier_iprobe);
-  //barrier_wait(&comm->barr);
-
-  //Do the MPI alltoall
-#if 0
-  if(g_tl_tid == 0) {
-      //Seems like we should multiply by comm_size, but alltoall already
-      // assumes one element per process.  We do have g_nthreads per process
-      // though, so we multiply by that.
-      MPI_Type_contiguous(sendcount * g_nthreads * g_nthreads, sendtype, &dt_send);
-      MPI_Type_commit(&dt_send);
-
-      MPI_Type_contiguous(recvcount * g_nthreads * g_nthreads, recvtype, &dt_recv);
-      MPI_Type_commit(&dt_recv);
-
-      //This should now be alltoallv, with my mpi rank being 0 data,
-      // and 1 for all other ranks... or can i stick with alltoall?  try both
-      MPI_Alltoall((void*)comm->mpi_sbuf, 1, dt_send,
-              (void*)comm->mpi_rbuf, 1, dt_recv, comm->mpicomm);
-
-      MPI_Type_free(&dt_send);
-      MPI_Type_free(&dt_recv);
-  }
-
-  barrier(&comm->barr);
-  barrier_wait(&comm->barr);
-#endif
-
-  //Need to do g_size memcpy's -- one block of data per MPI process.
-  // We copy g_nthreads * data_size at a time.
-  offset = g_tl_tid * data_size * g_nthreads;
-  scale = data_size * g_nthreads * g_nthreads;
-  size = g_nthreads * data_size;
-
-  for(uint64_t i = 0; i < g_size; i++) {
-      if(i != g_rank) {
-          memcpy((void*)((uintptr_t)recvbuf + size * i),
-                  (void*)((uintptr_t)comm->mpi_rbuf + (scale * i) + offset),
-                  size);
-      }
-  }
-
-  barrier_cb(&comm->barr, g_tl_tid, barrier_iprobe);
-
-  if(g_tl_tid == 0) {
-      free((void*)comm->mpi_sbuf);
-      free((void*)comm->mpi_rbuf);
-      free(send_reqs);
-      free(recv_reqs);
-  }
-
-  return MPI_SUCCESS;
-}
-
-
-#if 0
-int HMPI_Alltoall(void* sendbuf, int sendcount, MPI_Datatype sendtype, void* recvbuf, int recvcount, MPI_Datatype recvtype, HMPI_Comm comm) 
-{
-  MPI_Aint send_extent, recv_extent, lb;
-  //void* rbuf;
-  int32_t send_size;
-  int32_t recv_size;
-  //uint64_t t1, t2, tmp;
-  //HRT_TIMESTAMP_T t1, t2;
-  //uint64_t tmp;
-
-//  PROFILE_START(g_profile_info[g_tl_tid], alltoall);
-
-  MPI_Type_size(sendtype, &send_size);
-  MPI_Type_size(recvtype, &recv_size);
-  MPI_Type_get_extent(sendtype, &lb, &send_extent);
-  MPI_Type_get_extent(recvtype, &lb, &recv_extent);
-
-  if(send_extent != send_size || recv_extent != recv_size) {
-    printf("alltoall non-contiguous derived datatypes are not supported yet!\n");
-    MPI_Abort(comm->mpicomm, 0);
-  }
-
-  if(send_size * sendcount != recv_size * recvcount) {
-    printf("different send and receive size is not supported!\n");
-    MPI_Abort(comm->mpicomm, 0);
-  }
-
-#ifdef DEBUG
-  printf("[%i] HMPI_Alltoall(%p, %i, %p, %p, %i, %p, %p)\n", g_rank*g_nthreads+g_tl_tid, sendbuf, sendcount, sendtype, recvbuf, recvcount, recvtype, comm);
-#endif
-
-  uint64_t data_size = send_size * sendcount;
-
-  //Construct a vector type for the send side.
-  // We use this to interleave the data from each local thread.
-
-  MPI_Address(sendbuf, (MPI_Aint*)&comm->sbuf[g_tl_tid]);
-  comm->scount[g_tl_tid] = sendcount;
-  comm->stype[g_tl_tid] = sendtype;
-
-  MPI_Address(recvbuf, (MPI_Aint*)&comm->rbuf[g_tl_tid]);
-  comm->rcount[g_tl_tid] = recvcount * g_nthreads;
-  comm->rtype[g_tl_tid] = recvtype;
-
-  //PROFILE_START(g_profile_info[g_tl_tid], barrier);
-  barrier(&comm->barr);
-  barrier_wait(&comm->barr);
-  //PROFILE_STOP(g_profile_info[g_tl_tid], barrier);
-
-  //Do the MPI alltoall
-  if(g_tl_tid == 0) {
-      MPI_Datatype dt_send;
-      MPI_Datatype dt_recv;
-      MPI_Datatype dt_tmp;
-      //MPI_Datatype dt_tmp2;
-      MPI_Aint lb;
-      MPI_Aint extent;
-
-      //For the send side, we create an hindexed type to stride across each
-      //thread's send buffer first, then build a contiguous type to group the
-      //data for the different threads of each process.
-      MPI_Type_create_hindexed(g_nthreads,
-              (int*)comm->scount, (MPI_Aint*)comm->sbuf, sendtype, &dt_tmp);
-
-      MPI_Type_get_extent(dt_tmp, &lb, &extent);
-      MPI_Type_create_resized(dt_tmp, lb, data_size, &dt_send);
-      //MPI_Type_contiguous(g_nthreads, dt_tmp2, &dt_send);
-
-      MPI_Type_commit(&dt_send);
-      MPI_Type_free(&dt_tmp);
-      //MPI_Type_free(&dt_tmp2);
-
-      //MPI_Type_commit(&dt_send);
-
-      //For the receive side, we build a contiguous datatype (actually, just
-      //the recvtype and recvcount * numthreads) representing all the data from
-      //all threads on another process.  An hindexed type is used to split the
-      //data across the receive buffers of each local thread.
-
-      //We have g_nthreads receive buffers, one from each thread.
-      //Each buffer holds recvcount * g_nthreads elements per process.
-      MPI_Type_create_hindexed(g_nthreads,
-              (int*)comm->rcount, (MPI_Aint*)comm->rbuf, recvtype, &dt_tmp);
-
-      MPI_Type_get_extent(dt_tmp, &lb, &extent);
-      MPI_Type_create_resized(dt_tmp, lb, data_size * g_nthreads, &dt_recv);
-
-      MPI_Type_commit(&dt_recv);
-      MPI_Type_free(&dt_tmp);
-
-      MPI_Alltoall(MPI_BOTTOM, g_nthreads, dt_send,
-              MPI_BOTTOM, 1, dt_recv, comm->mpicomm);
-
-      MPI_Type_free(&dt_send);
-      MPI_Type_free(&dt_recv);
-  }
-
-//  PROFILE_START(g_profile_info[g_tl_tid], barrier);
-  barrier(&comm->barr);
-  barrier_wait(&comm->barr);
-//  PROFILE_STOP(g_profile_info[g_tl_tid], barrier);
-
-//  PROFILE_STOP(g_profile_info[g_tl_tid], alltoall);
-  return MPI_SUCCESS;
-}
-#endif
-
-
-int HMPI_Abort( HMPI_Comm comm, int errorcode ) {
-  printf("HMPI: user code called MPI_Abort!\n");
-  return MPI_Abort(comm->mpicomm, errorcode);
-}
-
-
-int HMPI_Alltoall_local(void* sendbuf, int sendcount, MPI_Datatype sendtype, void* recvbuf, int recvcount, MPI_Datatype recvtype, HMPI_Comm comm) 
-{
-    int32_t send_size;
-    int thr;
-    int tid = g_tl_tid;
-
-    MPI_Type_size(sendtype, &send_size);
-
-#ifdef HMPI_SAFE
-    MPI_Aint send_extent, recv_extent, lb;
-    int32_t recv_size;
-
-    MPI_Type_size(recvtype, &recv_size);
-
-    MPI_Type_get_extent(sendtype, &lb, &send_extent);
-    MPI_Type_get_extent(recvtype, &lb, &recv_extent);
-    //MPI_Type_extent(sendtype, &send_extent);
-    //MPI_Type_extent(recvtype, &recv_extent);
-
-    if(send_extent != send_size || recv_extent != recv_size) {
-        printf("alltoall non-contiguous derived datatypes are not supported yet!\n");
-        MPI_Abort(comm->mpicomm, 0);
-    }
-
-    if(send_size * sendcount != recv_size * recvcount) {
-        printf("different send and receive size is not supported!\n");
-        MPI_Abort(comm->mpicomm, 0);
-    }
-#endif
-
-  comm->sbuf[tid] = sendbuf;
-  //comm->scount[g_tl_tid] = sendcount;
-  //comm->stype[g_tl_tid] = sendtype;
-
-  //comm->rbuf[g_tl_tid] = recvbuf;
-  //comm->rcount[g_tl_tid] = recvcount;
-  //comm->rtype[g_tl_tid] = recvtype;
-
-
-  //Do the self copy
-  int copy_len = send_size * sendcount;
-  memcpy((void*)((uintptr_t)recvbuf + (tid * copy_len)),
-         (void*)((uintptr_t)sendbuf + (tid * copy_len)), copy_len);
-
-  barrier(&comm->barr, tid);
-
-  //Push local data to each other thread's receive buffer.
-  //For each thread, memcpy from my send buffer into their receive buffer.
-
-  for(thr = 1; thr < g_nthreads; thr++) {
-      int t = (tid + thr) % g_nthreads;
-      memcpy((void*)((uintptr_t)recvbuf + (t * copy_len)),
-             (void*)((uintptr_t)comm->sbuf[t] + (tid * copy_len)) , copy_len);
-      //memcpy((void*)((uintptr_t)comm->rbuf[thr] + (g_tl_tid * copy_len)),
-      //       (void*)((uintptr_t)sendbuf + (thr * copy_len)) , copy_len);
-  }
-
-  barrier(&comm->barr, tid);
-  return MPI_SUCCESS;
-}
-
-#endif
 

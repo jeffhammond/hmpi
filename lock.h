@@ -24,9 +24,11 @@ typedef struct lock_t {
 #define LOAD_FENCE() __sync()
 
 //if *ptr == oldval, then write *newval
-//#define CAS_PTR_BOOL(ptr, oldval, newval) \
-//  __compare_and_swap((volatile intptr_t*)(ptr), \
-//          (intptr_t)(oldval), (intptr_t)(newval))
+#if 0
+#define CAS_PTR_BOOL(ptr, oldval, newval) \
+  __compare_and_swap((volatile intptr_t*)(ptr), \
+          (intptr_t)(oldval), (intptr_t)(newval))
+#endif
 
 static inline int CAS_PTR_BOOL(volatile void** ptr, void* oldval, void* newval)
 {
@@ -84,6 +86,10 @@ static inline int LOCK_GET(lock_t* __restrict l) {
 //if *ptr == oldval, then write *newval
 #define CAS_PTR_BOOL(ptr, oldval, newval) \
   __sync_bool_compare_and_swap((uintptr_t*)(ptr), \
+          (uintptr_t)(oldval), (uintptr_t)(newval))
+
+#define CAS_PTR_VAL(ptr, oldval, newval) \
+  (void*)__sync_val_compare_and_swap((uintptr_t*)(ptr), \
           (uintptr_t)(oldval), (uintptr_t)(newval))
 
 #define FETCH_ADD(ptr, val) \
