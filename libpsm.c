@@ -6,17 +6,15 @@
 
 #define MPI_OOB_TAG 44648
 #define TIMEOUT 10000000000
-#define TAGSEL 0xFFFFFFFFFFFFFFFFULL
+
 
 //#define LIBPSM_DEBUG 1
-
-#define BUILD_TAG(r, t, c) \
-    (((uint64_t)(r) << 48) | ((uint64_t)((c) & 0xFFFF) << 32) | (uint64_t)((t) & 0xFFFFFFFF))
 
 #define GET_PEER_RANK(peer) \
     (((uintptr_t)(peer) - (uintptr_t)libpsm_peers) / sizeof(peer_t))
 
 
+#if 0
 typedef enum peer_conn_state_t
 {
     CONN_DISCONNECTED = 0,
@@ -30,25 +28,33 @@ typedef struct peer_t
     psm_epid_t epid;
     psm_epaddr_t epaddr;
 } peer_t;
+#endif
 
+lock_t libpsm_lock;      //Protects all PSM calls
+lock_t libpsm_conn_lock; //Protects the connectino mechanism
 
-static int mpi_rank;
+int libpsm_mpi_rank;
 
-static peer_t* libpsm_peers = NULL;
+peer_t* libpsm_peers = NULL;
 
-static psm_ep_t libpsm_ep;
+psm_ep_t libpsm_ep;
 static psm_epid_t libpsm_epid;
-static psm_mq_t libpsm_mq;
+psm_mq_t libpsm_mq;
 
-static void libpsm_connect(peer_t* peer);
 
-int libpsm_init(void)
+void libpsm_connect(peer_t* peer);
+
+
+void libpsm_init(void)
 {
     int size;
     int i;
     psm_error_t err;
 
-    MPI_Comm_rank(MPI_COMM_WORLD, &mpi_rank);
+    LOCK_INIT(&libpsm_lock, 0);
+    LOCK_INIT(&libpsm_conn_lock, 0);
+    
+    MPI_Comm_rank(MPI_COMM_WORLD, &libpsm_mpi_rank);
     MPI_Comm_size(MPI_COMM_WORLD, &size);
     libpsm_peers = (peer_t*)malloc(sizeof(peer_t) * size);
 
@@ -62,7 +68,7 @@ int libpsm_init(void)
 
         err = psm_init(&ver_major, &ver_minor);
         if(err != PSM_OK) {
-            printf("%d ERROR psm init\n", mpi_rank);
+            printf("%d ERROR psm init\n", libpsm_mpi_rank);
             exit(-1);
         }
     }
@@ -102,7 +108,7 @@ int libpsm_init(void)
         printf("MPI_LOCALNRANKS %s\n", str);
 #endif
 
-        if(mpi_rank == 0) {
+        if(libpsm_mpi_rank == 0) {
             psm_uuid_generate(uuid);
         }
 
@@ -113,13 +119,13 @@ int libpsm_init(void)
         //err = psm_ep_open(uuid, &opts, &libpsm_ep, &libpsm_epid);
         err = psm_ep_open(uuid, NULL, &libpsm_ep, &libpsm_epid);
         if(err != PSM_OK) {
-            printf("%d ERROR psm_ep_open\n", mpi_rank);
+            printf("%d ERROR psm_ep_open\n", libpsm_mpi_rank);
         }
     }
 
     err = psm_mq_init(libpsm_ep, PSM_MQ_ORDERMASK_NONE, NULL, 0, &libpsm_mq);
     if(err != PSM_OK) {
-        printf("%d ERROR psm_mq_init\n", mpi_rank);
+        printf("%d ERROR psm_mq_init\n", libpsm_mpi_rank);
         exit(-1);
     }
 
@@ -144,7 +150,7 @@ int libpsm_init(void)
 }
 
 
-int libpsm_shutdown(void)
+void libpsm_shutdown(void)
 {
 }
 
@@ -159,16 +165,17 @@ static void libpsm_start_connect(peer_t* peer)
 }
 
 
-//TODO - connection setup
-static void libpsm_connect(peer_t* peer)
+void libpsm_connect(peer_t* peer)
 {
     //Keep a receive posted all the time, or probe?
     //Need to exchange epid's, sizeof(psm_epid_t)
     MPI_Status st;
     int flag;
 
+    LOCK_SET(&libpsm_conn_lock);
+
     //If this peer is disconnected, start the connection process.
-    if(peer->conn_state == CONN_DISCONNECTED) {
+    if(peer != NULL && peer->conn_state == CONN_DISCONNECTED) {
         //printf("%d peer not connected %d\n", mpi_rank, GET_PEER_RANK(peer));
         //fflush(stdout);
         libpsm_start_connect(peer);
@@ -177,6 +184,7 @@ static void libpsm_connect(peer_t* peer)
     //Poll the MPI connection receive request, and process.
     MPI_Iprobe(MPI_ANY_SOURCE, MPI_OOB_TAG, MPI_COMM_WORLD, &flag, &st);
     if(!flag) {
+        LOCK_CLEAR(&libpsm_conn_lock);
         return;
     }
 
@@ -198,10 +206,13 @@ static void libpsm_connect(peer_t* peer)
                 st.MPI_SOURCE, MPI_OOB_TAG, MPI_COMM_WORLD, &st);
 
         //psm_error_register_handler(ep, PSM_ERRHANDLER_NOP);
+        LOCK_SET(&libpsm_lock);
         err = psm_ep_connect(libpsm_ep, 1, &peer->epid, NULL, &err2,
                 &peer->epaddr, 0);
+        LOCK_CLEAR(&libpsm_lock);
+
         if(err != PSM_OK) {
-            printf("%d ERROR psm_ep_connect %d %d\n", mpi_rank, err, err2);
+            printf("%d ERROR psm_ep_connect %d %d\n", libpsm_mpi_rank, err, err2);
             exit(-1);
         }
 
@@ -209,10 +220,15 @@ static void libpsm_connect(peer_t* peer)
         //printf("%d connected to %d\n", mpi_rank, GET_PEER_RANK(peer));
         //fflush(stdout);
     }
+    default:
+        break;
     }
+
+    LOCK_CLEAR(&libpsm_conn_lock);
 }
 
-void libpsm_connect2(int rank)
+
+void libpsm_connect2(uint32_t rank)
 {
     peer_t* peer = &libpsm_peers[rank];
 
@@ -222,11 +238,12 @@ void libpsm_connect2(int rank)
 }
 
 
-int post_recv(int src_rank, void* buf, uint32_t len, uint32_t tag, uint16_t comm, libpsm_req_t* req)
+#if 0
+int post_recv(uint32_t src_rank, void* buf, uint32_t len, uint16_t tag, uint16_t comm, libpsm_req_t* req)
 {
     peer_t* peer = &libpsm_peers[src_rank];
 
-    while(peer->conn_state != CONN_CONNECTED) {
+    while(unlikely(peer->conn_state != CONN_CONNECTED)) {
         libpsm_connect(peer);
     }
     
@@ -241,29 +258,11 @@ int post_recv(int src_rank, void* buf, uint32_t len, uint32_t tag, uint16_t comm
 }
 
 
-#if 0
-int wait_recv(libpsm_req_t* req)
-{
-    psm_mq_status_t st;
-//    printf("%d waiting on recv\n", mpi_rank);
-    psm_mq_wait(&req->psm_req, &st);
-
-//    while(psm_mq_test(&req->psm_req, &st) != PSM_OK) {
-//        psm_poll(libpsm_ep);
-//    }
-}
-
-int test_recv(libpsm_req_t* req)
-{
-    return psm_mq_test(&req->psm_req, NULL) == PSM_OK;
-}
-#endif
-
-int post_send(int dst_rank, void* buf, uint32_t len, uint32_t tag, uint16_t comm, libpsm_req_t* req)
+int post_send(uint32_t dst_rank, void* buf, uint32_t len, uint16_t tag, uint16_t comm, libpsm_req_t* req)
 {
     peer_t* peer = &libpsm_peers[dst_rank];
 
-    while(peer->conn_state != CONN_CONNECTED) {
+    while(unlikely(peer->conn_state != CONN_CONNECTED)) {
         libpsm_connect(peer);
     }
     
@@ -279,8 +278,10 @@ int post_send(int dst_rank, void* buf, uint32_t len, uint32_t tag, uint16_t comm
     //psm_mq_send(libpsm_mq, peer->epaddr, 0, BUILD_TAG(mpi_rank, tag), buf, len);
 
 }
+#endif
 
 
+#if 0
 void wait(libpsm_req_t* req)
 {
 //    printf("%d waiting on send\n", mpi_rank);
@@ -300,27 +301,28 @@ void poll(void)
 {
     psm_poll(libpsm_ep);
 }
+#endif
 
-int print_stats(void)
+void print_stats(void)
 {
     psm_mq_stats_t stats;
 
     psm_mq_get_stats(libpsm_mq, &stats);
-    printf("%d PSM rx_user_bytes %llu\n", mpi_rank, stats.rx_user_bytes);
-    printf("%d PSM rx_user_num %llu\n", mpi_rank, stats.rx_user_num);
-    printf("%d PSM rx_sys_bytes %llu\n", mpi_rank, stats.rx_sys_bytes);
-    printf("%d PSM rx_sys_num %llu\n", mpi_rank, stats.rx_sys_num);
+    printf("%d PSM rx_user_bytes %lu\n", libpsm_mpi_rank, stats.rx_user_bytes);
+    printf("%d PSM rx_user_num %lu\n", libpsm_mpi_rank, stats.rx_user_num);
+    printf("%d PSM rx_sys_bytes %lu\n", libpsm_mpi_rank, stats.rx_sys_bytes);
+    printf("%d PSM rx_sys_num %lu\n", libpsm_mpi_rank, stats.rx_sys_num);
 
-    printf("%d PSM tx_num %llu\n", mpi_rank, stats.tx_num);
-    printf("%d PSM tx_eager_num %llu\n", mpi_rank, stats.tx_eager_num);
-    printf("%d PSM tx_eager_bytes %llu\n", mpi_rank, stats.tx_eager_bytes);
-    printf("%d PSM tx_rndv_num %llu\n", mpi_rank, stats.tx_rndv_num);
-    printf("%d PSM tx_rndv_bytes %llu\n", mpi_rank, stats.tx_rndv_bytes);
+    printf("%d PSM tx_num %lu\n", libpsm_mpi_rank, stats.tx_num);
+    printf("%d PSM tx_eager_num %lu\n", libpsm_mpi_rank, stats.tx_eager_num);
+    printf("%d PSM tx_eager_bytes %lu\n", libpsm_mpi_rank, stats.tx_eager_bytes);
+    printf("%d PSM tx_rndv_num %lu\n", libpsm_mpi_rank, stats.tx_rndv_num);
+    printf("%d PSM tx_rndv_bytes %lu\n", libpsm_mpi_rank, stats.tx_rndv_bytes);
 
-    printf("%d PSM tx_shm_num %llu\n", mpi_rank, stats.tx_shm_num);
-    printf("%d PSM rx_shm_num %llu\n", mpi_rank, stats.rx_shm_num);
+    printf("%d PSM tx_shm_num %lu\n", libpsm_mpi_rank, stats.tx_shm_num);
+    printf("%d PSM rx_shm_num %lu\n", libpsm_mpi_rank, stats.rx_shm_num);
 
-    printf("%d PSM rx_sysbuf_num %llu\n", mpi_rank, stats.rx_sysbuf_num);
-    printf("%d PSM rx_sysbuf_bytes %llu\n", mpi_rank, stats.rx_sysbuf_bytes);
+    printf("%d PSM rx_sysbuf_num %lu\n", libpsm_mpi_rank, stats.rx_sysbuf_num);
+    printf("%d PSM rx_sysbuf_bytes %lu\n", libpsm_mpi_rank, stats.rx_sysbuf_bytes);
 }
 

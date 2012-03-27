@@ -5,7 +5,7 @@
 #undef MPI
 #endif
 #define HMPI_INTERNAL   //Disables HMPI->MPI renaming defines
-#include "hmpi.h"
+#include "hmpi_psm.h"
 #ifdef MPI_FOO
 #define MPI
 #else
@@ -37,24 +37,6 @@
 #undef PIN_WITH_PTHREAD
 #endif
 
-//#define COMM_NTHREADS 1    //One communicator per thread
-#define COMM_SQUARED 1       //nthreads^2 communicators
-
-#define SRC_DST_COMM(src, dst) g_tcomms[((src) * g_nthreads) + (dst)]
-
-
-//Number of tag bits to reserve for HMPI to use internally for identifying
-//source ranks when sending messages via MPI.  This puts a limit on how many
-//threads HMPI can support: 2^SRC_TAG_BITS - 1
-#define SRC_TAG_BITS 8
-
-#define SRC_TAG_MASK ((1 << SRC_TAG_BITS) - 1) //Value to use with ANY_SOURCE
-
-//TODO - is this a good value? its easy for me at least.
-//This is bad, could be > MPI_TAG_UB
-static int SRC_TAG_ANY = MPI_ANY_TAG; //Filled in during init
-
-//#define SRC_TAG_ANY (MPI_ANY_TAG << SRC_TAG_BITS)
 
 //Block size to use when using the accelerated sender-receiver copy.
 #define BLOCK_SIZE 8192
@@ -70,12 +52,18 @@ static int SRC_TAG_ANY = MPI_ANY_TAG; //Filled in during init
 #include <hwloc.h>
 #endif
 #include "lock.h"
+#include "libpsm.h"
 
 
 //Wrappers to GCC/ICC extensions
 
+#ifndef likely
 #define likely(x)       __builtin_expect((x),1)
+#endif
+
+#ifndef unlikely
 #define unlikely(x)     __builtin_expect((x),0)
+#endif
 
 PROFILE_DECLARE();
 PROFILE_VAR(memcpy);
@@ -97,78 +85,11 @@ __thread int g_tl_tid=-1;           //HMPI node-local rank for this thread (tid)
 HMPI_Comm HMPI_COMM_WORLD;
 
 static MPI_Comm* g_tcomms;
-static lock_t g_mpi_lock;      //Used to protect ANY_SRC Iprobe/Recv sequence
 
 //Argument passthrough
 static int g_argc;
 static char** g_argv;
 static int (*g_entry)(int argc, char** argv);
-
-#ifdef COMM_NTHREADS
-//Unexpected message queue
-
-struct HMPI_Message {
-    HMPI_Item item;
-
-    int proc;
-    int tag;
-
-    size_t size;
-    void* buf;
-};
-
-typedef struct HMPI_Message HMPI_Message;
-
-//Pool of unused reqs to save malloc time.
-static __thread HMPI_Item* g_free_msgs = NULL;
-
-//TODO - should this be thread-local?
-static __thread HMPI_Item g_msgs_head = {NULL};
-static __thread HMPI_Item* g_msgs_tail = NULL;
-
-static inline HMPI_Message* acquire_msg(void)
-{
-    //Malloc a new msg only if none are in the pool.
-    if(g_free_msgs == NULL) {
-        return (HMPI_Message*)malloc(sizeof(HMPI_Message));
-    } else {
-        HMPI_Item* item = g_free_msgs;
-        g_free_msgs = item->next;
-        return (HMPI_Message*)item;
-    }
-}
-
-
-static inline void release_msg(HMPI_Message* msg)
-{
-    //Return a msg to the pool -- once allocated, a msg is never freed.
-    HMPI_Item* item = (HMPI_Item*)msg;
-
-    item->next = g_free_msgs;
-    g_free_msgs = item;
-}
-
-
-static inline void add_msg(HMPI_Message* msg)
-{
-    HMPI_Item* item = (HMPI_Item*)msg;
-
-    item->next = NULL;
-    g_msgs_tail->next = item;
-    g_msgs_tail = item;
-}
-
-static inline void remove_msg(HMPI_Item* prev, HMPI_Item* cur) {
-    if(cur == g_msgs_tail) {
-        g_msgs_tail = prev;
-        prev->next = NULL;
-    } else {
-        prev->next = cur->next;
-    }
-}
-
-
-#endif
 
 
 //Each thread has a list of send and receive requests.
@@ -226,8 +147,8 @@ static inline void release_req(HMPI_Request req)
 }
 
 
-//There is no corresponding remove -- done in match_recv()
-static inline void add_send_req(HMPI_Request req, int tid) {
+static inline void add_send_req(HMPI_Request req, int tid)
+{
     //Insert req at tail.
     HMPI_Request_list* req_list = &g_send_reqs[tid];
     HMPI_Item* item = (HMPI_Item*)req;
@@ -251,7 +172,34 @@ static inline void add_send_req(HMPI_Request req, int tid) {
 }
 
 
-static inline void add_recv_req(HMPI_Request req) {
+static inline void remove_send_req(HMPI_Item* prev, HMPI_Item* cur)
+{
+    if(cur->next == NULL) {
+        //Looks like this is the tail -- CAS prev in.
+        HMPI_Request_list* req_list = &g_send_reqs[g_tl_tid];
+        prev->next = NULL;
+
+        //STORE_FENCE(); //TODO - necessary? does CAS imply fence?
+
+        HMPI_Item* ptr = (HMPI_Item*)CAS_PTR_VAL(&req_list->tail, cur, prev);
+        if(ptr != cur) {
+            //A new req was added between the branch and the CAS.
+            //Wait for cur->next to go non-NULL -- shouldnt take long.
+            HMPI_Item* volatile* vol_next = &cur->next;
+            HMPI_Item* next;
+
+            while((next = *vol_next) == NULL);
+            prev->next = next;
+        }
+    } else {
+        //Not the tail; just remove.
+        prev->next = cur->next;
+    }
+}
+
+
+static inline void add_recv_req(HMPI_Request req)
+{
     HMPI_Item* item = (HMPI_Item*)req;
 
     //Add at tail to ensure matching occurs in order.
@@ -261,7 +209,8 @@ static inline void add_recv_req(HMPI_Request req) {
 }
 
 
-static inline void remove_recv_req(HMPI_Item* prev, HMPI_Item* cur) {
+static inline void remove_recv_req(HMPI_Item* prev, HMPI_Item* cur)
+{
     if(cur == g_recv_reqs_tail) {
         g_recv_reqs_tail = prev;
         prev->next = NULL;
@@ -271,37 +220,8 @@ static inline void remove_recv_req(HMPI_Item* prev, HMPI_Item* cur) {
 }
 
 
-#ifdef COMM_NTHREADS
-static inline HMPI_Message* match_queue(HMPI_Request recv_req) {
-    HMPI_Item* cur;
-    HMPI_Item* prev;
-    HMPI_Message* msg;
-
-    int proc = recv_req->proc;
-    int tag = recv_req->tag;
-
-    for(prev = &g_msgs_head, cur = prev->next;
-            cur != NULL; prev = cur, cur = cur->next) {
-        msg = (HMPI_Message*)cur;
-
-        //The send request can't have ANY_SOURCE or ANY_TAG, so don't check.
-        if((msg->proc == proc || proc == MPI_ANY_SOURCE) &&
-                (msg->tag == tag || tag == MPI_ANY_TAG)) {
-
-            remove_msg(prev, cur);
-
-            recv_req->proc = msg->proc;
-            recv_req->tag = msg->tag;
-            return msg;
-        }
-    }
-
-    return NULL;
-}
-#endif //COMM_NTHREADS
-
-
-static inline int match_recv(HMPI_Request recv_req, HMPI_Request* send_req) {
+//Match for receives that are *NOT* ANY_SOURCE
+static inline HMPI_Request match_recv(HMPI_Request recv_req) {
     HMPI_Item* cur;
     HMPI_Item* prev;
     HMPI_Request req;
@@ -314,9 +234,10 @@ static inline int match_recv(HMPI_Request recv_req, HMPI_Request* send_req) {
         req = (HMPI_Request)cur;
 
         //The send request can't have ANY_SOURCE or ANY_TAG, so don't check.
-        if((req->proc == proc || proc == MPI_ANY_SOURCE) &&
+        if(req->proc == proc &&
                 (req->tag == tag || tag == MPI_ANY_TAG)) {
 
+#if 0
             if(cur->next == NULL) {
                 //Looks like this is the tail -- CAS prev in.
                 HMPI_Request_list* req_list = &g_send_reqs[g_tl_tid];
@@ -338,15 +259,54 @@ static inline int match_recv(HMPI_Request recv_req, HMPI_Request* send_req) {
                 //Not the tail; just remove.
                 prev->next = cur->next;
             }
+#endif
 
+            remove_send_req(prev, cur);
+
+            //TODO - keep doing this assignment here?
             recv_req->proc = req->proc;
             recv_req->tag = req->tag;
-            *send_req = req;
-            return 1;
+            //*send_req = req;
+            //return 1;
+            return req;
         }
     }
 
-    return 0;
+    return HMPI_REQUEST_NULL;
+}
+
+
+//Match for receives with ANY_SOURCE.
+static inline HMPI_Request match_recv_any(HMPI_Request recv_req) {
+    HMPI_Item* cur;
+    HMPI_Item* prev;
+    HMPI_Request req;
+
+    int tag = recv_req->tag;
+
+    for(prev = g_tl_send_reqs_head, cur = prev->next;
+            cur != NULL; prev = cur, cur = cur->next) {
+        req = (HMPI_Request)cur;
+
+        //The send request can't have ANY_SOURCE or ANY_TAG, so don't check.
+        if(req->tag == tag || tag == MPI_ANY_TAG) {
+            //Before doing anything, try to cancel the PSM receive.
+            if(!cancel(&req->req)) {
+                //Also matched a PSM recv!
+                return HMPI_REQUEST_NULL;
+            }
+
+            //OK, cancel was successful, proceed with local match.
+            remove_send_req(prev, cur);
+
+            //TODO - keep doing this assignment here?
+            recv_req->proc = req->proc;
+            recv_req->tag = req->tag;
+            return req;
+        }
+    }
+
+    return HMPI_REQUEST_NULL;
 }
 
 
@@ -494,7 +454,10 @@ int HMPI_Init(int *argc, char ***argv, int nthreads, int (*start_routine)(int ar
   MPI_Init_thread(argc, argv, MPI_THREAD_MULTIPLE, &provided);
   assert(MPI_THREAD_MULTIPLE == provided);
 
+  libpsm_init();
+
   //Make sure we can support the requested number of threads.
+#if 0
   if(nthreads >= (1 << SRC_TAG_BITS) - 1) {
       printf("ERROR requested %d threads, but SRC_TAG_BITS (%d) limits to %d threads\n",
               nthreads, SRC_TAG_BITS, (1 << SRC_TAG_BITS) - 2);
@@ -513,12 +476,12 @@ int HMPI_Init(int *argc, char ***argv, int nthreads, int (*start_routine)(int ar
 
     SRC_TAG_ANY = (MPI_ANY_TAG - (1 << SRC_TAG_BITS)) ^ SRC_TAG_MASK;
   }
+#endif
 
   g_argc = *argc;
   g_argv = *argv; 
   g_entry = start_routine;
   g_nthreads = nthreads;
-  LOCK_INIT(&g_mpi_lock, 0);
 
   HMPI_COMM_WORLD = (HMPI_Comm_info*)malloc(sizeof(HMPI_Comm_info));
   HMPI_COMM_WORLD->mpicomm = MPI_COMM_WORLD;
@@ -727,14 +690,16 @@ static inline int HMPI_Progress_send(HMPI_Request send_req)
 
 
 //For req->type == HMPI_RECV
-static inline int HMPI_Progress_recv(HMPI_Request recv_req)
+static inline int HMPI_Complete_recv(HMPI_Request recv_req, HMPI_Request send_req)
 {
+#if 0
     //Try to match from the local send reqs list
     HMPI_Request send_req = NULL;
 
     if(!match_recv(recv_req, &send_req)) {
         return 0;
     }
+#endif
 
 #ifdef DEBUG
     printf("[%i] [recv] found send from %i (%p) for buf %p in uq (tag: %i, size: %ld, status: %d)\n",
@@ -811,89 +776,18 @@ static inline int HMPI_Progress_recv(HMPI_Request recv_req)
 //For req->type == MPI_SEND || req->type == MPI_RECV
 static inline int HMPI_Progress_mpi(HMPI_Request req)
 {
-    int flag;
-    MPI_Status status;
+    libpsm_status_t status;
 
-#if 0
-    int err;
-    if((err = MPI_Test(&req->req, &flag, &status))) {
-        char str[4096];
-        int len;
-
-        MPI_Error_string(err, str, &len);
-
-        printf("%d MPI_Test ERROR %s\n", g_hmpi_rank, str);
-        printf("%d req type %d proc %d tag %d size %ld buf %p\n", g_hmpi_rank,
-                req->type, req->proc, req->tag, req->size, req->buf);
-        fflush(stdout);
-
-        assert(0);
-        MPI_Abort(MPI_COMM_WORLD, 0);
-    }
-#endif
-
-#ifdef COMM_NTHREADS
-    //Have to check message queue for matches first.
-    HMPI_Message* msg = match_queue(req);
-    if(msg != NULL) {
-        //Matched a queued message!
-        //Copy the data over.
-#ifdef HMPI_SAFE
-        if(unlikely(msg->size > req->size)) {
-            printf("[HMPI recv %d] message from %d of size %ld truncated to %ld\n", g_hmpi_rank, req->proc, msg->size, req->size);
-
-        }
-#endif
-
-        req->size = msg->size;
-
-        memcpy(req->buf, msg->buf, msg->size);
-
-        free(msg->buf);
-        release_msg(msg);
+    if(test(&req->req, &status)) {
+        //ANY_SOURCE isn't possible here, so proc is already correct.
+        req->size = status.nbytes;
+        req->tag = TAG_GET_TAG(status.msg_tag);
 
         update_reqstat(req, HMPI_REQ_COMPLETE);
         return 1;
     }
 
-#endif //COMM_NTHREADS
-
-    MPI_Test(&req->req, &flag, MPI_STATUS_IGNORE);
-
-    if(flag) {
-        //Update status
-        int count;
-        MPI_Get_count(&status, req->datatype, &count);
-
-        int type_size;
-        MPI_Type_size(req->datatype, &type_size);
-
-        //ANY_SOURCE isn't possible here, so proc is already correct.
-        req->size = count * type_size;
-#ifdef COMM_NTHREADS
-        //TODO - deal with ANY_TAG properly
-        req->tag = status.MPI_TAG >> SRC_TAG_BITS;
-#endif
-
-#ifdef COMM_SQUARED
-        req->tag = status.MPI_TAG;
-#endif
-
-        update_reqstat(req, HMPI_REQ_COMPLETE);
-    }
-
-#ifdef DEBUG
-    if(flag) {
-        if(req->type == MPI_SEND) {
-            printf("[%d] completed MPI-level SEND %d proc %d tag %d\n", g_hmpi_rank, req->type, req->proc, req->tag);
-        } else {
-            printf("[%d] completed MPI-level RECV %d proc %d tag %d\n", g_hmpi_rank, req->type, req->proc, req->tag);
-        }
-        fflush(stdout);
-    }
-#endif
-
-    return flag;
+    return 0;
 }
 
 
@@ -902,13 +796,10 @@ static inline void HMPI_Progress() {
     HMPI_Item* prev;
     HMPI_Request req;
 
-#if 0
+    //PSM's test doesn't make any progress, so poll here.
     if(g_size > 1) {
-        int flag;
-
-        MPI_Iprobe(MPI_ANY_SOURCE, MPI_ANY_TAG, MPI_COMM_WORLD, &flag, MPI_STATUS_IGNORE);
+        poll();
     }
-#endif
 
     //Progress receive requests.
     //We remove items from the list, but they are still valid; nothing in this
@@ -919,158 +810,35 @@ static inline void HMPI_Progress() {
         req = (HMPI_Request)cur;
 
         if(likely(req->type == HMPI_RECV)) {
-            //TODO - this branch could be eliminated by passing prev in.
-            if(HMPI_Progress_recv(req) == 1) {
+            HMPI_Request send_req = match_recv(req);
+            if(send_req != HMPI_REQUEST_NULL) {
+                HMPI_Complete_recv(req, send_req);
                 remove_recv_req(prev, cur);
             }
+
+            //if(HMPI_Progress_recv(req) == 1) {
+            //    remove_recv_req(prev, cur);
+            //}
         } else { //req->type == HMPI_RECV_ANY_SOURCE
-#ifdef COMM_NTHREADS
-            //Have to check message queue for matches first.
-            HMPI_Message* msg = match_queue(req);
-            if(msg != NULL) {
-                //Matched a queued message!
-                //Copy the data over.
-#ifdef HMPI_SAFE
-                if(unlikely(msg->size > req->size)) {
-                    printf("[HMPI recv %d] message from %d of size %ld truncated to %ld\n", g_hmpi_rank, req->proc, msg->size, req->size);
+            libpsm_status_t status;
 
-                }
-#endif
-
-
-                req->size = msg->size;
-
-                memcpy(req->buf, msg->buf, msg->size);
-
-                free(msg->buf);
-                release_msg(msg);
+            //match_recv_any() cancels the PSM recv if a local match is made.
+            HMPI_Request send_req = match_recv_any(req);
+            if(send_req != HMPI_REQUEST_NULL) {
+                //Local match & completion
+                HMPI_Complete_recv(req, send_req);
+                remove_recv_req(prev, cur);
+            } else if(test(&req->req, &status)) {
+                //PSM receive matched! handle it.
+                //TODO - can check for truncation here: nbytes == msg_length
+                req->size = status.nbytes;
+                req->proc = TAG_GET_RANK(status.msg_tag);
+                req->tag = TAG_GET_TAG(status.msg_tag);
 
                 remove_recv_req(prev, cur);
                 update_reqstat(req, HMPI_REQ_COMPLETE);
-                continue;
-            }
-#endif //COMM_NTHREADS
-
-            if(HMPI_Progress_recv(req) == 1) {
-                //Local match & completion
-                remove_recv_req(prev, cur);
-                continue;
-            } else if(g_size > 1) {
-#ifdef COMM_NTHREADS
-                // check if we can get something via the MPI library
-                //For ANY_SOURCE, we have to use ANY_TAG to get at the tag and
-                //match on it.  If not a match, we have a message sitting at the
-                //front of the queue.  Allocate a buffer and post a receive,
-                //then save that message on an unexpected Q.
-
-                //So, probe with ANY_SRC, ANY_TAG on the right comm.
-                //Check the tag -- if tag matches, YAY.
-                //If not, add to unexpected Q.
-
-                int flag=0;
-                MPI_Status status;
-                int tag = req->tag;
-
-                LOCK_SET(&g_mpi_lock);
-                MPI_Iprobe(MPI_ANY_SOURCE, MPI_ANY_TAG,
-                        g_tcomms[g_tl_tid], &flag, &status);
-
-                int mpi_tag = status.MPI_TAG >> SRC_TAG_BITS;
-                if(!flag) {
-                    LOCK_CLEAR(&g_mpi_lock);
-                } else if(mpi_tag != tag && tag != SRC_TAG_ANY) {
-                    //Got a message but it doesn't match -- Q it.
-                    HMPI_Message* msg = acquire_msg();
-
-                    //TODO - limited to 2gb unexpected msgs
-                    int count;
-                    MPI_Get_count(&status, MPI_BYTE, &count);
-
-                    //TODO - something smarter than malloc
-                    msg->buf = malloc(count);
-
-                    MPI_Recv(msg->buf, count, MPI_BYTE, status.MPI_SOURCE,
-                            status.MPI_TAG, g_tcomms[g_tl_tid], &status);
-
-                    LOCK_CLEAR(&g_mpi_lock);
-
-                    //Done outside the lock to make critical section shorter.
-                    msg->proc = status.MPI_SOURCE * g_nthreads +
-                            (tag & SRC_TAG_MASK);
-                    msg->tag = mpi_tag;
-                    msg->size = count;
-
-                    add_msg(msg);
-                } else {
-                    //Got a matching message!
-                    int count;
-                    MPI_Get_count(&status, req->datatype, &count);
-
-                    MPI_Recv(req->buf, count, req->datatype,
-                          status.MPI_SOURCE, status.MPI_TAG,
-                          g_tcomms[g_tl_tid], &status);
-                    LOCK_CLEAR(&g_mpi_lock);
-
-                    int type_size;
-                    MPI_Type_size(req->datatype, &type_size);
-
-                    req->size = count * type_size;
-                    req->proc = status.MPI_SOURCE * g_nthreads +
-                            (tag & SRC_TAG_MASK);
-                    //TODO - deal with ANY_TAG properly
-                    req->tag = mpi_tag;
-
-                    update_reqstat(req, HMPI_REQ_COMPLETE);
-                    remove_recv_req(prev, cur);
-                }
-
-#endif
-
-#ifdef COMM_SQUARED
-                //Poll every comm we receive on, and grab the first message
-                //that matches.
-                //Locking across the iprobe+recv isn't necessary since we're
-                //the only thread receiving on these comms.
-                int flag = 0;
-                MPI_Status status;
-
-                for(int dst = 0; dst < g_nthreads; dst++) {
-                    for(int src = 0; src < g_nthreads; src++) {
-                        MPI_Iprobe(MPI_ANY_SOURCE, req->tag,
-                                SRC_DST_COMM(src, dst), &flag, &status);
-
-                        if(flag) {
-                            int count;
-                            MPI_Get_count(&status, req->datatype, &count);
-
-                            MPI_Recv(req->buf, count, req->datatype,
-                                    status.MPI_SOURCE, status.MPI_TAG,
-                                    SRC_DST_COMM(src, dst), &status);
-
-                            int type_size;
-                            MPI_Type_size(req->datatype, &type_size);
-
-                            req->size = count * type_size;
-                            req->proc = status.MPI_SOURCE * g_nthreads + src;
-                            req->tag = status.MPI_TAG;
-
-                            update_reqstat(req, HMPI_REQ_COMPLETE);
-                            remove_recv_req(prev, cur);
-
-                            //Yeah, goto is bad, but I want to break out of
-                            //both dst/src for loops quickly here.
-                            goto main_loop;
-                        }
-                    }
-                }
-#endif // COMM_SQUARED
             }
         }
-
-#ifdef COMM_SQUARED
-main_loop:
-        continue; //Needed to avoid weird compiler error with the label
-#endif
     }
 }
 
@@ -1171,45 +939,20 @@ int HMPI_Wait(HMPI_Request *request, HMPI_Status *status) {
     if(req->type == HMPI_SEND) {
         do {
             HMPI_Progress();
-            //sched_yield();
-        //int flag;
-
-        //MPI_Iprobe(MPI_ANY_SOURCE, MPI_ANY_TAG, MPI_COMM_WORLD, &flag, MPI_STATUS_IGNORE);
         } while(HMPI_Progress_send(req) != HMPI_REQ_COMPLETE);
     } else if(req->type == HMPI_RECV) {
         do {
             HMPI_Progress();
-            //sched_yield();
-        //int flag;
-
-        //MPI_Iprobe(MPI_ANY_SOURCE, MPI_ANY_TAG, MPI_COMM_WORLD, &flag, MPI_STATUS_IGNORE);
         } while(get_reqstat(req) != HMPI_REQ_COMPLETE);
     } else if(req->type == MPI_RECV || req->type == MPI_SEND) {
         do {
             HMPI_Progress();
-            //sched_yield();
         } while(HMPI_Progress_mpi(req) != HMPI_REQ_COMPLETE);
-        //Shortcut for now -- put progress for MPI types in its own fn
-        //while(HMPI_Progress_request(req) != HMPI_REQ_COMPLETE);
-#if 0
-        int flag;
-        MPI_Test(&req->req, &flag, MPI_STATUS_IGNORE);
-        while(!flag) {
-            HMPI_Progress();
-            MPI_Test(&req->req, &flag, MPI_STATUS_IGNORE);
-        }
-
-        update_reqstat(req, 1);
-        //MPI_Wait(&req->req, MPI_STATUS_IGNORE);
-#endif
     } else { //HMPI_RECV_ANY_SOURCE
         do {
             HMPI_Progress();
-            //sched_yield();
         } while(get_reqstat(req) != HMPI_REQ_COMPLETE);
     }
-
-    //while(!HMPI_Progress_request(req));
 
     //Req is complete at this point
     if(status != HMPI_STATUS_IGNORE) {
@@ -1252,8 +995,8 @@ int HMPI_Waitall(int count, HMPI_Request *requests, HMPI_Status *statuses)
                     if(!HMPI_Progress_send(req)) {
                         continue;
                     }
-                } else if(req->type == HMPI_RECV) {
-                    continue;
+                //} else if(req->type == HMPI_RECV) {
+                //    continue;
                 } else if(req->type == MPI_SEND || req->type == MPI_RECV) {
                     if(!HMPI_Progress_mpi(req)) {
                         continue;
@@ -1276,17 +1019,6 @@ int HMPI_Waitall(int count, HMPI_Request *requests, HMPI_Status *statuses)
             requests[i] = HMPI_REQUEST_NULL;
             done += 1;
 
-#if 0    
-            if(statuses == HMPI_STATUSES_IGNORE) {
-                HMPI_Test(&requests[i], &flag, HMPI_STATUS_IGNORE);
-            } else {
-                HMPI_Test(&requests[i], &flag, &statuses[i]);
-            }
-
-            if(flag) {
-                done += 1;
-            }
-#endif
         }
     } while(done < count);
 
@@ -1364,6 +1096,9 @@ int HMPI_Iprobe(int source, int tag, HMPI_Comm comm, int* flag, HMPI_Status* sta
         }
     } else if(g_size > 1) {
         //Probe MPI (off-node) layer only if more than one MPI rank
+        printf("TODO - off-node iprobe not implemented\n");
+        MPI_Abort(MPI_COMM_WORLD, 0);
+#if 0
         MPI_Status st;
         MPI_Iprobe(source, tag, g_tcomms[g_tl_tid], flag, &st);
 
@@ -1375,6 +1110,7 @@ int HMPI_Iprobe(int source, int tag, HMPI_Comm comm, int* flag, HMPI_Status* sta
             status->MPI_TAG = st.MPI_TAG;
             status->MPI_ERROR = st.MPI_ERROR;
         }
+#endif
     }
 
     return MPI_SUCCESS;
@@ -1453,18 +1189,14 @@ int HMPI_Isend(void* buf, int count, MPI_Datatype datatype, int dest, int tag, H
     } else {
         req->type = MPI_SEND;
 
-        int target_thread = dest % g_nthreads;
+        int target_mpi_thread = dest % g_nthreads;
         //printf("%d MPI send to rank %d (%d:%d) tag %d count %d size %d\n", g_hmpi_rank, dest, target_mpi_rank, target_thread, tag, count, req->size);
         //fflush(stdout);
 
-#ifdef COMM_NTHREADS
-        int mpi_tag = (tag << SRC_TAG_BITS) | g_tl_tid;
-        MPI_Isend(buf, count, datatype, target_mpi_rank, mpi_tag, g_tcomms[target_thread], &req->req);
-#endif
+        post_send(buf, count * type_size,
+                BUILD_TAG(g_hmpi_rank, target_mpi_thread, tag),
+                target_mpi_rank, &req->req);
 
-#ifdef COMM_SQUARED
-        MPI_Isend(buf, count, datatype, target_mpi_rank, tag, SRC_DST_COMM(g_tl_tid, target_thread), &req->req);
-#endif
     }
 
     return MPI_SUCCESS;
@@ -1528,34 +1260,35 @@ int HMPI_Irecv(void* buf, int count, MPI_Datatype datatype, int source, int tag,
     req->type = HMPI_RECV_ANY_SOURCE;
     req->proc = MPI_ANY_SOURCE;
 
+    //Post a PSM-level receive, we can cancel it if we get a local match.
+    uint64_t tagsel = TAGSEL_ANY_SRC;
+
+    if(unlikely(tag == MPI_ANY_TAG)) {
+        tagsel ^= TAGSEL_ANY_TAG;
+    }
+
+    post_recv(buf, count * type_size, BUILD_TAG(source, g_tl_tid, tag),
+            tagsel, (uint32_t)-1, &req->req);
+
     add_recv_req(req);
-    //HMPI_Progress_recv(req);
   } else if(source_mpi_rank == g_rank) { //Recv on-node, but not ANY_SOURCE
     // recv from other thread in my process
     req->type = HMPI_RECV;
 
     add_recv_req(req);
-    //HMPI_Progress_recv(req);
   } else { //Recv off-node, but not ANY_SOURCE
     //printf("%d MPI recv buf %p count %d src %d (%d) tag %d req %p\n", g_hmpi_rank, buf, count, source, source_mpi_rank, tag, req);
     //fflush(stdout);
 
-#ifdef COMM_NTHREADS
-    int mpi_tag;
- 
-   //Note that the original tag is always stored as-is on the req.
-   //This, if MPI_ANY_TAG is used, we have it indicated there.
-   mpi_tag = (tag << SRC_TAG_BITS) | (source % g_nthreads);
+    uint64_t tagsel = TAGSEL_P2P;
+    if(unlikely(tag == MPI_ANY_TAG)) {
+        tagsel = TAGSEL_ANY_TAG;
+    }
 
-    MPI_Irecv(buf, count, datatype, source_mpi_rank, mpi_tag, g_tcomms[g_tl_tid], &req->req);
-#endif
-
-#ifdef COMM_SQUARED
-    MPI_Irecv(buf, count, datatype, source_mpi_rank, tag, SRC_DST_COMM(source % g_nthreads, g_tl_tid), &req->req);
-#endif
+    post_recv(buf, count * type_size, BUILD_TAG(source, g_tl_tid, tag),
+            tagsel, source_mpi_rank, &req->req);
 
     req->type = MPI_RECV;
-    //add_recv_req(req);
   }
 
   return MPI_SUCCESS;

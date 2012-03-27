@@ -12,14 +12,18 @@ INCS=-I$(HWLOC)/include
 SRCS=hmpi.c hmpi_coll.c nbc_op.c
 HDRS=hmpi.h barrier.h lock.h profile2.h
 
+PSM_SRCS=hmpi_psm.c hmpi_coll.c nbc_op.c libpsm.c
+PSM_HDRS=hmpi_psm.h barrier.h lock.h profile2.h libpsm.h
+PSM_LIBS=$(LIBS) -lpsm_infinipath
+
 all: $(SRCS:%.c=%.o)
-	ar r $@ hmpi.o nbc_op.o
-	ranlib $@
+	ar r hmpi.a hmpi.o hmpi_coll.o nbc_op.o
+	ranlib hmpi.a
 
 udawn: LIBS =
 udawn: $(SRCS:%.c=%.o)
-	ar r $@ hmpi.o nbc_op.o
-	ranlib $@
+	ar r hmpi.a hmpi.o hmpi_coll.o nbc_op.o
+	ranlib hmpi.a
 
 main: CFLAGS = -g -O
 main: all main.c
