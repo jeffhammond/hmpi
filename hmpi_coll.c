@@ -305,8 +305,10 @@ int HMPI_Bcast(void *buffer, int count, MPI_Datatype datatype, int root, HMPI_Co
     printf("[%i] HMPI_Bcast(%x, %i, %x, %i, %x)\n", g_rank*g_nthreads+g_tl_tid, buffer, count, datatype, root, comm);
 #endif
 
+    int local_root = root % g_nthreads;
+
     //Root sets the send buffer
-    if(root % g_nthreads == g_tl_tid) {
+    if(local_root == g_tl_tid) {
         comm->sbuf[0] = buffer;
     }
 
@@ -314,7 +316,7 @@ int HMPI_Bcast(void *buffer, int count, MPI_Datatype datatype, int root, HMPI_Co
 
     //Only do an MPI-level bcast and barrier if more the one node.
     if(g_size > 1) {
-        if(g_tl_tid == 0) {
+        if(g_tl_tid == local_root) {
             MPI_Bcast((void*)comm->sbuf[0],
                     count, datatype, root, comm->mpicomm);
         }
@@ -323,7 +325,7 @@ int HMPI_Bcast(void *buffer, int count, MPI_Datatype datatype, int root, HMPI_Co
     }
 
     //All ranks other than the root copy the recv buffer.
-    if(root % g_nthreads != g_tl_tid) {
+    if(local_root != g_tl_tid) {
         memcpy(buffer, (void*)comm->sbuf[0], count*size);
     }
 

@@ -264,7 +264,7 @@ static inline HMPI_Request match_recv(HMPI_Request recv_req) {
             remove_send_req(prev, cur);
 
             //TODO - keep doing this assignment here?
-            recv_req->proc = req->proc;
+            //recv_req->proc = req->proc; //not necessary, no ANY_SRC
             recv_req->tag = req->tag;
             //*send_req = req;
             //return 1;

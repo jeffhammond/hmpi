@@ -2,7 +2,7 @@ CC=mpicc -std=gnu99
 #CC=mpixlc
 
 WARN=-Wall -Wuninitialized
-CFLAGS+=$(WARN)
+CFLAGS+=$(WARN) -O0 -g
 
 HWLOC=/g/g19/friedley/local
 
