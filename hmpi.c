@@ -218,6 +218,16 @@ static inline void release_req(HMPI_Request req)
     //Return a req to the pool -- once allocated, a req is never freed.
     HMPI_Item* item = (HMPI_Item*)req;
 
+    if(req->type == HMPI_RECV) {
+        //Make sure its not on the list.
+        for(HMPI_Item* cur = g_recv_reqs_head.next; cur != NULL; cur = cur->next) {
+            if(cur == item) {
+                printf("%d ERROR req %p released but still in recv reqs list\n", g_hmpi_rank, req);
+                fflush(stdout);
+            }
+        }
+    }
+
     item->next = g_free_reqs;
     g_free_reqs = item;
 }
@@ -277,6 +287,7 @@ static inline void remove_send_req(HMPI_Item* prev, HMPI_Item* cur) {
 static inline void add_recv_req(HMPI_Request req) {
     HMPI_Item* item = (HMPI_Item*)req;
 
+    //printf("%d adding recv req %p\n", g_hmpi_rank, req); fflush(stdout);
     //Add at tail to ensure matching occurs in order.
     item->next = NULL;
     g_recv_reqs_tail->next = item;
@@ -286,6 +297,7 @@ static inline void add_recv_req(HMPI_Request req) {
 
 
 static inline void remove_recv_req(HMPI_Item* prev, HMPI_Item* cur) {
+    //printf("%d removing recv req %p\n", g_hmpi_rank, cur); fflush(stdout);
     if(cur == g_recv_reqs_tail) {
         g_recv_reqs_tail = prev;
         prev->next = NULL;
@@ -334,13 +346,19 @@ static inline HMPI_Request match_recv(HMPI_Request recv_req) {
     int proc = recv_req->proc;
     int tag = recv_req->tag;
 
+    if(recv_req->stat != HMPI_REQ_ACTIVE) {
+        printf("%d ERROR matching non-active recv %p\n", g_hmpi_rank, recv_req);
+        fflush(stdout);
+    }
+
     for(prev = g_tl_send_reqs_head, cur = prev->next;
             cur != NULL; prev = cur, cur = cur->next) {
         req = (HMPI_Request)cur;
 
         //The send request can't have ANY_SOURCE or ANY_TAG, so don't check.
         if(req->proc == proc && (req->tag == tag || tag == MPI_ANY_TAG)) {
-            //remove_send_req(prev, cur);
+            remove_send_req(prev, cur);
+#if 0
             if(cur->next == NULL) {
                 //Looks like this is the tail -- CAS prev in.
                 HMPI_Request_list* req_list = &g_send_reqs[g_tl_tid];
@@ -362,6 +380,7 @@ static inline HMPI_Request match_recv(HMPI_Request recv_req) {
                 //Not the tail; just remove.
                 prev->next = cur->next;
             }
+#endif
 
             recv_req->proc = req->proc; //Not necessary, no ANY_SRC
             recv_req->tag = req->tag;
@@ -1307,7 +1326,7 @@ int HMPI_Wait(HMPI_Request *request, HMPI_Status *status) {
 
 int HMPI_Waitall(int count, HMPI_Request *requests, HMPI_Status *statuses)
 {
-//    int flag;
+    int flag;
     int done;
 
 #ifdef DEBUG
@@ -1316,10 +1335,11 @@ int HMPI_Waitall(int count, HMPI_Request *requests, HMPI_Status *statuses)
 #endif
 
     do {
-        HMPI_Progress();
+        //HMPI_Progress();
         done = 0;
 
         for(int i = 0; i < count; i++) {
+#if 0
             HMPI_Request req = requests[i];
 
             if(req == HMPI_REQUEST_NULL) {
@@ -1329,7 +1349,7 @@ int HMPI_Waitall(int count, HMPI_Request *requests, HMPI_Status *statuses)
 
             if(get_reqstat(req) != HMPI_REQ_COMPLETE) {
                 if(req->type == HMPI_SEND) {
-                    if(!HMPI_Progress_send(req)) {
+                    if(HMPI_Progress_send(req) != HMPI_REQ_COMPLETE) {
                         continue;
                     }
                 } else if(req->type == HMPI_RECV) {
@@ -1355,8 +1375,8 @@ int HMPI_Waitall(int count, HMPI_Request *requests, HMPI_Status *statuses)
             release_req(req);
             requests[i] = HMPI_REQUEST_NULL;
             done += 1;
+#endif
 
-#if 0    
             if(statuses == HMPI_STATUSES_IGNORE) {
                 HMPI_Test(&requests[i], &flag, HMPI_STATUS_IGNORE);
             } else {
@@ -1366,7 +1386,6 @@ int HMPI_Waitall(int count, HMPI_Request *requests, HMPI_Status *statuses)
             if(flag) {
                 done += 1;
             }
-#endif
         }
     } while(done < count);
 
@@ -1379,6 +1398,33 @@ int HMPI_Waitany(int count, HMPI_Request* requests, int* index, HMPI_Status *sta
     int flag;
     int done;
 
+
+    //while(1) {
+    //    done = 1;
+    do {
+        done = 1;
+        for(int i = 0; i < count; i++) {
+            if(requests[i] == HMPI_REQUEST_NULL) {
+                continue;
+            }
+
+            //Not done! at least one req was not NULL.
+            done = 0;
+
+            HMPI_Test(&requests[i], &flag, status);
+            if(flag) {
+                *index = i;
+                return MPI_SUCCESS;
+            }
+        }
+
+//        if(done == 1) {
+            //All reqs were null.
+//            break;
+//        }
+    } while(done == 0);
+
+#if 0
     //Done is used to stop waiting if all requests are NULL.
     for(done = 1; done == 0; done = 1) {
         for(int i = 0; i < count; i++) {
@@ -1394,6 +1440,20 @@ int HMPI_Waitany(int count, HMPI_Request* requests, int* index, HMPI_Status *sta
             done = 0;
         }
     }
+#endif
+
+#if 0
+    int nn = 0;
+    for(int i = 0; i < count; i++) {
+        if(requests[i] != HMPI_REQUEST_NULL) {
+            //printf("%d ERROR non-null req in all-null waitany path\n", g_hmpi_rank);
+            nn++;
+        }
+    }
+
+    printf("%d waitany all-null! %d non-null\n", g_hmpi_rank, nn);
+    fflush(stdout);
+#endif
 
     //All requests were NULL.
     *index = MPI_UNDEFINED;
@@ -1521,7 +1581,7 @@ int HMPI_Isend(void* buf, int count, MPI_Datatype datatype, int dest, int tag, H
     int target_mpi_rank = dest / g_nthreads;
     if(target_mpi_rank == g_rank) {
         req->type = HMPI_SEND;
-        req->match_req = NULL;
+        //req->match_req = NULL; //Not neeeded
         req->offset = 0;
         LOCK_INIT(&req->match, 1);
 
