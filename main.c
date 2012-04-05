@@ -1,4 +1,7 @@
 #include "hmpi.h"
+#include <string.h>
+#include <stdio.h>
+#include <math.h>
 
 int tmain(int argc, char** argv){
 
@@ -71,11 +74,24 @@ int tmain(int argc, char** argv){
 #endif
 
   //int x=1, y=0;
-  uint64_t x[4] = {1, 2, 3, 4};
-  uint64_t y[4] = {0};
-  HMPI_Reduce(x, y, 4, MPI_UNSIGNED_LONG_LONG, MPI_SUM, 0, HMPI_COMM_WORLD);
-  //printf("[%i] reduce buf: %i %d %d %d\n", r, y[0], y[1], y[2], y[3]);
+  //for(int k = 0; k < 10000; k++)
+  {
+      double x[4] = {1.1, 2.2, 3.3, 4.4};
+      double y[4] = {0.0, 0.0, 0.0, 0.0};
+      //printf("[%i] pre reduce buf: %f %f %f %f\n", r, y[0], y[1], y[2], y[3]);
+      HMPI_Allreduce(x, y, 4, MPI_DOUBLE, MPI_SUM, HMPI_COMM_WORLD);
+      //printf("[%i] reduce buf: %f %f %f %f\n", r, y[0], y[1], y[2], y[3]);
 
+      for(int i = 0; i < 4; i++) {
+          if(fabs(y[i] - (x[i] * (double)p)) > 0.00001) {
+              printf("BAD VALUE y[i] %g x[i] %g expect %g\n", y[i], x[i], x[i] * (double)p);
+          }
+      }
+  }
+
+#if 0
+  uint64_t x[4];
+  uint64_t y[4];
   uint64_t* z = (uint64_t*)malloc(sizeof(uint64_t) * p * 2);
   uint64_t* w = (uint64_t*)malloc(sizeof(uint64_t) * p * 2);
   memset(z, 0, sizeof(uint64_t) * p * 2);
@@ -104,7 +120,7 @@ int tmain(int argc, char** argv){
   for(int i = 0; i < p; i++) {
     printf("[%i] allgatherv buf[%d]: %llu %llu\n", r, i * 2, w[i * 2], w[i * 2 + 1]);
   }
-
+#endif
 
 
 //  if(r == 0) y=1;
@@ -170,3 +186,4 @@ int main(int argc, char** argv) {
     //TODO - may not be portable to other MPIs?
     HMPI_Init(&argc, &argv, atoi(argv[1]), &tmain);
 }
+

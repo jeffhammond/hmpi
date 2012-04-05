@@ -2,7 +2,7 @@ CC=mpicc -std=gnu99
 #CC=mpixlc
 
 WARN=-Wall -Wuninitialized
-CFLAGS+=$(WARN) -O0 -g
+CFLAGS=$(WARN) -O0 -g
 
 HWLOC=/g/g19/friedley/local
 
@@ -10,6 +10,7 @@ HWLOC=/g/g19/friedley/local
 LIBS=-L$(HWLOC)/lib -lhwloc
 INCS=-I$(HWLOC)/include
 SRCS=hmpi.c hmpi_coll.c nbc_op.c
+MAIN=main.c
 HDRS=hmpi.h barrier.h lock.h profile2.h
 
 PSM_SRCS=hmpi_psm.c hmpi_coll.c nbc_op.c libpsm.c
@@ -26,12 +27,14 @@ udawn: $(SRCS:%.c=%.o)
 	ranlib hmpi.a
 
 main: CFLAGS = -g -O
-main: all main.c
-	$(CC) $(CCFLAGS) $(LDFLAGS) -o main hmpi.a $(LIBS)
+main: all $(MAIN:%.c=%.o)
+	$(CC) $(CCFLAGS) $(LDFLAGS) -o main main.o hmpi.a $(LIBS)
 
-debug: CFLAGS = -g -O
+debug: CFLAGS = $(WARN) -g -O 
 debug: $(SRCS:%.c=%.o) 
-	$(CC) $(INCS) $(CFLAGS) $(LDFLAGS) -o $(PROG) $(SRCS:%.c=%.o) $(LIBS)
+	ar r hmpi.a hmpi.o hmpi_coll.o nbc_op.o
+	ranlib hmpi.a
+#	$(CC) $(INCS) $(CFLAGS) $(LDFLAGS) -o $(PROG) $(SRCS:%.c=%.o) $(LIBS)
 
 .c.o: $(HDRS)
 	$(CC) $(INCS) $(CFLAGS) $(CPPFLAGS) -c $<

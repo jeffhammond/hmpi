@@ -10,6 +10,7 @@
 extern "C" {
 #endif
 
+
 extern int g_nthreads;
 extern int g_rank;
 
@@ -90,6 +91,8 @@ typedef struct HMPI_Request_info {
     volatile uint8_t stat;    //Request state
 
     MPI_Request req;  //Used only for off-node messages via underlying MPI
+
+    uint32_t postnum;
 } HMPI_Request_info;
 
 typedef HMPI_Request_info* HMPI_Request;
