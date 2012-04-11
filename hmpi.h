@@ -86,6 +86,7 @@ typedef struct HMPI_Request_info {
     void* buf;      //User buffer
     struct HMPI_Request_info* match_req; //Set only sends; matching recv req
 
+
     volatile ssize_t offset;  //Copy offset for shared sender/recver copying
     lock_t match;             //Synchornization for sender/recver copying
     volatile uint8_t stat;    //Request state

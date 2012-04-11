@@ -215,8 +215,7 @@ typedef struct HMPI_Request_list {
 } HMPI_Request_list;
 
 static HMPI_Request_list* g_send_reqs = NULL;
-static __thread HMPI_Request_list g_tl_send_reqs;
-static __thread HMPI_Item* g_tl_send_reqs_head; //Optimization
+static __thread HMPI_Item* g_tl_send_reqs_head;
 
 //Pool of unused reqs to save malloc time.
 static __thread HMPI_Item* g_free_reqs = NULL;
@@ -535,8 +534,6 @@ void* trampoline(void* tid) {
 
     g_send_reqs[rank].head.next = NULL;
     g_send_reqs[rank].tail = &g_send_reqs[rank].head;
-    g_tl_send_reqs.head.next = NULL;
-    g_tl_send_reqs.tail = &g_tl_send_reqs.head;
     g_tl_send_reqs_head = &g_send_reqs[rank].head;
 
 #ifdef COMM_NTHREADS
@@ -995,25 +992,29 @@ static inline void HMPI_Progress() {
     int tid = g_tl_tid;
 
     HMPI_Request_list* req_list = &g_send_reqs[tid];
-    //HMPI_Item* tail = req_list->tail;
+    HMPI_Item* tail = req_list->tail;
 
     //Return if there are no send reqs to match against.
     //TODO - should progress off-node ANY_SOURCE recvs.
-    //if(tail == &req_list->head) {
-    //    return;
-    //}
-
-
-    //Move all pending sends from the shared Q to a local Q.
-    // Sends will stay here until matched, they are not put back.
-
-    //Just fetch-store the shared tail pointer back to head.
-    //This should work whether or not g_tl_send_reqs is empty.
-    if(req_list->tail != &req_list->head) {
-        g_tl_send_reqs.tail->next = req_list->head.next;
-        g_tl_send_reqs.tail = fetch_and_store((void**)&req_list->tail, &req_list->head);
+    if(tail == &req_list->head) {
+        return;
     }
 
+
+    //Now, instead of removing reqs from the shared Q, divert the Q to a new
+    //list.
+    //HMPI_Request_list temp_req_list;
+    //temp_req_list.head.next = NULL;
+    //temp_req_list.tail = &temp_req_list.head;
+    HMPI_Item temp_head = {NULL};
+
+    tail = fetch_and_store((void**)&req_list->tail, &temp_head);
+
+    //Now incoming sends will get added on to temp_head.
+    //We use req_list->head and tail.
+    HMPI_Request_list temp_req_list;
+    temp_req_list.head.next = req_list->head.next;
+    temp_req_list.tail = tail;
 
     //Progress receive requests.
     //We remove items from the list, but they are still valid; nothing in this
@@ -1027,7 +1028,7 @@ static inline void HMPI_Progress() {
         req = (HMPI_Request)cur;
 
         if(likely(req->type == HMPI_RECV)) {
-            HMPI_Request send_req = match_recv(&g_tl_send_reqs, req);
+            HMPI_Request send_req = match_recv(&temp_req_list, req);
             if(send_req != HMPI_REQUEST_NULL) {
                 HMPI_Complete_recv(req, send_req);
 
@@ -1061,7 +1062,7 @@ static inline void HMPI_Progress() {
             }
 #endif //COMM_NTHREADS
 
-            HMPI_Request send_req = match_recv_any(&g_tl_send_reqs, req);
+            HMPI_Request send_req = match_recv_any(&temp_req_list, req);
             if(send_req != HMPI_REQUEST_NULL) {
                 HMPI_Complete_recv(req, send_req);
 
@@ -1188,6 +1189,47 @@ static inline void HMPI_Progress() {
 main_loop:
         continue; //Needed to avoid weird compiler error with the label
 #endif
+    }
+
+
+    //Now we need to restore the shared Q.
+    //temp_req_list->head (->next) is current head
+    //temp_req_list.tail points to local tail
+
+    //TODO - is this it?
+    //What happens when nothing in local list?
+    //tail points to temp_req_list.head, which in turn has .next = NULL
+    if(temp_req_list.tail != &temp_req_list.head) {
+        //We have reqs to re-insert into shared Q.
+        if(req_list->tail == &temp_head) {
+            //Nothing in shared Q, have to atomically update tail.
+            if(CAS_PTR_BOOL(&req_list->tail,
+                        &temp_head, temp_req_list.tail)) {
+                //OK, tail is now up to date.  Change head.
+                req_list->head.next = temp_req_list.head.next;
+            } else {
+                //Connect tail of local Q to head of global Q
+                temp_req_list.tail->next = temp_head.next;
+
+                //Update head of global Q to head of local Q
+                req_list->head.next = temp_req_list.head.next;
+            }
+        } else {
+            //Connect tail of local Q to head of global Q
+            temp_req_list.tail->next = temp_head.next;
+
+            //Update head of global Q to head of local Q
+            req_list->head.next = temp_req_list.head.next;
+        }
+    } else {
+        //Nothing to reinsert, but still need to fix shared Q.
+        if(req_list->tail == &temp_head) {
+            if(!CAS_PTR_BOOL(&req_list->tail, &temp_head, &req_list->head)) {
+                req_list->head.next = temp_head.next;
+            }
+        } else {
+            req_list->head.next = temp_head.next;
+        }
     }
 }
 
