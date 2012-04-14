@@ -14,10 +14,12 @@ extern "C" {
 extern int g_nthreads;
 extern int g_rank;
 
+#if 0
 typedef struct {
   int32_t val;
   int32_t padding[15]; 
 } cache_line_t;
+#endif
 
 
 //Placeholder typedef - groups aren't implemented yet

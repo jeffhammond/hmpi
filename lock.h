@@ -148,7 +148,7 @@ static inline void* fetch_and_store(void** ptr, void* val)
     return out;
 }
 
-static inline void MCS_LOCK_ACQUIRE(mcs_lock_t* __restrict l, mcs_qnode_t* q, int tid) {
+static inline void MCS_LOCK_ACQUIRE(mcs_lock_t* __restrict l, mcs_qnode_t* q) {
     q->next = NULL;
 
     mcs_qnode_t* pred;
@@ -165,14 +165,14 @@ static inline void MCS_LOCK_ACQUIRE(mcs_lock_t* __restrict l, mcs_qnode_t* q, in
         *locked = 1;
 
         //TODO - fence isn't necessary here on x86, but maybe is on PPC?
-        //STORE_FENCE();  //Prevent q->locked from being set afer pred->next
+        STORE_FENCE();  //Prevent q->locked from being set afer pred->next
 
         pred->next = q;
         while(*locked == 1);
     }
 }
 
-static inline void MCS_LOCK_RELEASE(mcs_lock_t* __restrict l, mcs_qnode_t* q, int tid) {
+static inline void MCS_LOCK_RELEASE(mcs_lock_t* __restrict l, mcs_qnode_t* q) {
     mcs_qnode_t* next = q->next;
 
     //Is another thread waiting on the lock?

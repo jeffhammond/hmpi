@@ -212,6 +212,10 @@ static __thread HMPI_Item* g_recv_reqs_tail = NULL;
 typedef struct HMPI_Request_list {
     HMPI_Item head;
     HMPI_Item* tail;
+    mcs_lock_t lock;
+    //lock_t lock;
+    //Pad to a cache line so locks don't conflict
+    //uint8_t pad[36];
 } HMPI_Request_list;
 
 static HMPI_Request_list* g_send_reqs = NULL;
@@ -248,23 +252,31 @@ static inline void release_req(HMPI_Request req)
 static inline void add_send_req(HMPI_Request_list* req_list,
                                 HMPI_Request req) {
     //Insert req at tail.
-    //HMPI_Request_list* req_list = &g_send_reqs[tid];
     HMPI_Item* item = (HMPI_Item*)req;
 
-    item->next = NULL;
+    item->next = NULL; //TODO - could skip this
 
-    //LOCK_SET(&g_mpi_lock);
+#if 0
     HMPI_Item* pred =
         (HMPI_Item*)fetch_and_store((void**)&req_list->tail, item);
 
     //pred will point to the head if no items in list, so is never NULL.
     pred->next = item;
-    //LOCK_CLEAR(&g_mpi_lock);
+#endif
+
+    mcs_qnode_t q;
+    MCS_LOCK_ACQUIRE(&req_list->lock, &q);
+    //LOCK_SET(&req_list->lock);
+    req_list->tail->next = item;
+    req_list->tail = item;
+    MCS_LOCK_RELEASE(&req_list->lock, &q);
+    //LOCK_CLEAR(&req_list->lock);
 }
 
 
 static inline void remove_send_req(HMPI_Request_list* req_list,
                                    HMPI_Item* prev, HMPI_Item* cur) {
+#if 0
     if(cur->next == NULL) {
         //Looks like this is the tail -- CAS prev in.
         //HMPI_Request_list* req_list = &g_send_reqs[g_tl_tid];
@@ -287,6 +299,53 @@ static inline void remove_send_req(HMPI_Request_list* req_list,
         //Not the tail; just remove.
         prev->next = cur->next;
     }
+#endif
+
+#if 0
+    if(cur == req_list->tail) {
+        mcs_qnode_t q;
+        MCS_LOCK_ACQUIRE(&req_list->lock, &q);
+        //LOCK_SET(&req_list->lock);
+        if(cur == req_list->tail) {
+            prev->next = NULL;
+            req_list->tail = prev;
+            MCS_LOCK_RELEASE(&req_list->lock, &q);
+            //LOCK_CLEAR(&req_list->lock);
+        } else {
+            MCS_LOCK_RELEASE(&req_list->lock, &q);
+            //LOCK_CLEAR(&req_list->lock);
+            prev->next = cur->next;
+        }
+    } else {
+        prev->next = cur->next;
+    }
+#endif
+
+    if(cur == req_list->tail) {
+        req_list->tail = prev;
+        prev->next = NULL;
+    } else {
+        prev->next = cur->next;
+    }
+}
+
+
+static inline void update_send_reqs(void)
+{
+    HMPI_Request_list* req_list = &g_send_reqs[g_tl_tid];
+
+    if(req_list->tail != &req_list->head) {
+        g_tl_send_reqs.tail->next = req_list->head.next;
+
+        mcs_qnode_t q;
+        MCS_LOCK_ACQUIRE(&req_list->lock, &q);
+
+        g_tl_send_reqs.tail = req_list->tail;
+        req_list->tail = &req_list->head;
+        req_list->head.next = NULL; //TODO - could move this out
+
+        MCS_LOCK_RELEASE(&req_list->lock, &q);
+    }
 }
 
 
@@ -294,7 +353,6 @@ static inline void remove_send_req(HMPI_Request_list* req_list,
 static inline void add_recv_req(HMPI_Request req) {
     HMPI_Item* item = (HMPI_Item*)req;
 
-    //printf("%d adding recv req %p\n", g_hmpi_rank, req); fflush(stdout);
     //Add at tail to ensure matching occurs in order.
     item->next = NULL;
     g_recv_reqs_tail->next = item;
@@ -304,7 +362,6 @@ static inline void add_recv_req(HMPI_Request req) {
 
 
 static inline void remove_recv_req(HMPI_Item* prev, HMPI_Item* cur) {
-    //printf("%d removing recv req %p\n", g_hmpi_rank, cur); fflush(stdout);
     if(cur == g_recv_reqs_tail) {
         g_recv_reqs_tail = prev;
         prev->next = NULL;
@@ -355,26 +412,17 @@ static inline HMPI_Request match_recv(HMPI_Request_list* req_list,
     int proc = recv_req->proc;
     int tag = recv_req->tag;
 
-    //printf("%d match recv %p proc %d tag %d\n", g_hmpi_rank, recv_req, proc, tag);
-
     for(prev = &req_list->head, cur = prev->next;
             cur != NULL; prev = cur, cur = cur->next) {
         req = (HMPI_Request)cur;
 
         //The send request can't have ANY_SOURCE or ANY_TAG, so don't check.
         if(req->proc == proc && (req->tag == tag || tag == MPI_ANY_TAG)) {
-            prev->next = cur->next;
-            if(cur == req_list->tail) {
-                req_list->tail = prev;
-            }
-            //remove_send_req(req_list, prev, cur);
+            remove_send_req(req_list, prev, cur);
 
             //recv_req->proc = req->proc; //Not necessary, no ANY_SRC
-            //printf("%d matched %p proc %d tag %d\n", g_hmpi_rank, req, req->proc, req->tag);
             recv_req->tag = req->tag;
             return req;
-        } else {
-            //printf("%d no match %p proc %d tag %d\n", g_hmpi_rank, req, req->proc, req->tag);
         }
     }
 
@@ -398,11 +446,7 @@ static inline HMPI_Request match_recv_any(HMPI_Request_list* req_list,
 
         //The send request can't have ANY_SOURCE or ANY_TAG, so don't check.
         if(req->tag == tag || tag == MPI_ANY_TAG) {
-            prev->next = cur->next;
-            if(cur == req_list->tail) {
-                req_list->tail = prev;
-            }
-            //remove_send_req(req_list, prev, cur);
+            remove_send_req(req_list, prev, cur);
 
             recv_req->proc = req->proc;
             recv_req->tag = req->tag;
@@ -413,41 +457,6 @@ static inline HMPI_Request match_recv_any(HMPI_Request_list* req_list,
     return HMPI_REQUEST_NULL;
 }
 
-
-static inline void update_send_reqs()
-{
-    HMPI_Request_list* req_list = &g_send_reqs[g_tl_tid];
-
-    if(req_list->tail == &req_list->head) {
-        return;
-    }
-
-    //g_tl_send_reqs.tail->next = req_list->head.next;
-    //g_tl_send_reqs.tail = fetch_and_store((void**)&req_list->tail, &req_list->head);
-
-    //TODO - this is still broken! suffers from the exact same race.
-    HMPI_Item* prev;
-    HMPI_Item* cur;
-    HMPI_Item* head;
-
-    for(head = prev = &req_list->head, cur = prev->next, prev->next = NULL;
-            cur != NULL; prev = cur, cur = cur->next)
-    {
-        if(cur == req_list->tail) {
-
-            if(!CAS_PTR_BOOL(&req_list->tail, cur, &req_list->head)) {
-                //CAS failed -- wait for sender to update and try again.
-                HMPI_Item* volatile* vol_next = &cur->next;
-                while(*vol_next == NULL);
-            } else {
-                //CAS is a success!
-                g_tl_send_reqs.tail->next = head;
-                g_tl_send_reqs.tail = cur;
-                return;
-            }
-        }
-    }
-}
 
 static inline int match_probe(int source, int tag, HMPI_Comm comm, HMPI_Request* send_req) {
     HMPI_Item* cur;
@@ -580,6 +589,8 @@ void* trampoline(void* tid) {
 
     g_send_reqs[rank].head.next = NULL;
     g_send_reqs[rank].tail = &g_send_reqs[rank].head;
+    MCS_LOCK_INIT(&g_send_reqs[rank].lock);
+    //LOCK_INIT(&g_send_reqs[rank].lock, 0);
     g_tl_send_reqs.head.next = NULL;
     g_tl_send_reqs.tail = &g_tl_send_reqs.head;
     //g_tl_send_reqs_head = &g_send_reqs[rank].head;
@@ -615,6 +626,9 @@ int HMPI_Init(int *argc, char ***argv, int nthreads, int (*start_routine)(int ar
 
   MPI_Init_thread(argc, argv, MPI_THREAD_MULTIPLE, &provided);
   assert(MPI_THREAD_MULTIPLE == provided);
+
+  printf("sizeof request list %d\n", sizeof(HMPI_Request_list));
+  fflush(stdout);
 
   //Make sure we can support the requested number of threads.
   if(nthreads >= (1 << SRC_TAG_BITS) - 1) {
@@ -1039,7 +1053,7 @@ static inline void HMPI_Progress() {
     HMPI_Request req;
     //int tid = g_tl_tid;
 
-    //HMPI_Request_list* req_list = &g_send_reqs[tid];
+    //HMPI_Request_list* req_list = &g_send_reqs[g_tl_tid];
     //HMPI_Item* tail = req_list->tail;
 
     //Return if there are no send reqs to match against.
@@ -1059,7 +1073,6 @@ static inline void HMPI_Progress() {
     // sender adds req to queue -- tail points to that elem, not head
     // we f-s and get the non-empty tail, but its not linked to!
     // that req will then be lost!
-    //LOCK_SET(&g_mpi_lock);
 #if 0
     if(req_list->tail != &req_list->head) {
         //This is safe because the branch ensures at least one item in the Q.
@@ -1071,15 +1084,14 @@ static inline void HMPI_Progress() {
 
     }
 #endif
-    //LOCK_CLEAR(&g_mpi_lock);
 
-    update_send_reqs();
-
+#if 0
     if(g_tl_send_reqs.head.next == NULL) {
         return;
     }
-    //printf("%d progress head.next %p tail %p\n", g_hmpi_rank, g_tl_send_reqs.head.next, g_tl_send_reqs.tail);
+#endif
 
+    update_send_reqs();
 
     //Progress receive requests.
     //We remove items from the list, but they are still valid; nothing in this
@@ -1094,6 +1106,7 @@ static inline void HMPI_Progress() {
 
         if(likely(req->type == HMPI_RECV)) {
             HMPI_Request send_req = match_recv(&g_tl_send_reqs, req);
+            //HMPI_Request send_req = match_recv(req_list, req);
             if(send_req != HMPI_REQUEST_NULL) {
                 HMPI_Complete_recv(req, send_req);
 
@@ -1128,6 +1141,7 @@ static inline void HMPI_Progress() {
 #endif //COMM_NTHREADS
 
             HMPI_Request send_req = match_recv_any(&g_tl_send_reqs, req);
+            //HMPI_Request send_req = match_recv_any(req_list, req);
             if(send_req != HMPI_REQUEST_NULL) {
                 HMPI_Complete_recv(req, send_req);
 
