@@ -4,6 +4,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
+#define __bg__
 #ifndef __bg__
 #include <hwloc.h>
 #endif
@@ -46,9 +47,9 @@ typedef struct mpool_t {
 //    uint64_t num_reuses;
 } mpool_t;
 
+#ifndef __bg__
 static lock_t g_mpool_lock = {0};
 static int g_mpool_init = 0;
-#ifndef __bg__
 static hwloc_topology_t g_topo;
 #endif
 
@@ -59,9 +60,9 @@ static mpool_t* mpool_open(void)
     mpool_t* mp = (mpool_t*)malloc(sizeof(mpool_t));
     
     //TODO - could have one global topo object.
+#ifndef __bg__
     LOCK_SET(&g_mpool_lock);
     if(g_mpool_init == 0) {
-#ifndef __bg__
         printf("doing hwloc init\n"); fflush(stdout);
         if(hwloc_topology_init(&g_topo) == -1) {
             printf("hwloc_topology_init error\n");
@@ -71,15 +72,13 @@ static mpool_t* mpool_open(void)
             printf("hwloc_topology_load error\n");
             fflush(stdout);
         }
-#endif
         g_mpool_init = 1;
     }
 
-#ifndef __bg__
     mp->cpuset = hwloc_bitmap_alloc();
     hwloc_get_cpubind(g_topo, mp->cpuset, HWLOC_CPUBIND_THREAD);
-#endif
     LOCK_CLEAR(&g_mpool_lock);
+#endif
 
     mp->head = NULL;
 #ifdef LOCK_FULL
@@ -199,7 +198,6 @@ static void* mpool_alloc(mpool_t* mp, size_t length)
         }
     }
 #endif //LOCK_FREE
-
 
     //If no existing allocation is found, allocate a new one.
 #ifdef __bg__

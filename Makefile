@@ -2,7 +2,7 @@ CC=mpicc -std=gnu99
 #CC=mpixlc
 
 WARN=-Wall -Wuninitialized
-CFLAGS=$(WARN) -O0 -g
+CFLAGS=$(WARN) -O3 -march=native -fomit-frame-pointer
 
 HWLOC=/g/g19/friedley/local
 
