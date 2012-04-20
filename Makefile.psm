@@ -1,0 +1,31 @@
+CC=mpicc -std=gnu99
+#CC=mpixlc
+
+WARN=-Wall -Wuninitialized
+CFLAGS+=$(WARN)
+
+HWLOC=/g/g19/friedley/local
+
+LIBS=-L$(HWLOC)/lib -lhwloc -lpsm_infinipath
+INCS=-I$(HWLOC)/include
+SRCS=hmpi_psm.c hmpi_coll.c nbc_op.c libpsm.c
+HDRS=hmpi_psm.h barrier.h lock.h profile2.h libpsm.h
+
+all: $(SRCS:%.c=%.o)
+	ar r hmpi.a hmpi_psm.o hmpi_coll.o nbc_op.o
+	ranlib hmpi.a
+
+main: CFLAGS = -g -O
+main: all main.c
+	$(CC) $(CCFLAGS) $(LDFLAGS) -o main hmpi.a $(LIBS)
+
+debug: CFLAGS = -g -O
+debug: $(SRCS:%.c=%.o) 
+	$(CC) $(INCS) $(CFLAGS) $(LDFLAGS) -o $(PROG) $(SRCS:%.c=%.o) $(LIBS)
+
+.c.o: $(HDRS)
+	$(CC) $(INCS) $(CFLAGS) $(CPPFLAGS) -c $<
+
+clean:
+	rm -f *.o $(PROG)
+

@@ -92,6 +92,10 @@ static inline int LOCK_GET(lock_t* __restrict l) {
   (void*)__sync_val_compare_and_swap((uintptr_t*)(ptr), \
           (uintptr_t)(oldval), (uintptr_t)(newval))
 
+#define CAS_T_BOOL(t, ptr, oldval, newval) \
+  __sync_bool_compare_and_swap((t*)(ptr), (t)(oldval), (t)(newval))
+
+
 #define FETCH_ADD(ptr, val) \
     __sync_fetch_and_add(ptr, val)
 
@@ -100,7 +104,7 @@ static inline int LOCK_GET(lock_t* __restrict l) {
 
 static inline void LOCK_INIT(lock_t* __restrict l, int locked) {
     l->lock = locked;
-    STORE_FENCE();
+    //STORE_FENCE();
 }
 
 static inline void LOCK_SET(lock_t* __restrict l) {

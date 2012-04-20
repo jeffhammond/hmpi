@@ -14,13 +14,6 @@ extern "C" {
 extern int g_nthreads;
 extern int g_rank;
 
-#if 0
-typedef struct {
-  int32_t val;
-  int32_t padding[15]; 
-} cache_line_t;
-#endif
-
 
 //Placeholder typedef - groups aren't implemented yet
 typedef void* HMPI_Group;
@@ -68,7 +61,6 @@ typedef struct HMPI_Status {
 #define HMPI_REQ_ACTIVE 0
 #define HMPI_REQ_COMPLETE 1
 
-
 typedef struct HMPI_Item {
     struct HMPI_Item* next;
 //    struct HMPI_Item* prev;
@@ -79,21 +71,28 @@ typedef struct HMPI_Item {
 typedef struct HMPI_Request_info {
     HMPI_Item item; //Linked list subtype
 
-    int type;       //Request type
+    volatile uint32_t stat;    //Request state
+    uint32_t type;       //Request type
     int proc;       //Always the source's rank regardless of type.
     int tag;        //MPI tag
-    MPI_Datatype datatype;  //MPI datatype
     size_t size;    //Message size in bytes
-
     void* buf;      //User buffer
-    struct HMPI_Request_info* match_req; //Set only sends; matching recv req
 
+    MPI_Datatype datatype;  //MPI datatype
+    lock_t match;       //Synchornization for sender/recver copying
 
-    volatile ssize_t offset;  //Copy offset for shared sender/recver copying
-    lock_t match;             //Synchornization for sender/recver copying
-    volatile uint8_t stat;    //Request state
-
-    MPI_Request req;  //Used only for off-node messages via underlying MPI
+    union {
+        struct {
+            //Set only sends; matching recv req
+            struct HMPI_Request_info* match_req;
+            //Copy offset for shared sender/recver copying
+            volatile ssize_t offset;
+        } local __attribute__ ((packed));
+        struct {
+            //Used only for off-node messages via underlying MPI
+            MPI_Request req;
+        } remote __attribute__ ((packed));
+    } u;
 } HMPI_Request_info;
 
 typedef HMPI_Request_info* HMPI_Request;
