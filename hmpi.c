@@ -35,7 +35,7 @@
 #define PIN_WITH_PTHREAD 1
 
 #ifdef PIN_WITH_PTHREAD
-#define NUM_CORES 32
+#define NUM_CORES 16
 #define NUM_SOCKETS 4
 #endif
 
@@ -89,6 +89,10 @@ static int SRC_TAG_ANY = MPI_ANY_TAG; //Filled in during init
 
 #define likely(x)       __builtin_expect((x),1)
 #define unlikely(x)     __builtin_expect((x),0)
+
+#define PREFETCH(x)
+//#define PREFETCH(x) __builtin_prefetch(x)
+
 
 PROFILE_DECLARE();
 PROFILE_VAR(memcpy);
@@ -366,6 +370,7 @@ static inline HMPI_Request match_recv(HMPI_Request_list* req_list, HMPI_Request 
 
     for(prev = &req_list->head, cur = prev->next;
             cur != NULL; prev = cur, cur = cur->next) {
+        PREFETCH(cur->next);
         req = (HMPI_Request)cur;
 
         //The send request can't have ANY_SOURCE or ANY_TAG, so don't check.
@@ -394,6 +399,7 @@ static inline HMPI_Request match_recv_any(HMPI_Request_list* req_list, HMPI_Requ
 
     for(prev = &req_list->head, cur = prev->next;
             cur != NULL; prev = cur, cur = cur->next) {
+        PREFETCH(cur->next);
         req = (HMPI_Request)cur;
 
         //The send request can't have ANY_SOURCE or ANY_TAG, so don't check.
@@ -418,6 +424,7 @@ static inline int match_probe(int source, int tag, HMPI_Comm comm, HMPI_Request*
     update_send_reqs(req_list);
 
     for(cur = req_list->head.next; cur != NULL; cur = cur->next) {
+        PREFETCH(cur->next);
         req = (HMPI_Request)cur;
 
         //The send request can't have ANY_SOURCE or ANY_TAG,
@@ -586,6 +593,7 @@ int HMPI_Init(int *argc, char ***argv, int nthreads, int (*start_routine)(int ar
   int provided;
   long int thr;
 
+  //MPI_Init(argc, argv);
   MPI_Init_thread(argc, argv, MPI_THREAD_MULTIPLE, &provided);
   assert(MPI_THREAD_MULTIPLE == provided);
 
@@ -787,6 +795,7 @@ static inline int HMPI_Progress_send(HMPI_Request send_req)
         return HMPI_REQ_COMPLETE;
     }
 
+#if 0
     //Write blocks on this send req if receiver has matched it.
     //If mesage is short, receiver won't bother clearing the match lock, and
     // instead just does the copy and marks completion.
@@ -817,6 +826,7 @@ static inline int HMPI_Progress_send(HMPI_Request send_req)
         while(get_reqstat(send_req) != HMPI_REQ_COMPLETE);
         return HMPI_REQ_COMPLETE;
     }
+#endif
 
     return HMPI_REQ_ACTIVE;
 }
@@ -843,8 +853,9 @@ static inline void HMPI_Complete_recv(HMPI_Request recv_req, HMPI_Request send_r
     }
 #endif
 
-    if(size < BLOCK_SIZE * 2) {
+//    if(size < BLOCK_SIZE * 2) {
         memcpy((void*)recv_req->buf, send_req->buf, size);
+#if 0
     } else {
         //The setting of send_req->match_req signals to sender that they can
         // start doing copying as well, if they are testing the req.
@@ -870,7 +881,7 @@ static inline void HMPI_Complete_recv(HMPI_Request recv_req, HMPI_Request send_r
         //Wait if the sender is copying.
         LOCK_SET(&send_req->match);
     }
-
+#endif
     //Mark send and receive requests done
     update_reqstat(send_req, HMPI_REQ_COMPLETE);
     update_reqstat(recv_req, HMPI_REQ_COMPLETE);
@@ -991,6 +1002,7 @@ static inline void HMPI_Progress() {
     // prev pointer.
     for(prev = &g_recv_reqs_head, cur = prev->next;
             cur != NULL; cur = cur->next) {
+        PREFETCH(cur->next);
         req = (HMPI_Request)cur;
 
         if(likely(req->type == HMPI_RECV)) {
@@ -1560,16 +1572,10 @@ int HMPI_Isend(void* buf, int count, MPI_Datatype datatype, int dest, int tag, H
         req->type = HMPI_SEND;
         //req->u.local.match_req = NULL; //Not neeeded
         //req->u.local.offset = 0;
-        LOCK_INIT(&req->match, 1);
+        //LOCK_INIT(&req->match, 1);
 
         int target_mpi_thread = dest % nthreads;
         add_send_req(&g_send_reqs[target_mpi_thread], req);
-
-#ifdef DEBUG
-        printf("%d HMPI send buf %p size %lu dest %d tag %d\n", hmpi_rank, buf, req->size, dest, tag);
-        fflush(stdout);
-#endif
-
     } else {
         req->type = MPI_SEND;
 
@@ -1653,21 +1659,11 @@ int HMPI_Irecv(void* buf, int count, MPI_Datatype datatype, int source, int tag,
     //for nthreads^2 comms, this won't work -- we dont know which comm to post on!
 
     add_recv_req(req);
-
-#ifdef DEBUG
-    printf("%d HMPI recv any src buf %p size %lu tag %d\n", g_hmpi_rank, buf, req->size, tag);
-    fflush(stdout);
-#endif
   } else if(source_mpi_rank == g_rank) { //Recv on-node, but not ANY_SOURCE
     // recv from other thread in my process
     req->type = HMPI_RECV;
 
     add_recv_req(req);
-
-#ifdef DEBUG
-    printf("%d HMPI recv buf %p size %lu src %d tag %d\n", g_hmpi_rank, buf, req->size, source, tag);
-    fflush(stdout);
-#endif
   } else { //Recv off-node, but not ANY_SOURCE
     //printf("%d MPI recv buf %p count %d src %d (%d) tag %d req %p\n", g_hmpi_rank, buf, count, source, source_mpi_rank, tag, req);
     //fflush(stdout);
