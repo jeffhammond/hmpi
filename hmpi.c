@@ -35,8 +35,8 @@
 #define PIN_WITH_PTHREAD 1
 
 #ifdef PIN_WITH_PTHREAD
-#define NUM_CORES 16
-#define NUM_SOCKETS 4
+//#define NUM_CORES 12
+//#define NUM_SOCKETS 2
 #endif
 
 
@@ -90,8 +90,8 @@ static int SRC_TAG_ANY = MPI_ANY_TAG; //Filled in during init
 #define likely(x)       __builtin_expect((x),1)
 #define unlikely(x)     __builtin_expect((x),0)
 
-#define PREFETCH(x)
-//#define PREFETCH(x) __builtin_prefetch(x)
+//#define PREFETCH(x)
+#define PREFETCH(x) __builtin_prefetch(x)
 
 
 PROFILE_DECLARE();
@@ -106,6 +106,8 @@ static hwloc_topology_t g_hwloc_topo;
 #endif
 
 
+static int g_ncores;                //Cores per socket
+static int g_nsockets;              //Sockets per node
 int g_nthreads=-1;                  //Threads per node
 int g_rank=-1;                      //Underlying MPI rank for this node
 int g_size=-1;                      //Underlying MPI world size
@@ -479,8 +481,8 @@ void* trampoline(void* tid) {
 #endif
 
 #ifdef PIN_WITH_PTHREAD
-        int num_sockets = NUM_SOCKETS;
-        int num_cores = NUM_CORES;
+        //int num_sockets = NUM_SOCKETS;
+        //int num_cores = NUM_CORES;
 #endif //PIN_WITH_PTHREAD
 
 #if 0
@@ -491,24 +493,24 @@ void* trampoline(void* tid) {
         }
 #endif
 
-        int core = rank % num_cores;
-        num_cores /= num_sockets; //cores per socket
+        int core = rank % (g_ncores * g_nsockets);
+        //int num_cores = g_ncores / g_nsockets; //cores per socket
 
 
         //Spread ranks evenly across sockets, grouping adjacent ranks into one
         //socket.
         int idx;
-        int rms = g_nthreads % num_sockets;
-        int rs = (g_nthreads / num_sockets) + 1;
+        int rms = g_nthreads % g_nsockets;
+        int rs = (g_nthreads / g_nsockets) + 1;
         if(core < rms * rs) {
-            idx = ((core / rs) * num_cores) + (core % rs);
+            idx = ((core / rs) * g_ncores) + (core % rs);
         } else {
             int rmd = core - (rms * rs);
             rs -= 1;
-            idx = (rmd / rs) * num_cores + (rmd % rs) + rms * num_cores;
+            idx = (rmd / rs) * g_ncores + (rmd % rs) + rms * g_ncores;
         }
 
-        //printf("Rank %d binding to index %d\n", rank, idx);
+        printf("Rank %d binding to index %d\n", rank, idx);
 
 #ifdef PIN_WITH_HWLOC
         obj = hwloc_get_obj_by_type(g_hwloc_topo, HWLOC_OBJ_CORE, idx);
@@ -587,7 +589,7 @@ void* trampoline(void* tid) {
 }
 
 
-int HMPI_Init(int *argc, char ***argv, int nthreads, int (*start_routine)(int argc, char** argv))
+int HMPI_Init(int *argc, char ***argv, int (*start_routine)(int argc, char** argv), int nthreads, int ncores, int nsockets)
 {
   pthread_t* threads;
   int provided;
@@ -626,7 +628,12 @@ int HMPI_Init(int *argc, char ***argv, int nthreads, int (*start_routine)(int ar
   g_argv = *argv; 
   g_entry = start_routine;
   g_nthreads = nthreads;
+  g_ncores = ncores;
+  g_nsockets = nsockets;
   LOCK_INIT(&g_mpi_lock, 0);
+
+  printf("threads %d cores %d sockets %d\n", g_nthreads, g_ncores, g_nsockets);
+  fflush(stdout);
 
   HMPI_COMM_WORLD = (HMPI_Comm_info*)MALLOC(HMPI_Comm_info, 1);
   HMPI_COMM_WORLD->mpicomm = MPI_COMM_WORLD;
@@ -795,7 +802,6 @@ static inline int HMPI_Progress_send(HMPI_Request send_req)
         return HMPI_REQ_COMPLETE;
     }
 
-#if 0
     //Write blocks on this send req if receiver has matched it.
     //If mesage is short, receiver won't bother clearing the match lock, and
     // instead just does the copy and marks completion.
@@ -826,7 +832,6 @@ static inline int HMPI_Progress_send(HMPI_Request send_req)
         while(get_reqstat(send_req) != HMPI_REQ_COMPLETE);
         return HMPI_REQ_COMPLETE;
     }
-#endif
 
     return HMPI_REQ_ACTIVE;
 }
@@ -853,9 +858,8 @@ static inline void HMPI_Complete_recv(HMPI_Request recv_req, HMPI_Request send_r
     }
 #endif
 
-//    if(size < BLOCK_SIZE * 2) {
+    if(size < BLOCK_SIZE * 2) {
         memcpy((void*)recv_req->buf, send_req->buf, size);
-#if 0
     } else {
         //The setting of send_req->match_req signals to sender that they can
         // start doing copying as well, if they are testing the req.
@@ -881,7 +885,7 @@ static inline void HMPI_Complete_recv(HMPI_Request recv_req, HMPI_Request send_r
         //Wait if the sender is copying.
         LOCK_SET(&send_req->match);
     }
-#endif
+
     //Mark send and receive requests done
     update_reqstat(send_req, HMPI_REQ_COMPLETE);
     update_reqstat(recv_req, HMPI_REQ_COMPLETE);
@@ -1572,7 +1576,7 @@ int HMPI_Isend(void* buf, int count, MPI_Datatype datatype, int dest, int tag, H
         req->type = HMPI_SEND;
         //req->u.local.match_req = NULL; //Not neeeded
         //req->u.local.offset = 0;
-        //LOCK_INIT(&req->match, 1);
+        LOCK_INIT(&req->match, 1);
 
         int target_mpi_thread = dest % nthreads;
         add_send_req(&g_send_reqs[target_mpi_thread], req);

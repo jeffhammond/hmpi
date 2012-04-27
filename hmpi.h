@@ -101,7 +101,8 @@ typedef HMPI_Request_info* HMPI_Request;
 
 
 
-int HMPI_Init(int *argc, char ***argv, int nthreads, int (*start_routine)(int argc, char** argv));
+int HMPI_Init(int *argc, char ***argv, int (*start_routine)(int argc, char** argv), int nthreads, int ncores, int nsockets);
+//int HMPI_Init(int *argc, char ***argv, int nthreads, int (*start_routine)(int argc, char** argv));
 
 int HMPI_Finalize();
 
