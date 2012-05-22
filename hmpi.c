@@ -21,6 +21,13 @@
 #define CACHE_LINE 64
 #endif
 
+//#define EAGER_MESSAGES 1
+
+#ifdef EAGER_MESSAGES
+#define EAGER_SIZE (CACHE_LINE * 256)
+//#define EAGER_SIZE 0
+#endif
+
 //Pin threads using either hwloc or pthreads.
 
 //Using hwloc causes threads to be spread across sockets first, while pthreads
@@ -94,10 +101,11 @@ static int SRC_TAG_ANY = MPI_ANY_TAG; //Filled in during init
 #define PREFETCH(x) __builtin_prefetch(x)
 
 
-PROFILE_DECLARE();
-PROFILE_VAR(memcpy);
-PROFILE_VAR(allreduce);
-PROFILE_VAR(op);
+//PROFILE_DECLARE();
+PROFILE_EXTERN(send);
+PROFILE_EXTERN(add_send);
+//PROFILE_VAR(allreduce);
+//PROFILE_VAR(op);
 
 
 
@@ -254,6 +262,47 @@ static inline void release_req(HMPI_Request req)
 }
 
 
+#ifdef EAGER_MESSAGES
+static HMPI_Request_list* g_eager_reqs;
+
+
+static inline HMPI_Request acquire_eager_req(void)
+{
+    HMPI_Request_list* req_list = &g_eager_reqs[g_tl_tid];
+    mcs_qnode_t q;
+
+    //Malloc a new buf only if none are in the pool.
+    MCS_LOCK_ACQUIRE(&req_list->lock, &q);
+    if(req_list->tail == NULL) {
+        MCS_LOCK_RELEASE(&req_list->lock, &q);
+        HMPI_Request req = (HMPI_Request)
+            MALLOC(uint8_t, sizeof(HMPI_Request_info) + EAGER_SIZE);
+        req->buf = (void*)((uintptr_t)req + sizeof(HMPI_Request_info));
+        return req;
+    } else {
+        HMPI_Item* item = req_list->tail;
+        req_list->tail = item->next;
+        MCS_LOCK_RELEASE(&req_list->lock, &q);
+        return (HMPI_Request)item;
+    }
+}
+
+
+static inline void release_eager_req(HMPI_Request req, int tid)
+{
+    //Return a buf to the pool -- once allocated, a buf is never freed.
+    HMPI_Request_list* req_list = &g_eager_reqs[tid];
+    HMPI_Item* item = (HMPI_Item*)req;
+    mcs_qnode_t q;
+
+    MCS_LOCK_ACQUIRE(&req_list->lock, &q);
+    item->next = req_list->tail;
+    req_list->tail = item;
+    MCS_LOCK_RELEASE(&req_list->lock, &q);
+}
+#endif //EAGER_MESSAGES
+
+
 static inline void add_send_req(HMPI_Request_list* req_list,
                                 HMPI_Request req) {
     //Insert req at tail.
@@ -372,11 +421,11 @@ static inline HMPI_Request match_recv(HMPI_Request_list* req_list, HMPI_Request 
 
     for(prev = &req_list->head, cur = prev->next;
             cur != NULL; prev = cur, cur = cur->next) {
-        PREFETCH(cur->next);
         req = (HMPI_Request)cur;
 
         //The send request can't have ANY_SOURCE or ANY_TAG, so don't check.
         if(req->proc == proc && (req->tag == tag || tag == MPI_ANY_TAG)) {
+            //PREFETCH(req->buf);
             remove_send_req(req_list, prev, cur);
 
             //recv_req->proc = req->proc; //Not necessary, no ANY_SRC
@@ -401,11 +450,11 @@ static inline HMPI_Request match_recv_any(HMPI_Request_list* req_list, HMPI_Requ
 
     for(prev = &req_list->head, cur = prev->next;
             cur != NULL; prev = cur, cur = cur->next) {
-        PREFETCH(cur->next);
         req = (HMPI_Request)cur;
 
         //The send request can't have ANY_SOURCE or ANY_TAG, so don't check.
         if(req->tag == tag || tag == MPI_ANY_TAG) {
+            //PREFETCH(req->buf);
             remove_send_req(req_list, prev, cur);
 
             recv_req->proc = req->proc;
@@ -566,11 +615,16 @@ void* trampoline(void* tid) {
     g_tl_send_reqs.head.next = NULL;
     g_tl_send_reqs.tail = &g_tl_send_reqs.head;
 
+#ifdef EAGER_MESSAGES
+    g_eager_reqs[rank].tail = NULL;
+    MCS_LOCK_INIT(&g_eager_reqs[rank].lock);
+#endif
+
 #ifdef COMM_NTHREADS
     g_msgs_tail = &g_msgs_head;
 #endif
 
-    PROFILE_INIT(g_tl_tid);
+    //PROFILE_INIT(g_tl_tid);
 
     // Don't head off to user land until all threads are ready 
     barrier(&HMPI_COMM_WORLD->barr, g_tl_tid);
@@ -649,7 +703,9 @@ int HMPI_Init(int *argc, char ***argv, int (*start_routine)(int argc, char** arg
   threads = MALLOC(pthread_t, nthreads);
 
   g_send_reqs = MALLOC(HMPI_Request_list, nthreads);
-
+#ifdef EAGER_MESSAGES
+  g_eager_reqs = MALLOC(HMPI_Request_list, nthreads);
+#endif
 
 #ifdef COMM_NTHREADS
   g_tcomms = MALLOC(MPI_Comm, nthreads);
@@ -766,9 +822,8 @@ int HMPI_Finalize() {
 
   HMPI_Barrier(HMPI_COMM_WORLD);
 
-  PROFILE_SHOW_REDUCE(allreduce);
-  PROFILE_SHOW_REDUCE(op);
-  PROFILE_SHOW_REDUCE(memcpy);
+  PROFILE_SHOW_REDUCE(send);
+  PROFILE_SHOW_REDUCE(add_send);
 
   barrier(&HMPI_COMM_WORLD->barr, g_tl_tid);
 
@@ -889,6 +944,13 @@ static inline void HMPI_Complete_recv(HMPI_Request recv_req, HMPI_Request send_r
     //Mark send and receive requests done
     update_reqstat(send_req, HMPI_REQ_COMPLETE);
     update_reqstat(recv_req, HMPI_REQ_COMPLETE);
+
+#ifdef EAGER_MESSAGES
+    if(size < EAGER_SIZE) {
+        //Release the send
+        release_eager_req(send_req, send_req->proc);
+    }
+#endif
 
 #ifdef DEBUG
     printf("[%d] completed local-level RECV buf %p size %lu source %d tag %d\n",
@@ -1530,7 +1592,7 @@ int HMPI_Isend(void* buf, int count, MPI_Datatype datatype, int dest, int tag, H
 #endif
 
     //Freed when req completion is signaled back to the user.
-    HMPI_Request req = *request = acquire_req();
+    //HMPI_Request req = *request = acquire_req();
 
 #if 0
   int size;
@@ -1550,25 +1612,42 @@ int HMPI_Isend(void* buf, int count, MPI_Datatype datatype, int dest, int tag, H
 #endif
 #endif
 
+  PROFILE_START(send);
+    HMPI_Request req;
+
+    if(unlikely(dest == MPI_PROC_NULL)) { 
+        *request = req = acquire_req();
+        req->type = HMPI_SEND;
+        update_reqstat(req, HMPI_REQ_COMPLETE);
+        return MPI_SUCCESS;
+    }
+
     int nthreads = g_nthreads;
     int hmpi_rank = g_hmpi_rank;
 
     int type_size;
     MPI_Type_size(datatype, &type_size);
+    uint64_t size = (uint64_t)count * (uint64_t)type_size;
+
+#ifdef EAGER_MESSAGES
+    if(size <= EAGER_SIZE) {
+        req = acquire_eager_req();
+        memcpy(req->buf, buf, size);
+        *request = HMPI_REQUEST_NULL;
+    } else {
+#endif
+        *request = req = acquire_req();
+        req->buf = buf;
+#ifdef EAGER_MESSAGES
+    }
+#endif
 
     update_reqstat(req, HMPI_REQ_ACTIVE);
 
     req->proc = hmpi_rank; // my local rank
     req->tag = tag;
-    req->size = count * type_size;
-    req->buf = buf;
+    req->size = size;
     req->datatype = datatype;
-
-    if(unlikely(dest == MPI_PROC_NULL)) { 
-        req->type = HMPI_SEND;
-        update_reqstat(req, HMPI_REQ_COMPLETE);
-        return MPI_SUCCESS;
-    }
 
     int target_mpi_rank = dest / nthreads;
     //if(target_mpi_rank == (hmpi_rank / nthreads)) {
@@ -1579,7 +1658,9 @@ int HMPI_Isend(void* buf, int count, MPI_Datatype datatype, int dest, int tag, H
         LOCK_INIT(&req->match, 1);
 
         int target_mpi_thread = dest % nthreads;
+  PROFILE_START(add_send);
         add_send_req(&g_send_reqs[target_mpi_thread], req);
+  PROFILE_STOP(add_send);
     } else {
         req->type = MPI_SEND;
 
@@ -1597,6 +1678,7 @@ int HMPI_Isend(void* buf, int count, MPI_Datatype datatype, int dest, int tag, H
 #endif
     }
 
+  PROFILE_STOP(send);
     return MPI_SUCCESS;
 }
 

@@ -48,8 +48,8 @@
 #define NUM_EVENTS 3
 
 static int _profile_events[NUM_EVENTS] =
-        //  { PAPI_TOT_INS};
-        { PAPI_TOT_CYC, PAPI_TOT_INS, PAPI_L3_TCM/*, PAPI_HW_INT*/ };
+          { PAPI_L2_TCA, PAPI_L2_TCM, PAPI_TOT_INS/*, PAPI_TOT_CYC*/ };
+//        { PAPI_TOT_CYC, PAPI_TOT_INS, PAPI_L3_TCM/*, PAPI_HW_INT*/ };
 //        { PAPI_TOT_CYC, PAPI_TOT_INS, PAPI_L2_TCM, PAPI_RES_STL };
 //        { PAPI_TOT_CYC, PAPI_TOT_INS, 1073741862, 1073741935 };
         //{ PAPI_TOT_CYC, PAPI_TOT_INS, PAPI_HW_INT, 1073741935 };
@@ -89,6 +89,7 @@ typedef struct profile_vars_t {
     uint64_t ctr_min[NUM_EVENTS];
     uint64_t ctr_max[NUM_EVENTS];
 #endif
+    float mhz;
 } profile_vars_t;
 
 
@@ -106,6 +107,7 @@ typedef struct profile_vars_t {
 
 static inline void PROFILE_INIT(int tid)
 {
+  int i;
 
   if(tid == 0) {
 #if _PROFILE_PAPI_EVENTS == 1
@@ -143,16 +145,16 @@ static inline void PROFILE_INIT(int tid)
         exit(-1);
     }
 
-    for(int i = 0; i < NUM_EVENTS; i++) {
+    for(i = 0; i < NUM_EVENTS; i++) {
         if(tid == 0) {
             PAPI_event_info_t info;
             if(PAPI_get_event_info(_profile_events[i], &info) != PAPI_OK) {
                 printf("ERROR PAPI_get_event_info %d\n", i);
-                continue;
+                //continue;
+            } else {
+                printf("PAPI event %16s %s\n", info.symbol, info.long_descr);
+                fflush(stdout);
             }
-
-            printf("PAPI event %16s %s\n", info.symbol, info.long_descr);
-            fflush(stdout);
         }
 
         ret = PAPI_add_event(_profile_eventset, _profile_events[i]);
@@ -183,7 +185,7 @@ static inline void PROFILE_INIT(int tid)
     }
 
     fprintf(_profile_fd, "VAR TIME");
-    for(int i = 0; i < NUM_EVENTS; i++) {
+    for(i = 0; i < NUM_EVENTS; i++) {
         PAPI_event_info_t info;
         if(PAPI_get_event_info(_profile_events[i], &info) != PAPI_OK) {
             printf("ERROR PAPI_get_event_info %d\n", i);
@@ -255,28 +257,31 @@ static inline void __PROFILE_STOP(const char* name, struct profile_vars_t* v)
     v->time += t;
     v->count++;
 
+
 #if _PROFILE_PAPI_EVENTS == 1
+    int i;
+
     //Accumulate the counter values
-    for(int i = 0; i < NUM_EVENTS; i++) {
+    for(i = 0; i < NUM_EVENTS; i++) {
         v->ctrs[i] += ctrs[i];
         if(v->ctr_max[i] < ctrs[i]) {
             v->ctr_max[i] = ctrs[i];
         }
 
         if(v->ctr_min[i] > ctrs[i] || v->ctr_min[i] == 0) {
-            if(ctrs[i] == 0) {
-                printf("setting 0 min\n"); fflush(stdout);
-            }
+            //if(ctrs[i] == 0) {
+            //    printf("setting 0 min\n"); fflush(stdout);
+            //}
             v->ctr_min[i] = ctrs[i];
         }
 
         //printf("ctr %llu val %llu max %llu\n", v->ctrs[i], ctrs[i], v->ctr_max[i]);
     }
-    fflush(stdout);
+    //fflush(stdout);
 
 #if _PROFILE_PAPI_FILE == 1
     fprintf(_profile_fd, "%s %lu", name, t);
-    for(int i = 0; i < NUM_EVENTS; i++) {
+    for(i = 0; i < NUM_EVENTS; i++) {
         fprintf(_profile_fd, " %lu", ctrs[i]);
     }
 
@@ -294,7 +299,8 @@ static void __PROFILE_SHOW(char* name, struct profile_vars_t* v)
             name, v->count, v->time, (double)v->time / v->count);
 
 #if _PROFILE_PAPI_EVENTS == 1
-    for(int i = 0; i < NUM_EVENTS; i++) {
+    int i;
+    for(i = 0; i < NUM_EVENTS; i++) {
         PAPI_event_info_t info;
         if(PAPI_get_event_info(_profile_events[i], &info) != PAPI_OK) {
             printf("ERROR PAPI_get_event_info %d\n", i);
@@ -329,6 +335,7 @@ static void __PROFILE_SHOW_REDUCE(const char* name, struct profile_vars_t* v)
 
     int rank;
     int size;
+    int i;
 
 #if _PROFILE_MPI == 1
     MPI_Comm_rank(MPI_COMM_WORLD, &rank);
@@ -358,7 +365,7 @@ static void __PROFILE_SHOW_REDUCE(const char* name, struct profile_vars_t* v)
     uint64_t min_ctr[NUM_EVENTS];
     uint64_t max_ctr[NUM_EVENTS];
 
-    for(int i = 0; i < NUM_EVENTS; i++) {
+    for(i = 0; i < NUM_EVENTS; i++) {
         //printf("%d %d ctr %lu\n", rank, i, v->ctrs[i]); fflush(stdout);
         avg_ctr[i] = (double)v->ctrs[i] / (double)v->count;
     }
@@ -398,7 +405,7 @@ static void __PROFILE_SHOW_REDUCE(const char* name, struct profile_vars_t* v)
                 ((double)r_time / r_count) / 1000.0);
 
 #if _PROFILE_PAPI_EVENTS == 1
-        for(int i = 0; i < NUM_EVENTS; i++) {
+        for(i = 0; i < NUM_EVENTS; i++) {
             PAPI_event_info_t info;
             if(PAPI_get_event_info(_profile_events[i], &info) != PAPI_OK) {
                 printf("ERROR PAPI_get_event_info %d\n", i);
