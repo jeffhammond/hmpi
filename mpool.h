@@ -39,7 +39,8 @@ typedef struct mpool_footer_t {
 typedef struct mpool_t {
     mpool_footer_t* head;
 #ifdef LOCK_FULL
-    mcs_lock_t lock;
+    //mcs_lock_t lock;
+    lock_t lock;
 #endif
 //    uint64_t num_allocs;
 //    uint64_t num_reuses;
@@ -55,7 +56,8 @@ static mpool_t* mpool_open(void)
     mp->head = NULL;
 
 #ifdef LOCK_FULL
-    MCS_LOCK_INIT(&mp->lock);
+    //MCS_LOCK_INIT(&mp->lock);
+    LOCK_INIT(&mp->lock, 0);
 #endif
 
     //mp->num_allocs = 0;
@@ -98,23 +100,27 @@ static void* mpool_alloc(mpool_t* mp, size_t length)
     mpool_footer_t* cur;
     mpool_footer_t* prev;
 
-#ifdef LOCK_FULL
-    mcs_qnode_t q;
-    MCS_LOCK_ACQUIRE(&mp->lock, &q);
+    //mcs_qnode_t q;
+    //MCS_LOCK_ACQUIRE(&mp->lock, &q);
+    LOCK_SET(&mp->lock);
+    //__lwsync();
+#if 0
     cur = mp->head;
     if(cur != NULL) {
         if(length <= cur->length) {
             mp->head = cur->next;
-            MCS_LOCK_RELEASE(&mp->lock, &q);
+            //MCS_LOCK_RELEASE(&mp->lock, &q);
+            LOCK_CLEAR(&mp->lock);
 #ifdef MPOOL_CHECK
             cur->in_pool = 0;
 #endif
             return cur->base;
         }
+        LOCK_CLEAR(&mp->lock);
+#endif            
 
-        MCS_LOCK_RELEASE(&mp->lock, &q);
-
-        for(prev = cur, cur = cur->next; cur != NULL;
+        //for(prev = cur, cur = cur->next; cur != NULL;
+        for(prev = NULL, cur = mp->head; cur != NULL;
                 prev = cur, cur = cur->next) {
             if(length <= cur->length) {
                 //Good buffer, claim it.
@@ -124,56 +130,29 @@ static void* mpool_alloc(mpool_t* mp, size_t length)
                     //Not at head of list, just remove.
                     prev->next = cur->next;
                 }
+                LOCK_CLEAR(&mp->lock);
+                //MCS_LOCK_RELEASE(&mp->lock, &q);
 
                 //printf("%p reuse addr %p length %llu\n", mp, cur->base, (uint64_t)length); fflush(stdout);
                 //mp->num_reuses++;
 #ifdef MPOOL_CHECK
                 cur->in_pool = 0;
 #endif
+                cur->next = NULL;
                 return cur->base;
             }
         }
+
+        //MCS_LOCK_RELEASE(&mp->lock, &q);
+        LOCK_CLEAR(&mp->lock);
+        //__lwsync();
+#if 0
     } else {
-        MCS_LOCK_RELEASE(&mp->lock, &q);
+        //MCS_LOCK_RELEASE(&mp->lock, &q);
+        LOCK_CLEAR(&mp->lock);
     }
-
-#endif //LOCK_FULL
-
-#ifdef LOCK_FREE
-    //Need to make this thread-safe for multiple allocating threads.
-find_free_buffer:
-    for(prev = NULL, cur = mp->head; cur != NULL; prev = cur, cur = cur->next) {
-        PREFETCH(cur->next);
-        if(length <= cur->length) {
-            //Good buffer, claim it.
-            if(prev == NULL) {
-                //Head of list -- CAS to remove
-                if(!CAS_PTR_BOOL((volatile void**)&mp->head, cur, cur->next)) {
-                    //Element is no longer the head.. find its prev,
-                    // then remove it.
-                    //TODO - why not just start over?
-                    // We could have an earlier match.  Otherise we'll do the
-                    // same traversal to this one again.
-                    //for(prev = mp->head; prev->next != cur; prev = prev->next);
-                    //prev->next = cur->next;
-                    //printf("%p start over!\n", mp);
-                    goto find_free_buffer;
-                }
-            } else {
-                //Not at head of list, just remove.
-                prev->next = cur->next;
-            }
-
-            //printf("%p reuse addr %p length %llu\n", mp, cur->base, (uint64_t)length); fflush(stdout);
-            //mp->num_reuses++;
-            //cur->next = NULL;
-#ifdef MPOOL_CHECK
-            cur->in_pool = 0;
 #endif
-            return cur->base;
-        }
-    }
-#endif //LOCK_FREE
+
 
     //If no existing allocation is found, allocate a new one.
     mpool_footer_t* ft = (mpool_footer_t*)memalign(ALIGNMENT, length + ALIGNMENT);
@@ -187,6 +166,8 @@ find_free_buffer:
 #endif
     //mp->num_allocs++;
     //printf("%p alloc addr %p length %llu\n", mp, ft->base, (uint64_t)length); fflush(stdout);
+    ft->next = NULL;
+    //__lwsync();
     return ft->base;
 }
 
@@ -209,23 +190,15 @@ static void mpool_free(mpool_t* mp, void* ptr)
     ft->in_pool = 1;
 #endif
 
-#ifdef LOCK_FULL
-    mcs_qnode_t q;
-    MCS_LOCK_ACQUIRE(&mp->lock, &q);
-    ft->next = mp->head;
-    mp->head = ft;
-    MCS_LOCK_RELEASE(&mp->lock, &q);
-#endif
 
-#ifdef LOCK_FREE
-    //Atomically insert at head of list.
-    mpool_footer_t* next;
-    do {
-        //Would be nice to move the ft->next asmt out, but necessary for safety
-        //with removal.
-        next = ft->next = mp->head;
-    } while(!CAS_PTR_BOOL((volatile void**)&mp->head, next, ft));
-#endif
+    //mcs_qnode_t q;
+    //MCS_LOCK_ACQUIRE(&mp->lock, &q);
+    LOCK_SET(&mp->lock);
+    ft->next = mp->head;
+    //__lwsync();
+    mp->head = ft;
+    //MCS_LOCK_RELEASE(&mp->lock, &q);
+    LOCK_CLEAR(&mp->lock);
 }
 
 

@@ -39,7 +39,7 @@ static inline void barrier(barrier_t *barrier, int tid) {
 
   //if(__sync_fetch_and_sub(&barrier->count, (int)1) == 1) {
   //int64_t val = __sync_fetch_and_sub(&barrier->count, (int64_t)1);
-  int32_t val = FETCH_ADD((int*)&barrier->count, (int32_t)-1);
+  int32_t val = FETCH_ADD32((int*)&barrier->count, (int32_t)-1);
 
   if(val == 1) {
       barrier->count = barrier->threads;
@@ -60,7 +60,7 @@ static inline void barrier_cb(barrier_t *barrier, int tid, void (*cbfn)(void)) {
 
   //if(__sync_fetch_and_sub(&barrier->count, (int)1) == 1) {
   //int32_t val = __sync_fetch_and_sub(&barrier->count, (int32_t)1);
-  int32_t val = FETCH_ADD((int*)&barrier->count, (int32_t)-1);
+  int32_t val = FETCH_ADD32((int*)&barrier->count, (int32_t)-1);
 
   if(val == 1) {
       barrier->count = barrier->threads;

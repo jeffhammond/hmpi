@@ -71,7 +71,7 @@ typedef struct HMPI_Item {
 typedef struct HMPI_Request_info {
     HMPI_Item item; //Linked list subtype
 
-    volatile uint32_t stat;    //Request state
+    volatile uint8_t stat;    //Request state
     uint32_t type;       //Request type
     int proc;       //Always the source's rank regardless of type.
     int tag;        //MPI tag
