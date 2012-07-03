@@ -10,9 +10,23 @@
 extern "C" {
 #endif
 
+//Define so users of HMPI can check for HMPI vs MPI
+#define _USING_HMPI_ 1
 
-extern int g_nthreads;
-extern int g_rank;
+
+extern int g_nthreads;              //Threads per node
+extern int g_rank;                  //Underlying MPI rank for this node
+extern int g_size;                  //Underlying MPI world size
+extern __thread int g_hmpi_rank;    //HMPI rank for this thread
+
+
+//TODO - pad to cache line to avoid false sharing?
+typedef struct hmpi_coll_t {
+    struct hmpi_coll_t* next;
+    void* buf;
+    int locked;
+    char pad[44];
+} hmpi_coll_t;
 
 
 //Placeholder typedef - groups aren't implemented yet
@@ -28,6 +42,7 @@ typedef struct {
   volatile MPI_Datatype* rtype;
   volatile void* mpi_sbuf; //Used by alltoall
   volatile void* mpi_rbuf; //Used by alltoall, gatherv
+  hmpi_coll_t* coll;        //Used by allreduce
 
   barrier_t barr;       //Barrier for local ranks in this comm
   MPI_Comm mpicomm;     //Underyling MPI comm
@@ -37,6 +52,7 @@ typedef struct {
 typedef HMPI_Comm_info* HMPI_Comm;
 
 extern HMPI_Comm HMPI_COMM_WORLD;
+
 
 #define HMPI_STATUS_IGNORE NULL
 #define HMPI_STATUSES_IGNORE NULL
@@ -72,14 +88,14 @@ typedef struct HMPI_Request_info {
     HMPI_Item item; //Linked list subtype
 
     volatile uint8_t stat;    //Request state
-    uint32_t type;       //Request type
+    uint8_t type;       //Request type
     int proc;       //Always the source's rank regardless of type.
     int tag;        //MPI tag
     size_t size;    //Message size in bytes
     void* buf;      //User buffer
 
     MPI_Datatype datatype;  //MPI datatype
-    lock_t match;       //Synchornization for sender/recver copying
+    lock_t match;       //Synchronization for sender/recver copying
 
     union {
         struct {
@@ -87,11 +103,11 @@ typedef struct HMPI_Request_info {
             struct HMPI_Request_info* match_req;
             //Copy offset for shared sender/recver copying
             volatile ssize_t offset;
-        } local __attribute__ ((packed));
+        } local /*__attribute__ ((packed))*/;
         struct {
             //Used only for off-node messages via underlying MPI
             MPI_Request req;
-        } remote __attribute__ ((packed));
+        } remote /*__attribute__ ((packed))*/;
     } u;
 } HMPI_Request_info;
 
@@ -108,12 +124,42 @@ int HMPI_Finalize();
 
 int HMPI_Abort( HMPI_Comm comm, int errorcode );
 
-int HMPI_Comm_rank ( HMPI_Comm comm, int *rank );
-int HMPI_Comm_size ( HMPI_Comm comm, int *size );
+
+static int HMPI_Comm_rank ( HMPI_Comm comm, int *rank ) __attribute__((unused));
+
+static int HMPI_Comm_rank(HMPI_Comm comm, int *rank) {
+  
+#ifdef HMPI_SAFE 
+  if(comm->mpicomm != MPI_COMM_WORLD) {
+    printf("only MPI_COMM_WORLD is supported so far\n");
+    MPI_Abort(comm->mpicomm, 0);
+  }
+#endif
+
+  *rank = g_hmpi_rank;
+  return 0;
+}
+
+
+static int HMPI_Comm_size ( HMPI_Comm comm, int *size ) __attribute__((unused));
+
+static int HMPI_Comm_size ( HMPI_Comm comm, int *size ) {
+#ifdef HMPI_SAFE 
+  if(comm->mpicomm != MPI_COMM_WORLD) {
+    printf("only MPI_COMM_WORLD is supported so far\n");
+    MPI_Abort(comm->mpicomm, 0);
+  }
+#endif
+    
+  *size = g_size*g_nthreads;
+  return 0;
+}
+
 
 
 //AWF new function -- return true (nonzero) if rank is another thread in the
 // same process.
+//TODO - replace with use of MPI3 shared-mem communicator?
 static inline int HMPI_Comm_local(HMPI_Comm comm, int rank)
 {
 #ifdef HMPI_SAFE
@@ -158,6 +204,8 @@ int HMPI_Waitany(int count, HMPI_Request* requests, int* index, HMPI_Status *sta
 
 int HMPI_Get_count(HMPI_Status* status, MPI_Datatype datatype, int* count);
 
+int HMPI_Type_size(MPI_Datatype datatype, int* size);
+
 //
 // Collectives
 //
@@ -194,11 +242,15 @@ int HMPI_Alltoall_local(void* sendbuf, int sendcount, MPI_Datatype sendtype, voi
 //TODO NOT IMPLEMENTED YET
 // Added to catch apps that call these routines.
 
+static int HMPI_Comm_create(HMPI_Comm comm, MPI_Group group, HMPI_Comm* newcomm) __attribute__((unused));
+
 static int HMPI_Comm_create(HMPI_Comm comm, MPI_Group group, HMPI_Comm* newcomm)
 {
     assert(0);
     return MPI_SUCCESS;
 }
+
+static int HMPI_Comm_group(HMPI_Comm comm, HMPI_Group* group) __attribute__((unused));
 
 static int HMPI_Comm_group(HMPI_Comm comm, HMPI_Group* group)
 {

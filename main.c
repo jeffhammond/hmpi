@@ -74,17 +74,18 @@ int tmain(int argc, char** argv){
 #endif
 
   //int x=1, y=0;
-  //for(int k = 0; k < 10000; k++)
+  for(int k = 0; k < 1000; k++)
   {
       double x[4] = {1.1, 2.2, 3.3, 4.4};
       double y[4] = {0.0, 0.0, 0.0, 0.0};
+
       //printf("[%i] pre reduce buf: %f %f %f %f\n", r, y[0], y[1], y[2], y[3]);
       HMPI_Allreduce(x, y, 4, MPI_DOUBLE, MPI_SUM, HMPI_COMM_WORLD);
       //printf("[%i] reduce buf: %f %f %f %f\n", r, y[0], y[1], y[2], y[3]);
 
       for(int i = 0; i < 4; i++) {
           if(fabs(y[i] - (x[i] * (double)p)) > 0.00001) {
-              printf("BAD VALUE y[i] %g x[i] %g expect %g\n", y[i], x[i], x[i] * (double)p);
+              printf("BAD VALUE k %d y[i] %g x[i] %g expect %g\n", k, y[i], x[i], x[i] * (double)p);
           }
       }
   }
@@ -179,11 +180,11 @@ int main(int argc, char** argv) {
 
 
     if(argc < 2) {
-        printf("ERROR must specify number of threads: ./main <numthreads>\n");
+        printf("ERROR must specify number of threads: ./main <numthreads> <numcores> <numsockets>\n");
         return -1;
     }
 
     //TODO - may not be portable to other MPIs?
-    HMPI_Init(&argc, &argv, atoi(argv[1]), &tmain);
+    HMPI_Init(&argc, &argv, &tmain, atoi(argv[1]), atoi(argv[2]), atoi(argv[3]));
 }
 

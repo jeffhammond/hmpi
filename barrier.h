@@ -18,6 +18,8 @@ typedef struct {
 } barrier_t;
 
 
+static int barrier_init(barrier_t *barrier, int threads) __attribute__((unused));
+
 static int barrier_init(barrier_t *barrier, int threads) {
   barrier->local_sense = (int32_t*)calloc(sizeof(int32_t) /** CACHE_LINE*/, threads);
   barrier->global_sense = 0;
@@ -27,6 +29,8 @@ static int barrier_init(barrier_t *barrier, int threads) {
 }
 
 
+static int barrier_destroy(barrier_t *barrier) __attribute__((unused));
+
 static int barrier_destroy(barrier_t *barrier) {
   free(barrier->local_sense);
   return 0;
@@ -34,6 +38,8 @@ static int barrier_destroy(barrier_t *barrier) {
 
 
 //Standard barrier
+static inline void barrier(barrier_t *barrier, int tid) __attribute__((unused));
+
 static inline void barrier(barrier_t *barrier, int tid) {
   int32_t local_sense = barrier->local_sense[tid] = ~barrier->local_sense[tid];
 
@@ -55,6 +61,8 @@ static inline void barrier(barrier_t *barrier, int tid) {
 
 
 //Barrier with a callback -- usually used to poll MPI to prevent deadlock
+static inline void barrier_cb(barrier_t *barrier, int tid, void (*cbfn)(void)) __attribute__((unused));
+
 static inline void barrier_cb(barrier_t *barrier, int tid, void (*cbfn)(void)) {
   int32_t local_sense = barrier->local_sense[tid] = ~barrier->local_sense[tid];
 

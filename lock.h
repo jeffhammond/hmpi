@@ -10,7 +10,11 @@
 
 //TODO - make sure this is always aligned
 typedef struct lock_t {
+#ifdef __bg__
     volatile long long int lock;
+#else
+    volatile int lock;
+#endif
 //    char padding[CACHE_LINE - sizeof(int)];
 } lock_t;
 

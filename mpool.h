@@ -4,6 +4,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
+#include <malloc.h>
 #include "lock.h"
 
 //A normal lock is used, any number of threads can alloc and free safely.
@@ -39,8 +40,8 @@ typedef struct mpool_footer_t {
 typedef struct mpool_t {
     mpool_footer_t* head;
 #ifdef LOCK_FULL
-    //mcs_lock_t lock;
-    lock_t lock;
+    mcs_lock_t lock;
+    //lock_t lock;
 #endif
 //    uint64_t num_allocs;
 //    uint64_t num_reuses;
@@ -56,8 +57,8 @@ static mpool_t* mpool_open(void)
     mp->head = NULL;
 
 #ifdef LOCK_FULL
-    //MCS_LOCK_INIT(&mp->lock);
-    LOCK_INIT(&mp->lock, 0);
+    MCS_LOCK_INIT(&mp->lock);
+    //LOCK_INIT(&mp->lock, 0);
 #endif
 
     //mp->num_allocs = 0;
@@ -100,9 +101,9 @@ static void* mpool_alloc(mpool_t* mp, size_t length)
     mpool_footer_t* cur;
     mpool_footer_t* prev;
 
-    //mcs_qnode_t q;
-    //MCS_LOCK_ACQUIRE(&mp->lock, &q);
-    LOCK_SET(&mp->lock);
+    mcs_qnode_t q;
+    MCS_LOCK_ACQUIRE(&mp->lock, &q);
+    //LOCK_SET(&mp->lock);
     //__lwsync();
 #if 0
     cur = mp->head;
@@ -130,8 +131,8 @@ static void* mpool_alloc(mpool_t* mp, size_t length)
                     //Not at head of list, just remove.
                     prev->next = cur->next;
                 }
-                LOCK_CLEAR(&mp->lock);
-                //MCS_LOCK_RELEASE(&mp->lock, &q);
+                //LOCK_CLEAR(&mp->lock);
+                MCS_LOCK_RELEASE(&mp->lock, &q);
 
                 //printf("%p reuse addr %p length %llu\n", mp, cur->base, (uint64_t)length); fflush(stdout);
                 //mp->num_reuses++;
@@ -143,8 +144,8 @@ static void* mpool_alloc(mpool_t* mp, size_t length)
             }
         }
 
-        //MCS_LOCK_RELEASE(&mp->lock, &q);
-        LOCK_CLEAR(&mp->lock);
+        MCS_LOCK_RELEASE(&mp->lock, &q);
+        //LOCK_CLEAR(&mp->lock);
         //__lwsync();
 #if 0
     } else {
@@ -191,14 +192,14 @@ static void mpool_free(mpool_t* mp, void* ptr)
 #endif
 
 
-    //mcs_qnode_t q;
-    //MCS_LOCK_ACQUIRE(&mp->lock, &q);
-    LOCK_SET(&mp->lock);
+    mcs_qnode_t q;
+    MCS_LOCK_ACQUIRE(&mp->lock, &q);
+    //LOCK_SET(&mp->lock);
     ft->next = mp->head;
     //__lwsync();
     mp->head = ft;
-    //MCS_LOCK_RELEASE(&mp->lock, &q);
-    LOCK_CLEAR(&mp->lock);
+    MCS_LOCK_RELEASE(&mp->lock, &q);
+    //LOCK_CLEAR(&mp->lock);
 }
 
 
