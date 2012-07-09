@@ -36,6 +36,13 @@
 #endif
 
 
+#define USE_MCS 1
+
+#if defined(__bg__) 
+#warning "using regular lock!"
+#undef USE_MCS
+#endif
+
 //Bluegene already does the smart thing in SMP mode, no pinning needed.
 #ifdef __bg__
 #undef PIN_WITH_PTHREAD //TODO - should figure out how to use this on BG
@@ -90,10 +97,9 @@ PROFILE_DECLARE();
 PROFILE_VAR(send);
 PROFILE_VAR(add_send);
 PROFILE_VAR(recv);
-PROFILE_VAR(add_lock);
-PROFILE_VAR(add_set);
-PROFILE_VAR(add_unlock);
 PROFILE_VAR(copy);
+PROFILE_VAR(complete_recv);
+PROFILE_VAR(wait_recv);
 #if 0
 PROFILE_VAR(allred_barr);
 PROFILE_VAR(allred_copy);
@@ -217,7 +223,7 @@ typedef struct HMPI_Request_list {
     HMPI_Item head;
     HMPI_Item* tail;
 
-#ifdef __bg__
+#ifndef USE_MCS 
     lock_t lock;
 #else
     mcs_lock_t lock;
@@ -268,32 +274,21 @@ static inline void add_send_req(HMPI_Request_list* req_list,
 
     //item->next = NULL; //TODO - could skip this
 
-    //PROFILE_START(add_lock);
-#ifdef __bg__
+#ifndef USE_MCS
     LOCK_SET(&req_list->lock);
 #else
     mcs_qnode_t q;
     MCS_LOCK_ACQUIRE(&req_list->lock, &q);
 #endif
-    //PROFILE_STOP(add_lock);
 
-    //TODO - what happens in that these two assignments can be reordered.  When
-    //the receiver does update_send_reqs, it will see that tail is not head,
-    //but still head->next doesnt point to a useful item.  a req is lost, and
-    //things hang.
-
-    //PROFILE_START(add_set);
     req_list->tail->next = item;
     req_list->tail = item;
-    //PROFILE_STOP(add_set);
 
-    //PROFILE_START(add_unlock);
-#ifdef __bg__
+#ifndef USE_MCS
     LOCK_CLEAR(&req_list->lock);
 #else
     MCS_LOCK_RELEASE(&req_list->lock, &q);
 #endif
-    //PROFILE_STOP(add_unlock);
 }
 
 
@@ -321,7 +316,7 @@ static inline void update_send_reqs(HMPI_Request_list* local_list)
         //Senders only add at the tail, so head.next won't
         //change out from under us.
 
-#ifdef __bg__
+#ifndef USE_MCS
         LOCK_SET(&req_list->lock);
 #else
         mcs_qnode_t q;
@@ -334,7 +329,7 @@ static inline void update_send_reqs(HMPI_Request_list* local_list)
         local_list->tail = req_list->tail;
         req_list->tail = &req_list->head;
 
-#ifdef __bg__
+#ifndef USE_MCS
         LOCK_CLEAR(&req_list->lock);
 #else
         MCS_LOCK_RELEASE(&req_list->lock, &q);
@@ -573,10 +568,10 @@ void* trampoline(void* tid) {
     g_send_reqs[rank].head.next = NULL;
     g_send_reqs[rank].tail = &g_send_reqs[rank].head;
     g_tl_my_send_reqs = &g_send_reqs[rank];
-#ifdef __bg__
+#ifndef USE_MCS
     LOCK_INIT(&g_send_reqs[rank].lock, 0);
 #else
-    //MCS_LOCK_INIT(&g_send_reqs[rank].lock);
+    MCS_LOCK_INIT(&g_send_reqs[rank].lock);
 #endif
     g_tl_send_reqs.head.next = NULL;
     g_tl_send_reqs.tail = &g_tl_send_reqs.head;
@@ -753,10 +748,9 @@ int HMPI_Finalize() {
   PROFILE_SHOW_REDUCE(send);
   PROFILE_SHOW_REDUCE(add_send);
   PROFILE_SHOW_REDUCE(recv);
-  PROFILE_SHOW_REDUCE(add_lock);
-  PROFILE_SHOW_REDUCE(add_set);
-  PROFILE_SHOW_REDUCE(add_unlock);
-  PROFILE_SHOW_REDUCE(copy);
+  //PROFILE_SHOW_REDUCE(copy);
+  PROFILE_SHOW_REDUCE(complete_recv);
+  PROFILE_SHOW_REDUCE(wait_recv);
   //PROFILE_SHOW_REDUCE(allred_barr);
   //PROFILE_SHOW_REDUCE(allred_copy);
   //PROFILE_SHOW_REDUCE(allred_red);
@@ -851,9 +845,7 @@ static inline void HMPI_Complete_recv(HMPI_Request recv_req, HMPI_Request send_r
 #endif
 
     if(size < BLOCK_SIZE * 2) {
-        PROFILE_START(copy);
         memcpy((void*)recv_req->buf, send_req->buf, size);
-        PROFILE_STOP(copy);
     } else {
         //The setting of send_req->match_req signals to sender that they can
         // start doing copying as well, if they are testing the req.
@@ -984,13 +976,14 @@ static inline int HMPI_Progress_mpi(HMPI_Request req)
 
 
 //Progress local receive requests.
-static inline void HMPI_Progress() {
+static inline void HMPI_Progress(HMPI_Request_list* send_req_list) {
     HMPI_Item* cur;
     HMPI_Item* prev;
     HMPI_Request req;
-    HMPI_Request_list* req_list = &g_tl_send_reqs;
+    //HMPI_Request_list* req_list = &g_tl_send_reqs;
 
-    update_send_reqs(req_list);
+    update_send_reqs(send_req_list);
+    prev = &g_recv_reqs_head;
 
     //Progress receive requests.
     //We remove items from the list, but they are still valid; nothing in this
@@ -999,13 +992,13 @@ static inline void HMPI_Progress() {
     //where cur is matched successfully and only update it otherwise.
     // This prevents the recv_reqs list from getting corrupted due to a bad
     // prev pointer.
-    for(prev = &g_recv_reqs_head, cur = prev->next;
+    for(/*prev = &g_recv_reqs_head,*/ cur = prev->next;
             cur != NULL; cur = cur->next) {
         PREFETCH(cur->next);
         req = (HMPI_Request)cur;
 
         if(likely(req->type == HMPI_RECV)) {
-            HMPI_Request send_req = match_recv(req_list, req);
+            HMPI_Request send_req = match_recv(send_req_list, req);
             if(send_req != HMPI_REQUEST_NULL) {
                 HMPI_Complete_recv(req, send_req);
 
@@ -1039,7 +1032,7 @@ static inline void HMPI_Progress() {
             }
 #endif //COMM_NTHREADS
 
-            HMPI_Request send_req = match_recv_any(req_list, req);
+            HMPI_Request send_req = match_recv_any(send_req_list, req);
             if(send_req != HMPI_REQUEST_NULL) {
                 HMPI_Complete_recv(req, send_req);
 
@@ -1189,7 +1182,7 @@ int HMPI_Test(HMPI_Request *request, int *flag, HMPI_Status *status)
     } else if(get_reqstat(req) != HMPI_REQ_COMPLETE) {
         int f;
 
-        HMPI_Progress();
+        HMPI_Progress(&g_tl_send_reqs);
 
         if(req->type == HMPI_SEND) {
             f = HMPI_Progress_send(req);
@@ -1262,21 +1255,23 @@ int HMPI_Wait(HMPI_Request *request, HMPI_Status *status) {
         return MPI_SUCCESS;
     }
 
+    HMPI_Request_list* req_list = &g_tl_send_reqs;
+
     if(req->type == HMPI_SEND) {
         do {
-            HMPI_Progress();
+            HMPI_Progress(req_list);
         } while(HMPI_Progress_send(req) != HMPI_REQ_COMPLETE);
     } else if(req->type == HMPI_RECV) {
         do {
-            HMPI_Progress();
+            HMPI_Progress(req_list);
         } while(get_reqstat(req) != HMPI_REQ_COMPLETE);
     } else if(req->type == MPI_RECV || req->type == MPI_SEND) {
         do {
-            HMPI_Progress();
+            HMPI_Progress(req_list);
         } while(HMPI_Progress_mpi(req) != HMPI_REQ_COMPLETE);
     } else { //HMPI_RECV_ANY_SOURCE
         do {
-            HMPI_Progress();
+            HMPI_Progress(req_list);
             //sched_yield();
         } while(get_reqstat(req) != HMPI_REQ_COMPLETE);
     }
@@ -1297,6 +1292,7 @@ int HMPI_Wait(HMPI_Request *request, HMPI_Status *status) {
 
 int HMPI_Waitall(int count, HMPI_Request *requests, HMPI_Status *statuses)
 {
+    HMPI_Request_list* req_list = &g_tl_send_reqs;
     int done;
 
 #ifdef DEBUG
@@ -1305,7 +1301,7 @@ int HMPI_Waitall(int count, HMPI_Request *requests, HMPI_Status *statuses)
 #endif
 
     do {
-        HMPI_Progress();
+        HMPI_Progress(req_list);
         done = 0;
 
         for(int i = 0; i < count; i++) {
@@ -1353,9 +1349,8 @@ int HMPI_Waitall(int count, HMPI_Request *requests, HMPI_Status *statuses)
 
 int HMPI_Waitany(int count, HMPI_Request* requests, int* index, HMPI_Status *status)
 {
-    //HMPI_Request* reqs = alloca(sizeof(HMPI_Request) * count);
+    HMPI_Request_list* req_list = &g_tl_send_reqs;
     int done;
-    //int iters = 0;
 
     //Call Progress once, then check each req.
     do {
@@ -1363,29 +1358,22 @@ int HMPI_Waitany(int count, HMPI_Request* requests, int* index, HMPI_Status *sta
 
         //What if I have progress return whether a completion was made?
         //Then I can skip the poll loop unless something finishes.
-        //PROFILE_START(wa_prog);
-        HMPI_Progress();
-        //PROFILE_STOP(wa_prog);
+        HMPI_Progress(req_list);
 
         //TODO - is there a way to speed this up?
         // Maybe keep my own list of non-null entries that i can reorder to
         // skip null requests..
-        //PROFILE_START(wa_poll);
         for(int i = 0; i < count; i++) {
             HMPI_Request req = requests[i];
-            //PROFILE_START(wa_check);
             if(req == HMPI_REQUEST_NULL) {
-                //PROFILE_STOP(wa_check);
                 continue;
             }
-            //PROFILE_STOP(wa_check);
 
             //Not done! at least one req was not NULL.
             done = 0;
 
             //Check completion of the req.
             if(get_reqstat(req) != HMPI_REQ_COMPLETE) {
-#if 0
                 if(req->type == HMPI_SEND) {
                     if(HMPI_Progress_send(req) != HMPI_REQ_COMPLETE) {
                         continue;
@@ -1399,8 +1387,6 @@ int HMPI_Waitany(int count, HMPI_Request* requests, int* index, HMPI_Status *sta
                 } else {
                     continue;
                 }
-#endif
-                continue;
             }
 
             //req is complete, handle status.
@@ -1414,11 +1400,8 @@ int HMPI_Waitany(int count, HMPI_Request* requests, int* index, HMPI_Status *sta
             release_req(req);
             requests[i] = HMPI_REQUEST_NULL;
             *index = i;
-        //PROFILE_STOP(wa_poll);
             return MPI_SUCCESS;
         }
-        //PROFILE_STOP(wa_poll);
-        //iters++;
     } while(done == 0);
 
     //All requests were NULL.
@@ -1479,7 +1462,7 @@ int HMPI_Iprobe(int source, int tag, HMPI_Comm comm, int* flag, HMPI_Status* sta
     HMPI_Request send_req = NULL;
 
     //Progress here prevents deadlocks.
-    HMPI_Progress();
+    HMPI_Progress(&g_tl_send_reqs);
 
     //Probe HMPI (on-node) layer
     *flag = match_probe(source, tag, comm, &send_req);
@@ -1575,15 +1558,15 @@ int HMPI_Isend(void* buf, int count, MPI_Datatype datatype, int dest, int tag, H
     req->datatype = datatype;
 
     int target_mpi_rank = dest / nthreads;
-    //if(target_mpi_rank == (hmpi_rank / nthreads)) {
-    if(target_mpi_rank == g_rank) {
+    if(target_mpi_rank == (hmpi_rank / nthreads)) {
+    //if(target_mpi_rank == g_rank) {
         req->type = HMPI_SEND;
         LOCK_INIT(&req->match, 1);
 
         int target_mpi_thread = dest % nthreads;
-        PROFILE_START(add_send);
+        //PROFILE_START(add_send);
         add_send_req(&g_send_reqs[target_mpi_thread], req);
-        PROFILE_STOP(add_send);
+        //PROFILE_STOP(add_send);
     } else {
         req->type = MPI_SEND;
 
@@ -1704,7 +1687,9 @@ int HMPI_Irecv(void* buf, int count, MPI_Datatype datatype, int source, int tag,
 int HMPI_Recv(void* buf, int count, MPI_Datatype datatype, int source, int tag, HMPI_Comm comm, HMPI_Status *status) {
   HMPI_Request req;
   HMPI_Irecv(buf, count, datatype, source, tag, comm, &req);
+  PROFILE_START(wait_recv);
   HMPI_Wait(&req, status);
+  PROFILE_STOP(wait_recv);
   return MPI_SUCCESS;
 }
 
