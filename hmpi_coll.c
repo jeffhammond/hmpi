@@ -156,7 +156,7 @@ int HMPI_Allreduce(void *sendbuf, void *recvbuf, int count, MPI_Datatype datatyp
     coll.next = NULL;
 
     //PROFILE_START(allred_barr);
-    hmpi_coll_t* pred = (hmpi_coll_t*)fetch_and_store((void**)&comm->coll, &coll);
+    hmpi_coll_t* pred = (hmpi_coll_t*)FETCH_STORE((void**)&comm->coll, &coll);
     //PROFILE_STOP(allred_barr);
 
     //Was there a predecessor?  If not, we're the root.

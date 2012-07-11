@@ -323,7 +323,7 @@ static inline void MCS_LOCK_INIT(mcs_lock_t* __restrict l) {
 }
     
 
-static inline void* fetch_and_store(void** ptr, void* val)
+static inline void* FETCH_STORE(void** ptr, void* val)
 {
     void* out;
     asm volatile ("lock xchg %0, (%1)" : "=r" (out) : "r" (ptr), "0" (val));
@@ -337,7 +337,7 @@ static inline void MCS_LOCK_ACQUIRE(mcs_lock_t* __restrict l, mcs_qnode_t* q) {
     mcs_qnode_t* pred;
 
     //Replace node at head of lock with our own, saving the previous node.
-    pred = (mcs_qnode_t*)fetch_and_store((void**)l, q);
+    pred = (mcs_qnode_t*)FETCH_STORE((void**)l, q);
 
     //Was there actually a previous node?  If not, we got the lock.
     if(pred != NULL) {

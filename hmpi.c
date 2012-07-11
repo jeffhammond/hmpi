@@ -306,37 +306,39 @@ static inline void remove_send_req(HMPI_Request_list* req_list,
 }
 
 
-static inline void update_send_reqs(HMPI_Request_list* local_list)
+static inline void update_send_reqs(HMPI_Request_list* local_list, HMPI_Request_list* shared_list)
 {
-    HMPI_Request_list* req_list = g_tl_my_send_reqs;
+    HMPI_Item* tail;
 
-    if(req_list->tail != &req_list->head) {
+    if(shared_list->tail != &shared_list->head) {
         //g_tl_send_reqs.tail->next = req_list->head.next;
         //This is safe, the branch ensures at least one node.
         //Senders only add at the tail, so head.next won't
         //change out from under us.
 
+        local_list->tail->next = shared_list->head.next;
+
 #ifndef USE_MCS
-        LOCK_SET(&req_list->lock);
+        LOCK_SET(&shared_list->lock);
 #else
         mcs_qnode_t q;
-        MCS_LOCK_ACQUIRE(&req_list->lock, &q);
+        MCS_LOCK_ACQUIRE(&shared_list->lock, &q);
 #endif
 
-        local_list->tail->next = req_list->head.next;
-
+        //TODO - this is fetch and store!
         //g_tl_send_reqs.tail = req_list->tail;
-        local_list->tail = req_list->tail;
-        req_list->tail = &req_list->head;
+        //local_list->tail = req_list->tail;
+        tail = shared_list->tail;
+        shared_list->tail = &shared_list->head;
 
 #ifndef USE_MCS
-        LOCK_CLEAR(&req_list->lock);
+        LOCK_CLEAR(&shared_list->lock);
 #else
-        MCS_LOCK_RELEASE(&req_list->lock, &q);
+        MCS_LOCK_RELEASE(&shared_list->lock, &q);
 #endif
 
-        //g_tl_send_reqs.tail->next = NULL;
-        local_list->tail->next = NULL;
+        local_list->tail = tail;
+        tail->next = NULL;
     }
 }
 
@@ -460,7 +462,7 @@ static inline int match_probe(int source, int tag, HMPI_Comm comm, HMPI_Request*
     HMPI_Request req;
     HMPI_Request_list* req_list = &g_tl_send_reqs;
 
-    update_send_reqs(req_list);
+    update_send_reqs(req_list, g_tl_my_send_reqs);
 
     for(cur = req_list->head.next; cur != NULL; cur = cur->next) {
         PREFETCH(cur->next);
@@ -976,14 +978,13 @@ static inline int HMPI_Progress_mpi(HMPI_Request req)
 
 
 //Progress local receive requests.
-static inline void HMPI_Progress(HMPI_Request_list* send_req_list) {
+static inline void HMPI_Progress(HMPI_Request_list* local_list, HMPI_Request_list* shared_list) {
     HMPI_Item* cur;
     HMPI_Item* prev;
     HMPI_Request req;
     //HMPI_Request_list* req_list = &g_tl_send_reqs;
 
-    update_send_reqs(send_req_list);
-    prev = &g_recv_reqs_head;
+    update_send_reqs(local_list, shared_list);
 
     //Progress receive requests.
     //We remove items from the list, but they are still valid; nothing in this
@@ -992,13 +993,13 @@ static inline void HMPI_Progress(HMPI_Request_list* send_req_list) {
     //where cur is matched successfully and only update it otherwise.
     // This prevents the recv_reqs list from getting corrupted due to a bad
     // prev pointer.
-    for(/*prev = &g_recv_reqs_head,*/ cur = prev->next;
+    for(prev = &g_recv_reqs_head, cur = prev->next;
             cur != NULL; cur = cur->next) {
         PREFETCH(cur->next);
         req = (HMPI_Request)cur;
 
         if(likely(req->type == HMPI_RECV)) {
-            HMPI_Request send_req = match_recv(send_req_list, req);
+            HMPI_Request send_req = match_recv(local_list, req);
             if(send_req != HMPI_REQUEST_NULL) {
                 HMPI_Complete_recv(req, send_req);
 
@@ -1032,7 +1033,7 @@ static inline void HMPI_Progress(HMPI_Request_list* send_req_list) {
             }
 #endif //COMM_NTHREADS
 
-            HMPI_Request send_req = match_recv_any(send_req_list, req);
+            HMPI_Request send_req = match_recv_any(local_list, req);
             if(send_req != HMPI_REQUEST_NULL) {
                 HMPI_Complete_recv(req, send_req);
 
@@ -1182,7 +1183,7 @@ int HMPI_Test(HMPI_Request *request, int *flag, HMPI_Status *status)
     } else if(get_reqstat(req) != HMPI_REQ_COMPLETE) {
         int f;
 
-        HMPI_Progress(&g_tl_send_reqs);
+        HMPI_Progress(&g_tl_send_reqs, g_tl_my_send_reqs);
 
         if(req->type == HMPI_SEND) {
             f = HMPI_Progress_send(req);
@@ -1255,23 +1256,24 @@ int HMPI_Wait(HMPI_Request *request, HMPI_Status *status) {
         return MPI_SUCCESS;
     }
 
-    HMPI_Request_list* req_list = &g_tl_send_reqs;
+    HMPI_Request_list* local_list = &g_tl_send_reqs;
+    HMPI_Request_list* shared_list = g_tl_my_send_reqs;
 
     if(req->type == HMPI_SEND) {
         do {
-            HMPI_Progress(req_list);
+            HMPI_Progress(local_list, shared_list);
         } while(HMPI_Progress_send(req) != HMPI_REQ_COMPLETE);
     } else if(req->type == HMPI_RECV) {
         do {
-            HMPI_Progress(req_list);
+            HMPI_Progress(local_list, shared_list);
         } while(get_reqstat(req) != HMPI_REQ_COMPLETE);
     } else if(req->type == MPI_RECV || req->type == MPI_SEND) {
         do {
-            HMPI_Progress(req_list);
+            HMPI_Progress(local_list, shared_list);
         } while(HMPI_Progress_mpi(req) != HMPI_REQ_COMPLETE);
     } else { //HMPI_RECV_ANY_SOURCE
         do {
-            HMPI_Progress(req_list);
+            HMPI_Progress(local_list, shared_list);
             //sched_yield();
         } while(get_reqstat(req) != HMPI_REQ_COMPLETE);
     }
@@ -1292,7 +1294,8 @@ int HMPI_Wait(HMPI_Request *request, HMPI_Status *status) {
 
 int HMPI_Waitall(int count, HMPI_Request *requests, HMPI_Status *statuses)
 {
-    HMPI_Request_list* req_list = &g_tl_send_reqs;
+    HMPI_Request_list* local_list = &g_tl_send_reqs;
+    HMPI_Request_list* shared_list = g_tl_my_send_reqs;
     int done;
 
 #ifdef DEBUG
@@ -1301,7 +1304,7 @@ int HMPI_Waitall(int count, HMPI_Request *requests, HMPI_Status *statuses)
 #endif
 
     do {
-        HMPI_Progress(req_list);
+        HMPI_Progress(local_list, shared_list);
         done = 0;
 
         for(int i = 0; i < count; i++) {
@@ -1349,7 +1352,8 @@ int HMPI_Waitall(int count, HMPI_Request *requests, HMPI_Status *statuses)
 
 int HMPI_Waitany(int count, HMPI_Request* requests, int* index, HMPI_Status *status)
 {
-    HMPI_Request_list* req_list = &g_tl_send_reqs;
+    HMPI_Request_list* local_list = &g_tl_send_reqs;
+    HMPI_Request_list* shared_list = g_tl_my_send_reqs;
     int done;
 
     //Call Progress once, then check each req.
@@ -1358,7 +1362,7 @@ int HMPI_Waitany(int count, HMPI_Request* requests, int* index, HMPI_Status *sta
 
         //What if I have progress return whether a completion was made?
         //Then I can skip the poll loop unless something finishes.
-        HMPI_Progress(req_list);
+        HMPI_Progress(local_list, shared_list);
 
         //TODO - is there a way to speed this up?
         // Maybe keep my own list of non-null entries that i can reorder to
@@ -1462,7 +1466,7 @@ int HMPI_Iprobe(int source, int tag, HMPI_Comm comm, int* flag, HMPI_Status* sta
     HMPI_Request send_req = NULL;
 
     //Progress here prevents deadlocks.
-    HMPI_Progress(&g_tl_send_reqs);
+    HMPI_Progress(&g_tl_send_reqs, g_tl_my_send_reqs);
 
     //Probe HMPI (on-node) layer
     *flag = match_probe(source, tag, comm, &send_req);
