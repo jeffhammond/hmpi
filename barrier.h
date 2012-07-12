@@ -3,11 +3,74 @@
 //#include <pthread.h>
 #include <stdint.h>
 #include <stdlib.h>
+#include <string.h>
 
 #include "lock.h"
 
 //#define CACHE_LINE 64
 //#define CACHE_LINE 1
+#if (defined __IBMC__ || defined __IBMCPP__) && defined __64BIT__ && defined __bg__
+
+#include <spi/include/kernel/memory.h>
+#include <spi/include/l2/barrier.h>
+
+typedef L2_Barrier_t L2_barrier_t;
+
+static int L2_barrier_init(L2_barrier_t *barrier, int threads) __attribute__((unused));
+
+static int L2_barrier_init(L2_barrier_t *barrier, int threads) {
+    if(Kernel_L2AtomicsAllocate(barrier, sizeof(L2_barrier_t))) {
+        printf("ERROR Unable to allocate L2 atomic memory\n");
+        fflush(stdout);
+        assert(0);
+    }
+
+    //*barrier = L2_BARRIER_INITIALIZER;
+    memset(barrier, 0, sizeof(L2_barrier_t));
+    return 0;
+}
+
+
+static int L2_barrier_destroy(L2_barrier_t *barrier) __attribute__((unused));
+
+static int L2_barrier_destroy(L2_barrier_t *barrier) {
+  return 0;
+}
+
+
+//Standard barrier
+static inline void L2_barrier(L2_barrier_t *barrier, int numthreads) __attribute__((unused));
+
+static inline void L2_barrier(L2_barrier_t *barrier, int numthreads) {
+    L2_Barrier(barrier, numthreads);
+}
+
+
+//Barrier with a callback -- usually used to poll MPI to prevent deadlock
+static inline void L2_barrier_cb(L2_barrier_t *barrier, int numthreads, void (*cbfn)(void)) __attribute__((unused));
+
+
+//This is a copy of IBM's L2_Barrier modified to use the callback while waiting.
+static inline void L2_barrier_cb(L2_barrier_t *barrier, int numthreads, void (*cbfn)(void)) {
+    uint64_t target = barrier->start + numthreads;
+    uint64_t current = L2_AtomicLoadIncrement(&barrier->count) + 1;
+
+    if (current == target) {
+        barrier->start = current;  // advance to next round
+    } else {
+        while (barrier->start < current) {  // wait for advance to next round
+            cbfn();
+        }
+
+	// NOTE: It's critical to compare b->start with current, NOT with
+	//       target.  It's improbable, but target could possibly be based
+	//       on a b->start that was already advanced to the next round.
+    }
+}
+
+
+#endif
+//#else //Default
 
 typedef struct {
   //Centralized barrier
@@ -83,5 +146,6 @@ static inline void barrier_cb(barrier_t *barrier, int tid, void (*cbfn)(void)) {
   return;
 }
 
+//#endif
 
 #endif

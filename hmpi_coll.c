@@ -138,7 +138,7 @@ int HMPI_Reduce(void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype, 
     return MPI_SUCCESS;
 }
 
-
+#if 0
 int HMPI_Allreduce(void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype, MPI_Op op, HMPI_Comm comm)
 {
     int size;
@@ -214,8 +214,8 @@ int HMPI_Allreduce(void *sendbuf, void *recvbuf, int count, MPI_Datatype datatyp
     //printf("%d done allreduce\n", g_hmpi_rank);
     return MPI_SUCCESS;
 }
+#endif
 
-#if 0
 int HMPI_Allreduce(void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype, MPI_Op op, HMPI_Comm comm)
 {
     //MPI_Aint extent, lb;
@@ -294,7 +294,6 @@ int HMPI_Allreduce(void *sendbuf, void *recvbuf, int count, MPI_Datatype datatyp
     barrier(&comm->barr, g_tl_tid);
     return MPI_SUCCESS;
 }
-#endif
 
 
 #define HMPI_SCAN_TAG 7546348

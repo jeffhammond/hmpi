@@ -47,10 +47,10 @@
 #if _PROFILE_PAPI_EVENTS == 1
 #include <papi.h>
 
-#define NUM_EVENTS 3
+#define NUM_EVENTS 4
 
 static int _profile_events[NUM_EVENTS] =
-          { PAPI_L2_TCA, PAPI_L2_TCM, PAPI_TOT_INS/*, PAPI_TOT_CYC*/ };
+          { PAPI_L1_DCM, PAPI_TOT_INS, PAPI_RES_STL, PAPI_TOT_CYC/*, PAPI_TOT_CYC*/ };
 //        { PAPI_TOT_CYC, PAPI_TOT_INS, PAPI_L3_TCM/*, PAPI_HW_INT*/ };
 //        { PAPI_TOT_CYC, PAPI_TOT_INS, PAPI_L2_TCM, PAPI_RES_STL };
 //        { PAPI_TOT_CYC, PAPI_TOT_INS, 1073741862, 1073741935 };

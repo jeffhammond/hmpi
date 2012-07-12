@@ -22,6 +22,14 @@
 
 #define ALIGNMENT 4096
 
+#ifndef ALIGN
+#ifdef __bg__
+//#define ALIGN(ptr) __alignx(ALIGNMENT, ptr)
+#define ALIGN(ptr)
+#else
+#define ALIGN(ptr)
+#endif
+#endif
 
 #ifndef PREFETCH
 #define PREFETCH(x) __builtin_prefetch(x)
@@ -123,6 +131,7 @@ static void* mpool_alloc(mpool_t* mp, size_t length)
         //for(prev = cur, cur = cur->next; cur != NULL;
         for(prev = NULL, cur = mp->head; cur != NULL;
                 prev = cur, cur = cur->next) {
+            ALIGN(cur);
             if(length <= cur->length) {
                 //Good buffer, claim it.
                 if(prev == NULL) {
@@ -140,6 +149,7 @@ static void* mpool_alloc(mpool_t* mp, size_t length)
                 cur->in_pool = 0;
 #endif
                 cur->next = NULL;
+                ALIGN(cur->base);
                 return cur->base;
             }
         }
@@ -169,6 +179,7 @@ static void* mpool_alloc(mpool_t* mp, size_t length)
     //printf("%p alloc addr %p length %llu\n", mp, ft->base, (uint64_t)length); fflush(stdout);
     ft->next = NULL;
     //__lwsync();
+    ALIGN(ft->base);
     return ft->base;
 }
 

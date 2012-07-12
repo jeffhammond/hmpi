@@ -2,7 +2,7 @@ CC=mpicc -std=gnu99
 #CC=mpixlc
 
 WARN=-Wall -Wuninitialized #-Wno-unused-function
-CFLAGS=$(WARN) -O3 -march=native -fomit-frame-pointer
+CFLAGS=$(WARN) -O3 -mcpu=power7 -fomit-frame-pointer
 
 LIBS=#-lrt -lpapi
 INCS=#-D_PROFILE=1 -D_PROFILE_MPI=1 #-D_PROFILE_PAPI_EVENTS=1

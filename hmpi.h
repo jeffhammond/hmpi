@@ -20,12 +20,10 @@ extern int g_size;                  //Underlying MPI world size
 extern __thread int g_hmpi_rank;    //HMPI rank for this thread
 
 
-//TODO - pad to cache line to avoid false sharing?
 typedef struct hmpi_coll_t {
     struct hmpi_coll_t* next;
     void* buf;
-    int locked;
-    char pad[44];
+    //char pad[48];
 } hmpi_coll_t;
 
 
@@ -45,6 +43,7 @@ typedef struct {
   hmpi_coll_t* coll;        //Used by allreduce
 
   barrier_t barr;       //Barrier for local ranks in this comm
+  //L2_barrier_t barr;       //Barrier for local ranks in this comm
   MPI_Comm mpicomm;     //Underyling MPI comm
   //MPI_Comm* tcomms;
 } HMPI_Comm_info;
@@ -87,7 +86,7 @@ typedef struct HMPI_Item {
 typedef struct HMPI_Request_info {
     HMPI_Item item; //Linked list subtype
 
-    volatile uint8_t stat;    //Request state
+    volatile uint32_t stat;    //Request state
     uint8_t type;       //Request type
     int proc;       //Always the source's rank regardless of type.
     int tag;        //MPI tag
