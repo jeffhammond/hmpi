@@ -2,10 +2,11 @@ CC=mpicc -std=gnu99
 #CC=mpixlc
 
 WARN=-Wall -Wuninitialized #-Wno-unused-function
-CFLAGS=$(WARN) -O3 -mcpu=power7 -fomit-frame-pointer
+#CFLAGS=$(WARN) -O3 -mcpu=power7 -fomit-frame-pointer
+CFLAGS=$(WARN) -O3 -march=native -fomit-frame-pointer
 
 LIBS=#-lrt -lpapi
-INCS=#-D_PROFILE=1 -D_PROFILE_MPI=1 #-D_PROFILE_PAPI_EVENTS=1
+INCS=-D_PROFILE=1 -D_PROFILE_HMPI=1 #-D_PROFILE_PAPI_EVENTS=1
 SRCS=hmpi.c hmpi_coll.c nbc_op.c
 MAIN=main.c
 HDRS=hmpi.h barrier.h lock.h profile2.h

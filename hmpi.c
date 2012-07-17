@@ -93,20 +93,40 @@ static int SRC_TAG_ANY = MPI_ANY_TAG; //Filled in during init
 
 
 PROFILE_DECLARE();
-PROFILE_VAR(send);
-PROFILE_VAR(add_send);
-PROFILE_VAR(recv);
-PROFILE_VAR(copy);
-PROFILE_VAR(complete_recv);
-PROFILE_VAR(wait_recv);
-#if 0
-PROFILE_VAR(allred_barr);
-PROFILE_VAR(allred_copy);
-PROFILE_VAR(allred_red);
-PROFILE_VAR(wa_prog);
-PROFILE_VAR(wa_poll);
-PROFILE_VAR(wa_check);
+
+#ifdef FULL_PROFILE
+#define FULL_PROFILE_VAR(v) PROFILE_VAR(v)
+#define FULL_PROFILE_START(v) PROFILE_START(v)
+#define FULL_PROFILE_STOP(v) PROFILE_STOP(v)
+#define FULL_PROFILE_SHOW_REDUCE(v) PROFILE_SHOW_REDUCE(v)
+#else
+#define FULL_PROFILE_VAR(v)
+#define FULL_PROFILE_START(v)
+#define FULL_PROFILE_STOP(v)
+#define FULL_PROFILE_SHOW_REDUCE(v)
 #endif
+
+FULL_PROFILE_VAR(MPI_Other);
+FULL_PROFILE_VAR(MPI_Isend);
+FULL_PROFILE_VAR(MPI_Irecv);
+FULL_PROFILE_VAR(MPI_Test);
+FULL_PROFILE_VAR(MPI_Testall);
+FULL_PROFILE_VAR(MPI_Wait);
+FULL_PROFILE_VAR(MPI_Waitall);
+FULL_PROFILE_VAR(MPI_Waitany);
+FULL_PROFILE_VAR(MPI_Iprobe);
+
+FULL_PROFILE_VAR(MPI_Barrier);
+FULL_PROFILE_VAR(MPI_Reduce);
+FULL_PROFILE_VAR(MPI_Allreduce);
+FULL_PROFILE_VAR(MPI_Scan);
+FULL_PROFILE_VAR(MPI_Bcast);
+FULL_PROFILE_VAR(MPI_Scatter);
+FULL_PROFILE_VAR(MPI_Gather);
+FULL_PROFILE_VAR(MPI_Gatherv);
+FULL_PROFILE_VAR(MPI_Allgather);
+FULL_PROFILE_VAR(MPI_Allgatherv);
+FULL_PROFILE_VAR(MPI_Alltoall);
 
 
 static int g_ncores;                //Cores per socket
@@ -330,7 +350,7 @@ static inline void update_send_reqs(HMPI_Request_list* local_list, HMPI_Request_
         //Senders only add at the tail, so head.next won't
         //change out from under us.
 
-    FENCE();
+    //FENCE();
         //TODO - possible BG hang here? read could come before branch check
         local_list->tail->next = shared_list->head.next;
 
@@ -427,7 +447,6 @@ static inline HMPI_Request match_recv(HMPI_Request_list* req_list, HMPI_Request 
     //So searching takes a long time..
     //Maybe it is taking a while for updates to the send Q to show up at the
     // receiver?  Is there a way to sync/flush/notify?
-    PROFILE_START(match);
     prev = &req_list->head;
     for(/*prev = &req_list->head,*/ cur = prev->next;
             cur != NULL; prev = cur, cur = cur->next) {
@@ -435,7 +454,6 @@ static inline HMPI_Request match_recv(HMPI_Request_list* req_list, HMPI_Request 
 
         //The send request can't have ANY_SOURCE or ANY_TAG, so don't check.
         if(req->proc == proc && (req->tag == tag || tag == MPI_ANY_TAG)) {
-        PROFILE_STOP(match);
             //PREFETCH(req->buf);
             remove_send_req(req_list, prev, cur);
 
@@ -444,12 +462,10 @@ static inline HMPI_Request match_recv(HMPI_Request_list* req_list, HMPI_Request 
             //printf("%d matched recv req %d proc %d tag %d to send req %p\n",
             //        g_hmpi_rank, recv_req, proc, tag, req);
             //fflush(stdout);
-            //PROFILE_STOP(match);
             return req;
         }
 
     }
-        PROFILE_STOP(match);
 
     return HMPI_REQUEST_NULL;
 }
@@ -621,6 +637,8 @@ void* trampoline(void* tid) {
     barrier(&HMPI_COMM_WORLD->barr, g_tl_tid);
 #endif
 
+    FULL_PROFILE_START(MPI_Other);
+
     // call user function
     g_entry(g_argc, argv);
 
@@ -780,48 +798,60 @@ int HMPI_Init(int *argc, char ***argv, int (*start_routine)(int argc, char** arg
 }
 
 
-int HMPI_Finalize() {
+int HMPI_Finalize()
+{
+    FULL_PROFILE_STOP(MPI_Other);
+    HMPI_Barrier(HMPI_COMM_WORLD);
 
-  HMPI_Barrier(HMPI_COMM_WORLD);
+    FULL_PROFILE_SHOW_REDUCE(MPI_Other);
+    FULL_PROFILE_SHOW_REDUCE(MPI_Isend);
+    FULL_PROFILE_SHOW_REDUCE(MPI_Irecv);
+    FULL_PROFILE_SHOW_REDUCE(MPI_Test);
+    FULL_PROFILE_SHOW_REDUCE(MPI_Testall);
+    FULL_PROFILE_SHOW_REDUCE(MPI_Wait);
+    FULL_PROFILE_SHOW_REDUCE(MPI_Waitall);
+    FULL_PROFILE_SHOW_REDUCE(MPI_Waitany);
+    FULL_PROFILE_SHOW_REDUCE(MPI_Iprobe);
 
-  PROFILE_SHOW_REDUCE(match);
-  //PROFILE_SHOW_REDUCE(wait);
-  PROFILE_SHOW_REDUCE(recv);
-  //PROFILE_SHOW_REDUCE(copy);
-  PROFILE_SHOW_REDUCE(complete_recv);
-  PROFILE_SHOW_REDUCE(wait_recv);
-  //PROFILE_SHOW_REDUCE(allred_barr);
-  //PROFILE_SHOW_REDUCE(allred_copy);
-  //PROFILE_SHOW_REDUCE(allred_red);
+    FULL_PROFILE_SHOW_REDUCE(MPI_Barrier);
+    FULL_PROFILE_SHOW_REDUCE(MPI_Reduce);
+    FULL_PROFILE_SHOW_REDUCE(MPI_Allreduce);
+    FULL_PROFILE_SHOW_REDUCE(MPI_Scan);
+    FULL_PROFILE_SHOW_REDUCE(MPI_Bcast);
+    FULL_PROFILE_SHOW_REDUCE(MPI_Scatter);
+    FULL_PROFILE_SHOW_REDUCE(MPI_Gather);
+    FULL_PROFILE_SHOW_REDUCE(MPI_Gatherv);
+    FULL_PROFILE_SHOW_REDUCE(MPI_Allgather);
+    FULL_PROFILE_SHOW_REDUCE(MPI_Allgatherv);
+    FULL_PROFILE_SHOW_REDUCE(MPI_Alltoall);
 
 #ifdef USE_L2_BARRIER
-  L2_barrier(&HMPI_COMM_WORLD->barr, g_nthreads);
+    L2_barrier(&HMPI_COMM_WORLD->barr, g_nthreads);
 #else
-  barrier(&HMPI_COMM_WORLD->barr, g_tl_tid);
+    barrier(&HMPI_COMM_WORLD->barr, g_tl_tid);
 #endif
 
-  //Free the local request pool
-  for(HMPI_Item* cur = g_free_reqs; cur != NULL;) {
-      HMPI_Item* next = cur->next;
-      free(cur);
-      cur = next;
-  }
+    //Free the local request pool
+    for(HMPI_Item* cur = g_free_reqs; cur != NULL;) {
+        HMPI_Item* next = cur->next;
+        free(cur);
+        cur = next;
+    }
 
 #ifdef COMM_NTHREADS
-  for(HMPI_Item* cur = g_free_msgs; cur != NULL;) {
-      HMPI_Item* next = cur->next;
-      free(cur);
-      cur = next;
-  }
+    for(HMPI_Item* cur = g_free_msgs; cur != NULL;) {
+        HMPI_Item* next = cur->next;
+        free(cur);
+        cur = next;
+    }
 #endif
 
-  //TODO - move this into init after all threads exit, no check needed.
-  if(g_tl_tid == 0) {
-    MPI_Abort(MPI_COMM_WORLD, 0);
-    //MPI_Finalize();
-  }
+    //TODO - move this into init after all threads exit, no check needed.
+    if(g_tl_tid == 0) {
+        MPI_Finalize();
+    }
 
-  return 0;
+    return 0;
 }
 
 
@@ -1213,6 +1243,8 @@ main_loop:
 
 int HMPI_Test(HMPI_Request *request, int *flag, HMPI_Status *status)
 {
+    FULL_PROFILE_STOP(MPI_Other);
+    FULL_PROFILE_START(MPI_Test);
     HMPI_Request req = *request;
 
     if(unlikely(req == HMPI_REQUEST_NULL)) {
@@ -1240,6 +1272,8 @@ int HMPI_Test(HMPI_Request *request, int *flag, HMPI_Status *status)
 
         if(f != HMPI_REQ_COMPLETE) {
             *flag = 0;
+            FULL_PROFILE_STOP(MPI_Test);
+            FULL_PROFILE_START(MPI_Other);
             return MPI_SUCCESS;
         }
     }
@@ -1254,12 +1288,17 @@ int HMPI_Test(HMPI_Request *request, int *flag, HMPI_Status *status)
     release_req(req);
     *request = HMPI_REQUEST_NULL;
     *flag = 1;
+
+    FULL_PROFILE_STOP(MPI_Test);
+    FULL_PROFILE_START(MPI_Other);
     return MPI_SUCCESS;
 }
 
 
 int HMPI_Testall(int count, HMPI_Request *requests, int* flag, HMPI_Status *statuses)
 {
+    FULL_PROFILE_STOP(MPI_Other);
+    FULL_PROFILE_START(MPI_Testall);
     *flag = 1;
 
     //Return as soon as any one request isn't complete.
@@ -1274,16 +1313,21 @@ int HMPI_Testall(int count, HMPI_Request *requests, int* flag, HMPI_Status *stat
         }
 
         if(!(*flag)) {
+            FULL_PROFILE_STOP(MPI_Testall);
+            FULL_PROFILE_START(MPI_Other);
             return MPI_SUCCESS;
         }
     }
 
+    FULL_PROFILE_STOP(MPI_Testall);
+    FULL_PROFILE_START(MPI_Other);
     return MPI_SUCCESS;
 }
 
 
 int HMPI_Wait(HMPI_Request *request, HMPI_Status *status) {
-    //PROFILE_START(wait);
+    FULL_PROFILE_STOP(MPI_Other);
+    FULL_PROFILE_START(MPI_Wait);
     HMPI_Request req = *request;
 
 #ifdef DEBUG
@@ -1297,7 +1341,8 @@ int HMPI_Wait(HMPI_Request *request, HMPI_Status *status) {
             status->size = 0;
         }
 
-        //PROFILE_STOP(wait);
+        FULL_PROFILE_STOP(MPI_Wait);
+        FULL_PROFILE_START(MPI_Other);
         return MPI_SUCCESS;
     }
 
@@ -1333,13 +1378,17 @@ int HMPI_Wait(HMPI_Request *request, HMPI_Status *status) {
 
     release_req(req);
     *request = HMPI_REQUEST_NULL;
-    //PROFILE_STOP(wait);
+
+    FULL_PROFILE_STOP(MPI_Wait);
+    FULL_PROFILE_START(MPI_Other);
     return MPI_SUCCESS;
 }
 
 
 int HMPI_Waitall(int count, HMPI_Request *requests, HMPI_Status *statuses)
 {
+    FULL_PROFILE_STOP(MPI_Other);
+    FULL_PROFILE_START(MPI_Waitall);
     HMPI_Request_list* local_list = &g_tl_send_reqs;
     HMPI_Request_list* shared_list = g_tl_my_send_reqs;
     int done;
@@ -1392,12 +1441,16 @@ int HMPI_Waitall(int count, HMPI_Request *requests, HMPI_Status *statuses)
         }
     } while(done < count);
 
-  return MPI_SUCCESS;
+    FULL_PROFILE_STOP(MPI_Waitall);
+    FULL_PROFILE_START(MPI_Other);
+    return MPI_SUCCESS;
 }
 
 
 int HMPI_Waitany(int count, HMPI_Request* requests, int* index, HMPI_Status *status)
 {
+    FULL_PROFILE_STOP(MPI_Other);
+    FULL_PROFILE_START(MPI_Waitany);
     HMPI_Request_list* local_list = &g_tl_send_reqs;
     HMPI_Request_list* shared_list = g_tl_my_send_reqs;
     int done;
@@ -1450,6 +1503,9 @@ int HMPI_Waitany(int count, HMPI_Request* requests, int* index, HMPI_Status *sta
             release_req(req);
             requests[i] = HMPI_REQUEST_NULL;
             *index = i;
+
+            FULL_PROFILE_STOP(MPI_Waitany);
+            FULL_PROFILE_START(MPI_Other);
             return MPI_SUCCESS;
         }
     } while(done == 0);
@@ -1459,6 +1515,9 @@ int HMPI_Waitany(int count, HMPI_Request* requests, int* index, HMPI_Status *sta
     if(status != HMPI_STATUS_IGNORE) {
         status->size = 0;
     }
+
+    FULL_PROFILE_STOP(MPI_Waitany);
+    FULL_PROFILE_START(MPI_Other);
     return MPI_SUCCESS;
 }
 
@@ -1556,9 +1615,10 @@ int HMPI_Probe(int source, int tag, HMPI_Comm comm, HMPI_Status* status)
 }
 
 
-int HMPI_Isend(void* buf, int count, MPI_Datatype datatype, int dest, int tag, HMPI_Comm comm, HMPI_Request *request) {
- 
-    PROFILE_START(send);
+int HMPI_Isend(void* buf, int count, MPI_Datatype datatype, int dest, int tag, HMPI_Comm comm, HMPI_Request *request)
+{
+    FULL_PROFILE_STOP(MPI_Other);
+    FULL_PROFILE_START(MPI_Isend);
 #ifdef DEBUG
     printf("[%i] HMPI_Isend(%p, %i, %p, %i, %i, %p, %p) (proc null: %i)\n", g_hmpi_rank, buf, count, (void*)datatype, dest, tag, comm, req);
     fflush(stdout);
@@ -1588,7 +1648,8 @@ int HMPI_Isend(void* buf, int count, MPI_Datatype datatype, int dest, int tag, H
     if(unlikely(dest == MPI_PROC_NULL)) { 
         req->type = HMPI_SEND;
         update_reqstat(req, HMPI_REQ_COMPLETE);
-    PROFILE_STOP(send);
+        FULL_PROFILE_STOP(MPI_Isend);
+        FULL_PROFILE_START(MPI_Other);
         return MPI_SUCCESS;
     }
 
@@ -1632,7 +1693,8 @@ int HMPI_Isend(void* buf, int count, MPI_Datatype datatype, int dest, int tag, H
 #endif
     }
 
-    PROFILE_STOP(send);
+    FULL_PROFILE_STOP(MPI_Isend);
+    FULL_PROFILE_START(MPI_Other);
     return MPI_SUCCESS;
 }
 
@@ -1646,8 +1708,9 @@ int HMPI_Send(void* buf, int count, MPI_Datatype datatype, int dest, int tag, HM
 
 
 int HMPI_Irecv(void* buf, int count, MPI_Datatype datatype, int source, int tag, HMPI_Comm comm, HMPI_Request *request) {
+        FULL_PROFILE_STOP(MPI_Other);
+        FULL_PROFILE_START(MPI_Irecv);
 
-  PROFILE_START(recv);
 #ifdef DEBUG
   printf("[%i] HMPI_Irecv(%p, %i, %p, %i, %i, %p, %p) (proc null: %i)\n", g_hmpi_rank, buf, count, (void*)datatype, source, tag, comm, req, MPI_PROC_NULL);
   fflush(stdout);
@@ -1687,7 +1750,8 @@ int HMPI_Irecv(void* buf, int count, MPI_Datatype datatype, int source, int tag,
     if(unlikely(source == MPI_PROC_NULL)) { 
         req->type = HMPI_RECV;
         update_reqstat(req, HMPI_REQ_COMPLETE);
-  PROFILE_STOP(recv);
+        FULL_PROFILE_STOP(MPI_Irecv);
+        FULL_PROFILE_START(MPI_Other);
         return MPI_SUCCESS;
     }
 
@@ -1728,7 +1792,8 @@ int HMPI_Irecv(void* buf, int count, MPI_Datatype datatype, int source, int tag,
     req->type = MPI_RECV;
   }
 
-  PROFILE_STOP(recv);
+    FULL_PROFILE_STOP(MPI_Irecv);
+    FULL_PROFILE_START(MPI_Other);
   return MPI_SUCCESS;
 }
 
@@ -1738,7 +1803,6 @@ int HMPI_Recv(void* buf, int count, MPI_Datatype datatype, int source, int tag, 
 
   HMPI_Irecv(buf, count, datatype, source, tag, comm, &req);
   HMPI_Wait(&req, status);
-  PROFILE_STOP(wait_recv);
   return MPI_SUCCESS;
 }
 

@@ -24,12 +24,32 @@
 #include "lock.h"
 
 
-#if 0
-PROFILE_EXTERN(allred_barr);
-PROFILE_EXTERN(allred_copy);
-PROFILE_EXTERN(allred_red);
-//PROFILE_EXTERN(op);
+#ifdef FULL_PROFILE
+#define FULL_PROFILE_VAR(v) PROFILE_VAR(v)
+#define FULL_PROFILE_EXTERN(v) PROFILE_EXTERN(v)
+#define FULL_PROFILE_START(v) PROFILE_START(v)
+#define FULL_PROFILE_STOP(v) PROFILE_STOP(v)
+#define FULL_PROFILE_SHOW_REDUCE(v) PROFILE_SHOW_REDUCE(v)
+#else
+#define FULL_PROFILE_VAR(v)
+#define FULL_PROFILE_EXTERN(v)
+#define FULL_PROFILE_START(v)
+#define FULL_PROFILE_STOP(v)
+#define FULL_PROFILE_SHOW_REDUCE(v)
 #endif
+
+FULL_PROFILE_EXTERN(MPI_Other);
+FULL_PROFILE_EXTERN(MPI_Barrier);
+FULL_PROFILE_EXTERN(MPI_Reduce);
+FULL_PROFILE_EXTERN(MPI_Allreduce);
+FULL_PROFILE_EXTERN(MPI_Scan);
+FULL_PROFILE_EXTERN(MPI_Bcast);
+FULL_PROFILE_EXTERN(MPI_Scatter);
+FULL_PROFILE_EXTERN(MPI_Gather);
+FULL_PROFILE_EXTERN(MPI_Gatherv);
+FULL_PROFILE_EXTERN(MPI_Allgather);
+FULL_PROFILE_EXTERN(MPI_Allgatherv);
+FULL_PROFILE_EXTERN(MPI_Alltoall);
 
 
 extern __thread int g_tl_tid;       //HMPI node-local rank for this thread (tid)
@@ -52,14 +72,19 @@ static inline void barrier_iprobe(void)
 // AWF new function - barrier only among local threads
 void HMPI_Barrier_local(HMPI_Comm comm)
 {
-  barrier_cb(&comm->barr, g_tl_tid, barrier_iprobe);
+    FULL_PROFILE_STOP(MPI_Other);
+    FULL_PROFILE_START(MPI_Barrier);
+
+    barrier_cb(&comm->barr, g_tl_tid, barrier_iprobe);
+
+    FULL_PROFILE_STOP(MPI_Barrier);
+    FULL_PROFILE_START(MPI_Other);
 }
 
 
 int HMPI_Barrier(HMPI_Comm comm) {
-#ifdef DEBUG
-    printf("in HMPI_Barrier\n"); fflush(stdout);
-#endif
+    FULL_PROFILE_STOP(MPI_Other);
+    FULL_PROFILE_START(MPI_Barrier);
 
     barrier_cb(&comm->barr, g_tl_tid, barrier_iprobe);
 
@@ -72,6 +97,8 @@ int HMPI_Barrier(HMPI_Comm comm) {
         barrier_cb(&comm->barr, g_tl_tid, barrier_iprobe);
     }
 
+    FULL_PROFILE_STOP(MPI_Barrier);
+    FULL_PROFILE_START(MPI_Other);
     return MPI_SUCCESS;
 }
 
@@ -83,6 +110,8 @@ int NBC_Operation(void *buf3, void *buf1, void *buf2, MPI_Op op, MPI_Datatype ty
 
 int HMPI_Reduce(void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype, MPI_Op op, int root, HMPI_Comm comm)
 {
+    FULL_PROFILE_STOP(MPI_Other);
+    FULL_PROFILE_START(MPI_Reduce);
     int size;
     int i;
 
@@ -135,17 +164,17 @@ int HMPI_Reduce(void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype, 
         barrier(&comm->barr, g_tl_tid);
     }
 
+    FULL_PROFILE_STOP(MPI_Reduce);
+    FULL_PROFILE_START(MPI_Other);
     return MPI_SUCCESS;
 }
 
-#if 0
+#ifndef __bg__
 int HMPI_Allreduce(void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype, MPI_Op op, HMPI_Comm comm)
 {
+    FULL_PROFILE_STOP(MPI_Other);
+    FULL_PROFILE_START(MPI_Allreduce);
     int size;
-
-#ifdef __bg__
-#warning "New allreduce not tested on BGQ yet"
-#endif
 
     MPI_Type_size(datatype, &size);
 
@@ -155,15 +184,12 @@ int HMPI_Allreduce(void *sendbuf, void *recvbuf, int count, MPI_Datatype datatyp
     coll.buf = sendbuf;
     coll.next = NULL;
 
-    //PROFILE_START(allred_barr);
     hmpi_coll_t* pred = (hmpi_coll_t*)FETCH_STORE((void**)&comm->coll, &coll);
-    //PROFILE_STOP(allred_barr);
 
     //Was there a predecessor?  If not, we're the root.
     if(pred == NULL) {
         //printf("%d is root recvbuf %p\n", g_hmpi_rank, recvbuf); fflush(stdout);
         //Wait for successors to show up; reduce each one as it arrives.
-        //PROFILE_START(allred_red);
         int nthreads = g_nthreads;
 
         comm->rbuf[0] = recvbuf;
@@ -190,7 +216,6 @@ int HMPI_Allreduce(void *sendbuf, void *recvbuf, int count, MPI_Datatype datatyp
 
         //Clear the list to NULL for the next allreduce
         comm->coll = NULL;
-        //PROFILE_STOP(allred_red);
         //STORE_FENCE();
     } else {
         //volatile int* locked = &coll.locked;
@@ -204,20 +229,23 @@ int HMPI_Allreduce(void *sendbuf, void *recvbuf, int count, MPI_Datatype datatyp
         //Wait for the root to do its thing.
         barrier(&comm->barr, g_tl_tid);
         //printf("%d is child src recv buf %p\n", g_hmpi_rank, comm->rbuf[0]); fflush(stdout);
-        //PROFILE_START(allred_copy);
 
         memcpy(recvbuf, (void*)comm->rbuf[0], count*size);
-        //PROFILE_STOP(allred_copy);
     }
 
     barrier(&comm->barr, g_tl_tid);
-    //printf("%d done allreduce\n", g_hmpi_rank);
+
+    FULL_PROFILE_STOP(MPI_Allreduce);
+    FULL_PROFILE_START(MPI_Other);
     return MPI_SUCCESS;
 }
-#endif
+
+#else
 
 int HMPI_Allreduce(void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype, MPI_Op op, HMPI_Comm comm)
 {
+    FULL_PROFILE_STOP(MPI_Other);
+    FULL_PROFILE_START(MPI_Allreduce);
     //MPI_Aint extent, lb;
     int size;
     int i;
@@ -251,10 +279,7 @@ int HMPI_Allreduce(void *sendbuf, void *recvbuf, int count, MPI_Datatype datatyp
     if(g_tl_tid == 0) {
         comm->rbuf[0] = recvbuf;
 
-        PROFILE_START(allred_barr);
         barrier(&comm->barr, g_tl_tid);
-        PROFILE_STOP(allred_barr);
-        PROFILE_START(allred_red);
         //barrier_cb(&comm->barr, 0, barrier_iprobe);
 
         //TODO eliminate this memcpy by folding into a reduce call?
@@ -269,37 +294,37 @@ int HMPI_Allreduce(void *sendbuf, void *recvbuf, int count, MPI_Datatype datatyp
             MPI_Allreduce(MPI_IN_PLACE, recvbuf, count, datatype, op, comm->mpicomm);
         }
 
-        PROFILE_STOP(allred_red);
         //barrier_cb(&comm->barr, g_tl_tid, barrier_iprobe);
         barrier(&comm->barr, 0);
     } else {
         //Put up our send buffer for the root thread to reduce from.
         comm->sbuf[g_tl_tid] = sendbuf;
         //barrier_cb(&comm->barr, g_tl_tid, barrier_iprobe);
-        PROFILE_START(allred_barr);
         barrier(&comm->barr, g_tl_tid);
-        PROFILE_STOP(allred_barr);
 
         //Wait for the root rank to do its thing.
         barrier(&comm->barr, g_tl_tid);
 
         //Copy reduced data to our own buffer.
-        PROFILE_START(allred_copy);
         memcpy(recvbuf, (void*)comm->rbuf[0], count*size);
-        PROFILE_STOP(allred_copy);
     }
 
     //Potential optimization -- 0 can't leave until all threads arrive.. all
     //others can go
     barrier(&comm->barr, g_tl_tid);
+    FULL_PROFILE_STOP(MPI_Allreduce);
+    FULL_PROFILE_START(MPI_Other);
     return MPI_SUCCESS;
 }
 
+#endif
 
 #define HMPI_SCAN_TAG 7546348
 
 int HMPI_Scan(void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype, MPI_Op op, HMPI_Comm comm)
 {
+    FULL_PROFILE_STOP(MPI_Other);
+    FULL_PROFILE_START(MPI_Scan);
     //MPI_Aint extent, lb;
     MPI_Request req;
     int size;
@@ -372,11 +397,15 @@ int HMPI_Scan(void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype, MP
                 g_rank + 1, HMPI_SCAN_TAG, MPI_COMM_WORLD);
     }
    
+    FULL_PROFILE_STOP(MPI_Scan);
+    FULL_PROFILE_START(MPI_Other);
     return MPI_SUCCESS;
 }
 
 
 int HMPI_Bcast(void *buffer, int count, MPI_Datatype datatype, int root, HMPI_Comm comm) {
+    FULL_PROFILE_STOP(MPI_Other);
+    FULL_PROFILE_START(MPI_Bcast);
     //MPI_Aint extent, lb;
     int size;
 
@@ -422,6 +451,8 @@ int HMPI_Bcast(void *buffer, int count, MPI_Datatype datatype, int root, HMPI_Co
     }
 
     barrier(&comm->barr, g_tl_tid);
+    FULL_PROFILE_STOP(MPI_Bcast);
+    FULL_PROFILE_START(MPI_Other);
     return MPI_SUCCESS;
 }
 
@@ -429,6 +460,8 @@ int HMPI_Bcast(void *buffer, int count, MPI_Datatype datatype, int root, HMPI_Co
 // TODO - scatter and gather may not work right for count > 1
 
 int HMPI_Scatter(void* sendbuf, int sendcount, MPI_Datatype sendtype, void* recvbuf, int recvcount, MPI_Datatype recvtype, int root, HMPI_Comm comm) {
+    FULL_PROFILE_STOP(MPI_Other);
+    FULL_PROFILE_START(MPI_Scatter);
   MPI_Aint send_extent, recv_extent, lb;
   int send_size;
   int recv_size;
@@ -499,6 +532,8 @@ int HMPI_Scatter(void* sendbuf, int sendcount, MPI_Datatype sendtype, void* recv
       free((void*)comm->rbuf[0]);
   }
 
+    FULL_PROFILE_STOP(MPI_Scatter);
+    FULL_PROFILE_START(MPI_Other);
   return MPI_SUCCESS;
 }
 
@@ -507,6 +542,8 @@ int HMPI_Scatter(void* sendbuf, int sendcount, MPI_Datatype sendtype, void* recv
 
 int HMPI_Gather(void* sendbuf, int sendcount, MPI_Datatype sendtype, void* recvbuf, int recvcount, MPI_Datatype recvtype, int root, HMPI_Comm comm)
 {
+    FULL_PROFILE_STOP(MPI_Other);
+    FULL_PROFILE_START(MPI_Gather);
   MPI_Aint send_extent, recv_extent, lb;
   int send_size;
   int recv_size;
@@ -568,6 +605,8 @@ int HMPI_Gather(void* sendbuf, int sendcount, MPI_Datatype sendtype, void* recvb
   }
 
   barrier(&comm->barr, g_tl_tid);
+    FULL_PROFILE_STOP(MPI_Gather);
+    FULL_PROFILE_START(MPI_Other);
   return MPI_SUCCESS;
 }
 
@@ -575,6 +614,8 @@ int HMPI_Gather(void* sendbuf, int sendcount, MPI_Datatype sendtype, void* recvb
 #define HMPI_GATHERV_TAG 76361347
 int HMPI_Gatherv(void* sendbuf, int sendcnt, MPI_Datatype sendtype, void* recvbuf, int* recvcnts, int* displs, MPI_Datatype recvtype, int root, HMPI_Comm comm)
 {
+    FULL_PROFILE_STOP(MPI_Other);
+    FULL_PROFILE_START(MPI_Gatherv);
     //Each sender can have a different send count.
     //recvcnts[i] must be equal to rank i's sendcnt.
     //Only sendbuf, sendcnt, sendtype, root, comm meaningful on senders
@@ -676,12 +717,16 @@ int HMPI_Gatherv(void* sendbuf, int sendcnt, MPI_Datatype sendtype, void* recvbu
     }
 
     barrier(&comm->barr, tid);
+    FULL_PROFILE_STOP(MPI_Gatherv);
+    FULL_PROFILE_START(MPI_Other);
     return MPI_SUCCESS;
 }
 
 
 int HMPI_Allgather(void* sendbuf, int sendcount, MPI_Datatype sendtype, void* recvbuf, int recvcount, MPI_Datatype recvtype, HMPI_Comm comm)
 {
+    FULL_PROFILE_STOP(MPI_Other);
+    FULL_PROFILE_START(MPI_Allgather);
   MPI_Aint send_extent, recv_extent, lb;
   int send_size;
   int recv_size;
@@ -750,12 +795,16 @@ int HMPI_Allgather(void* sendbuf, int sendcount, MPI_Datatype sendtype, void* re
 
   barrier(&comm->barr, g_tl_tid);
 
+    FULL_PROFILE_STOP(MPI_Allgather);
+    FULL_PROFILE_START(MPI_Other);
   return MPI_SUCCESS;
 }
 
 
 int HMPI_Allgatherv(void *sendbuf, int sendcount, MPI_Datatype sendtype, void *recvbuf, int* recvcounts, int *displs, MPI_Datatype recvtype, HMPI_Comm comm)
 {
+    FULL_PROFILE_STOP(MPI_Other);
+    FULL_PROFILE_START(MPI_Allgatherv);
   MPI_Aint send_extent, recv_extent, lb;
   int send_size;
   int recv_size;
@@ -852,6 +901,8 @@ int HMPI_Allgatherv(void *sendbuf, int sendcount, MPI_Datatype sendtype, void *r
 
   barrier(&comm->barr, g_tl_tid);
 
+    FULL_PROFILE_STOP(MPI_Allgatherv);
+    FULL_PROFILE_START(MPI_Other);
   return MPI_SUCCESS;
 }
 
@@ -861,6 +912,8 @@ int HMPI_Allgatherv(void *sendbuf, int sendcount, MPI_Datatype sendtype, void *r
 
 int HMPI_Alltoall(void* sendbuf, int sendcount, MPI_Datatype sendtype, void* recvbuf, int recvcount, MPI_Datatype recvtype, HMPI_Comm comm) 
 {
+    FULL_PROFILE_STOP(MPI_Other);
+    FULL_PROFILE_START(MPI_Alltoall);
   //void* rbuf;
   int32_t send_size;
   uint64_t size;
@@ -1009,13 +1062,9 @@ int HMPI_Alltoall(void* sendbuf, int sendcount, MPI_Datatype sendtype, void* rec
       free(recv_reqs);
   }
 
+    FULL_PROFILE_STOP(MPI_Alltoall);
+    FULL_PROFILE_START(MPI_Other);
   return MPI_SUCCESS;
-}
-
-
-int HMPI_Abort( HMPI_Comm comm, int errorcode ) {
-  printf("HMPI: user code called MPI_Abort!\n");
-  return MPI_Abort(comm->mpicomm, errorcode);
 }
 
 
@@ -1023,6 +1072,8 @@ int HMPI_Abort( HMPI_Comm comm, int errorcode ) {
 //MPI stuff.  Made to be as fast as possible for the local case..
 int HMPI_Alltoall_local(void* sendbuf, int sendcount, MPI_Datatype sendtype, void* recvbuf, int recvcount, MPI_Datatype recvtype, HMPI_Comm comm) 
 {
+    FULL_PROFILE_STOP(MPI_Other);
+    FULL_PROFILE_START(MPI_Alltoall);
     int32_t send_size;
     int thr;
     int tid = g_tl_tid;
@@ -1089,6 +1140,8 @@ int HMPI_Alltoall_local(void* sendbuf, int sendcount, MPI_Datatype sendtype, voi
   }
 
   barrier(&comm->barr, tid);
+    FULL_PROFILE_STOP(MPI_Alltoall);
+    FULL_PROFILE_START(MPI_Other);
   return MPI_SUCCESS;
 }
 

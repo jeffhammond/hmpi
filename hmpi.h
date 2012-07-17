@@ -121,13 +121,18 @@ int HMPI_Init(int *argc, char ***argv, int (*start_routine)(int argc, char** arg
 
 int HMPI_Finalize();
 
-int HMPI_Abort( HMPI_Comm comm, int errorcode );
+
+static int HMPI_Abort(HMPI_Comm comm, int errorcode) __attribute__((unused));
+
+static int HMPI_Abort(HMPI_Comm comm, int errorcode) {
+  printf("HMPI: user code called MPI_Abort!\n");
+  return MPI_Abort(comm->mpicomm, errorcode);
+}
 
 
-static int HMPI_Comm_rank ( HMPI_Comm comm, int *rank ) __attribute__((unused));
+static int HMPI_Comm_rank(HMPI_Comm comm, int *rank) __attribute__((unused));
 
 static int HMPI_Comm_rank(HMPI_Comm comm, int *rank) {
-  
 #ifdef HMPI_SAFE 
   if(comm->mpicomm != MPI_COMM_WORLD) {
     printf("only MPI_COMM_WORLD is supported so far\n");
@@ -140,9 +145,9 @@ static int HMPI_Comm_rank(HMPI_Comm comm, int *rank) {
 }
 
 
-static int HMPI_Comm_size ( HMPI_Comm comm, int *size ) __attribute__((unused));
+static int HMPI_Comm_size(HMPI_Comm comm, int *size) __attribute__((unused));
 
-static int HMPI_Comm_size ( HMPI_Comm comm, int *size ) {
+static int HMPI_Comm_size(HMPI_Comm comm, int *size) {
 #ifdef HMPI_SAFE 
   if(comm->mpicomm != MPI_COMM_WORLD) {
     printf("only MPI_COMM_WORLD is supported so far\n");
