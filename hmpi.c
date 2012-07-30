@@ -577,7 +577,7 @@ void* trampoline(void* tid) {
         }
 
         printf("Rank %d binding to index %d\n", rank, idx);
-#if 0
+
         cpu_set_t cpuset;
         CPU_ZERO(&cpuset);
         CPU_SET(idx, &cpuset);
@@ -587,7 +587,6 @@ void* trampoline(void* tid) {
             printf("%d ERROR in pthread_setaffinity_np: %s\n", rank, strerror(ret));
             MPI_Abort(MPI_COMM_WORLD, 0);
         }
-#endif
     }
 #endif //PIN_WITH_PTHREAD
 
@@ -801,9 +800,7 @@ int HMPI_Init(int *argc, char ***argv, int (*start_routine)(int argc, char** arg
 int HMPI_Finalize()
 {
     FULL_PROFILE_STOP(MPI_Other);
-    HMPI_Barrier(HMPI_COMM_WORLD);
-
-    FULL_PROFILE_SHOW_REDUCE(MPI_Other);
+    FULL_PROFILE_START(MPI_Other);
     FULL_PROFILE_SHOW_REDUCE(MPI_Isend);
     FULL_PROFILE_SHOW_REDUCE(MPI_Irecv);
     FULL_PROFILE_SHOW_REDUCE(MPI_Test);
@@ -825,10 +822,16 @@ int HMPI_Finalize()
     FULL_PROFILE_SHOW_REDUCE(MPI_Allgatherv);
     FULL_PROFILE_SHOW_REDUCE(MPI_Alltoall);
 
+    FULL_PROFILE_SHOW_REDUCE(MPI_Other);
+
+    HMPI_Barrier(HMPI_COMM_WORLD);
+
+#if 0
 #ifdef USE_L2_BARRIER
     L2_barrier(&HMPI_COMM_WORLD->barr, g_nthreads);
 #else
     barrier(&HMPI_COMM_WORLD->barr, g_tl_tid);
+#endif
 #endif
 
     //Free the local request pool
