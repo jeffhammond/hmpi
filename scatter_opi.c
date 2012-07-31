@@ -1,0 +1,89 @@
+#include <mpi.h>
+#include <stdlib.h>
+#include <stdio.h>
+
+#define OPI_SCATTER_TAG 674643
+
+int rank;
+int size;
+
+//Something I haven't done much with yet is owner-passing collective routines.
+// There's optimizations that aren't employed here:
+// - The root could overlap the sends with packing if this function is inlined and code is moved around
+// - A more scalable scatter algorithm could be used
+// - Start off-node communication, do the local owner passing, then finish
+//   - Further yet, we can pack/unpack on-node while off-node communication
+//     is in progress... future work!
+int OPI_Scatter(void** sendbufs, int sendcnt, MPI_Datatype sendtype, void** recvbuf, int recvcnt, MPI_Datatype recvtype, int root, MPI_Comm comm)
+{
+    int i;
+    OPI_Request req;
+
+    if(rank == root) {
+        for(i = 0; i < size; i++) {
+            if(i == rank) {
+                *recvbuf = sendbufs[i];
+            } else {
+                OPI_Give(sendbufs[i], i, OPI_SCATTER_TAG, comm, &req);
+                MPI_Wait(&req, MPI_STATUS_IGNORE);
+            }
+        }
+    } else {
+        OPI_Take(recvbuf, root, OPI_SCATTER_TAG, comm, &req);
+        OPI_Wait(&req, MPI_STATUS_IGNORE);
+    }
+
+    return MPI_SUCCESS;
+}
+
+int main(int argc, char** argv)
+{
+    int i, j;
+
+    MPI_Init(&argc, &argv);
+    OPI_Init();
+
+    MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+    MPI_Comm_size(MPI_COMM_WORLD, &size);
+
+    //Bad that we have to do an extra malloc here -- is there a better way?
+    // Could replace with alloca, but still, is there something better?
+    int** sendbufs; 
+
+    if(rank == 0) {
+        int** sendbufs = malloc(sizeof(int*) * size);
+
+        //Allocate buffers and fill with data
+        for(i = 0; i < size; i++) {
+            OPI_Alloc(&sendbufs[i], sizeof(int) * 10);
+            for(j = 0; j < 10; j++) {
+                sendbufs[i][j] = i;
+            }
+        }
+    }
+
+
+    //Scatter a buffer from rank 0
+    OPI_Scatter(sendbufs, 10, MPI_INT,
+            &recvbuf, 10, MPI_INT, 0, MPI_COMM_WORLD);
+
+    if(rank == 0) {
+        free(sendbufs);
+    }
+
+    //Do something with the buffer
+    int sum = 0;
+
+    for(i = 0; i < 10; i++) {
+        sum += recvbuf[i];
+    }
+
+    printf("rank %d sum: %d\n", rank, sum);
+
+    OPI_Free(&recvbuf);
+
+    OPI_Finalize();
+    MPI_Finalize();
+    return 0;
+}
+

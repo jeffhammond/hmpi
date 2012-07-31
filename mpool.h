@@ -7,19 +7,6 @@
 #include <malloc.h>
 #include "lock.h"
 
-//A normal lock is used, any number of threads can alloc and free safely.
-#define LOCK_FULL 1
-
-//Alloc and free are designed such that one thread can safely enter alloc,
-//while multiple threads can simultaneously free a buffer.
-//#define LOCK_FREE 1
-
-#ifdef LOCK_FULL
-#ifdef LOCK_FREE
-#error "Cannot define both LOCK_FULL and LOCK_FREE"
-#endif
-#endif
-
 #define ALIGNMENT 4096
 
 #ifndef ALIGN
@@ -47,10 +34,12 @@ typedef struct mpool_footer_t {
 
 typedef struct mpool_t {
     mpool_footer_t* head;
-#ifdef LOCK_FULL
+#ifdef USE_MCS
     mcs_lock_t lock;
-    //lock_t lock;
+#else
+    lock_t lock;
 #endif
+
 //    uint64_t num_allocs;
 //    uint64_t num_reuses;
 } mpool_t;
@@ -64,9 +53,10 @@ static mpool_t* mpool_open(void)
     
     mp->head = NULL;
 
-#ifdef LOCK_FULL
+#ifdef USE_MCS
     MCS_LOCK_INIT(&mp->lock);
-    //LOCK_INIT(&mp->lock, 0);
+#else
+    LOCK_INIT(&mp->lock, 0);
 #endif
 
     //mp->num_allocs = 0;
@@ -109,9 +99,12 @@ static void* mpool_alloc(mpool_t* mp, size_t length)
     mpool_footer_t* cur;
     mpool_footer_t* prev;
 
+#ifdef USE_MCS
     mcs_qnode_t q;
     MCS_LOCK_ACQUIRE(&mp->lock, &q);
-    //LOCK_SET(&mp->lock);
+#else
+    LOCK_SET(&mp->lock);
+#endif
     //__lwsync();
 #if 0
     cur = mp->head;
@@ -140,8 +133,11 @@ static void* mpool_alloc(mpool_t* mp, size_t length)
                     //Not at head of list, just remove.
                     prev->next = cur->next;
                 }
-                //LOCK_CLEAR(&mp->lock);
+#ifdef USE_MCS
                 MCS_LOCK_RELEASE(&mp->lock, &q);
+#else
+                LOCK_CLEAR(&mp->lock);
+#endif
 
                 //printf("%p reuse addr %p length %llu\n", mp, cur->base, (uint64_t)length); fflush(stdout);
                 //mp->num_reuses++;
@@ -154,8 +150,11 @@ static void* mpool_alloc(mpool_t* mp, size_t length)
             }
         }
 
+#ifdef USE_MCS
         MCS_LOCK_RELEASE(&mp->lock, &q);
-        //LOCK_CLEAR(&mp->lock);
+#else
+        LOCK_CLEAR(&mp->lock);
+#endif
         //__lwsync();
 #if 0
     } else {
@@ -203,14 +202,22 @@ static void mpool_free(mpool_t* mp, void* ptr)
 #endif
 
 
+#ifdef USE_MCS
     mcs_qnode_t q;
     MCS_LOCK_ACQUIRE(&mp->lock, &q);
-    //LOCK_SET(&mp->lock);
+#else
+    LOCK_SET(&mp->lock);
+#endif
+
     ft->next = mp->head;
     //__lwsync();
     mp->head = ft;
+
+#ifdef USE_MCS
     MCS_LOCK_RELEASE(&mp->lock, &q);
-    //LOCK_CLEAR(&mp->lock);
+#else
+    LOCK_CLEAR(&mp->lock);
+#endif
 }
 
 

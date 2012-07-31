@@ -249,7 +249,7 @@ typedef struct HMPI_Request_list {
     mcs_lock_t lock;
 #else
 #warning "L2 lock"
-    L2_lock_t lock;
+    lock_t lock;
 #endif 
 
     //Pad to a cache line so locks don't conflict - no benefit?
@@ -302,8 +302,8 @@ static inline void add_send_req(HMPI_Request_list* req_list,
     //item->next = NULL; //TODO - could skip this
 
 #ifndef USE_MCS
-    L2_LOCK_SET(&req_list->lock);
-//    FENCE();
+    LOCK_SET(&req_list->lock);
+    //FENCE();
 #else
     mcs_qnode_t q;
     MCS_LOCK_ACQUIRE(&req_list->lock, &q);
@@ -313,12 +313,8 @@ static inline void add_send_req(HMPI_Request_list* req_list,
     req_list->tail = item;
 
 #ifndef USE_MCS
-#ifdef __bg__
-    //__dcbf(req_list);
-    //__dcbf(item);
-#endif
-//    FENCE();
-    L2_LOCK_CLEAR(&req_list->lock);
+    //FENCE();
+    LOCK_CLEAR(&req_list->lock);
 #else
     MCS_LOCK_RELEASE(&req_list->lock, &q);
 #endif
@@ -351,11 +347,13 @@ static inline void update_send_reqs(HMPI_Request_list* local_list, HMPI_Request_
         //change out from under us.
 
     //FENCE();
+        __lwsync();
+        __fence();
         //TODO - possible BG hang here? read could come before branch check
         local_list->tail->next = shared_list->head.next;
 
 #ifndef USE_MCS
-        L2_LOCK_SET(&shared_list->lock);
+        LOCK_SET(&shared_list->lock);
     //FENCE();
 #else
         mcs_qnode_t q;
@@ -369,7 +367,7 @@ static inline void update_send_reqs(HMPI_Request_list* local_list, HMPI_Request_
 
 #ifndef USE_MCS
     //FENCE();
-        L2_LOCK_CLEAR(&shared_list->lock);
+        LOCK_CLEAR(&shared_list->lock);
 #else
         MCS_LOCK_RELEASE(&shared_list->lock, &q);
 #endif
@@ -538,6 +536,25 @@ static inline int get_reqstat(const HMPI_Request req) {
 }
 
 
+int tmain(int argc, char** argv);
+
+//Weak version of main so applications don't have to keep redefining it.
+int __attribute__((weak)) main(int argc, char** argv)
+{
+    if(argc < 4) {
+        printf("ERROR must specify number of threads, cores, and sockets:\n\n\t%s <args> <numthreads> <cores_per_socket> <numsockets>\n\n", argv[0]);
+        return -1;
+    }
+
+    //TODO - may not be portable to some MPIs?
+    int threads = atoi(argv[1]);
+    int cores = atoi(argv[2]);
+    int sockets = atoi(argv[3]);
+
+    return HMPI_Init(&argc, &argv, tmain, threads, cores, sockets);
+}
+
+
 // this is called by pthread create and then calls the real function!
 void* trampoline(void* tid) {
     int rank = (int)(uintptr_t)tid;
@@ -613,7 +630,7 @@ void* trampoline(void* tid) {
     g_send_reqs[rank].tail = &g_send_reqs[rank].head;
     g_tl_my_send_reqs = &g_send_reqs[rank];
 #ifndef USE_MCS
-    L2_LOCK_INIT(&g_send_reqs[rank].lock, 0);
+    LOCK_INIT(&g_send_reqs[rank].lock, 0);
 #else
     MCS_LOCK_INIT(&g_send_reqs[rank].lock);
 #endif
@@ -629,12 +646,12 @@ void* trampoline(void* tid) {
 
     // Don't head off to user land until all threads are ready 
 
-#ifdef USE_L2_BARRIER
-#warning "L2 barrier"
-    L2_barrier(&HMPI_COMM_WORLD->barr, g_nthreads);
-#else
+//#ifdef USE_L2_BARRIER
+//#warning "L2 barrier"
+   // L2_barrier(&HMPI_COMM_WORLD->barr, g_nthreads);
+//#else
     barrier(&HMPI_COMM_WORLD->barr, g_tl_tid);
-#endif
+//#endif
 
     FULL_PROFILE_START(MPI_Other);
 

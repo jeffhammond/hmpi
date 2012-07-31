@@ -1,4 +1,4 @@
-//This is meant to be included once in one file, ie near main.
+#ifdef FULL_PROFILE
 #include <mpi.h>
 #include "profile2.h"
 
@@ -298,3 +298,4 @@ int MPI_Alltoall(void* sendbuf, int sendcount, MPI_Datatype sendtype, void* recv
     return MPI_SUCCESS;
 }
 
+#endif

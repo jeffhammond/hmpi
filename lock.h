@@ -3,6 +3,13 @@
 #include <stdio.h>
 //#define CACHE_LINE 128
 
+//Use MCS locks by default.
+#define USE_MCS 1
+
+//MCS locks aren't faster on POWER chips.
+#if defined(__bg__)  || defined(__powerpc64__)
+#endif
+
 //AWF - I made my own primitives for several reasons:
 // - Referencing the OPA atomic types requires a pointer dereference.  The
 //   compiler probably eliminates them, but still results in less clean code.
@@ -24,6 +31,8 @@ typedef struct lock_t {
 #if (defined __IBMC__ || defined __IBMCPP__) && defined __64BIT__ && defined __bg__
 #warning "Using BlueGene/Q (64bit) primitives"
 
+//MCS locks aren't faster on POWER chips.
+#undef USE_MCS
 
 //Using Q atomics to build a lock:
 //Lock is a ptr to special L2 atomic memory, allocated in lock_init
@@ -47,7 +56,7 @@ typedef struct lock_t {
 
 #define STORE_FENCE() __lwsync()
 #define LOAD_FENCE() __sync()
-#define FENCE() __sync(); __fence()
+#define FENCE() __lwsync(); __fence()
 
 //The __compare_and_swap function is useful when a single word value must be
 //updated only if it has not been changed since it was last read. If you use
@@ -96,14 +105,18 @@ static inline void LOCK_INIT(lock_t* __restrict l, int locked) {
 }
 
 static inline void LOCK_SET(lock_t* __restrict l) {
-    __fence();
+    //__fence();
+    //__lwsync();
     while(__check_lock_mp((int*)(&l->lock), 0, 1));
+    __isync();
+    //__lwsync();
 }
 
 //Returns non-zero if lock was acquired, 0 if not.
 static inline long int LOCK_TRY(lock_t* __restrict l) {
-    __fence();
+    //__fence();
     if(l->lock == 0) {
+        __isync();
         return __check_lock_mp((int*)(&l->lock), 0, 1) == 0;
     } else {
         return 0;
@@ -112,7 +125,9 @@ static inline long int LOCK_TRY(lock_t* __restrict l) {
 
 static inline void LOCK_CLEAR(lock_t* __restrict l) {
     __fence();
+    __lwsync();
     __clear_lock_mp((int*)(&l->lock), 0);
+    //__lwsync();
 }
 
 static inline long int LOCK_GET(lock_t* __restrict l) {
@@ -243,6 +258,9 @@ static inline void MCS_LOCK_RELEASE(mcs_lock_t* __restrict l, mcs_qnode_t* q) {
 
 #elif (defined __IBMC__ || defined __IBMCPP__) && defined __32BIT__
 #warning "Using BlueGene/P (32bit) primitives"
+
+//MCS locks aren't faster on POWER chips.
+#undef USE_MCS
 
 #if defined __IBMCPP__
 #include <builtins.h>

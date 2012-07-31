@@ -485,6 +485,8 @@ static void __PROFILE_SHOW_REDUCE(const char* name, struct profile_vars_t* v)
 
     fflush(stdout);
 #if _PROFILE_HMPI == 1
+    int tid;
+    HMPI_Comm_thread(HMPI_COMM_WORLD, rank, &tid);
     barrier(&HMPI_COMM_WORLD->barr, tid);
 #endif
 }
