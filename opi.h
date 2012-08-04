@@ -2,6 +2,10 @@
 #define __OPI_H__
 #include "hmpi.h"
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 typedef struct OPI_Request {
     HMPI_Request req;
     void* ptr;
@@ -25,4 +29,7 @@ int OPI_Wait(OPI_Request *request, HMPI_Status *status);
 int OPI_Waitall(int count, OPI_Request* requests, HMPI_Status* statuses);
 int OPI_Waitany(int count, OPI_Request* requests, int* index, HMPI_Status *status);
 
+#ifdef __cplusplus
+}
+#endif
 #endif

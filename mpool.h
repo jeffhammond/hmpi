@@ -22,9 +22,12 @@
 #define PREFETCH(x) __builtin_prefetch(x)
 #endif
 
+#define HDR_TO_PTR(ft)  (void*)((uintptr_t)ft + ALIGNMENT)
+#define PTR_TO_HDR(ptr) (mpool_footer_t*)((uintptr_t)ptr - ALIGNMENT)
+
 typedef struct mpool_footer_t {
     struct mpool_footer_t* next;
-    void* base;
+    //void* base;
     size_t length; //Does not include footer structure!
 #ifdef MPOOL_CHECK
     int in_pool;
@@ -144,9 +147,9 @@ static void* mpool_alloc(mpool_t* mp, size_t length)
 #ifdef MPOOL_CHECK
                 cur->in_pool = 0;
 #endif
-                cur->next = NULL;
-                ALIGN(cur->base);
-                return cur->base;
+                //cur->next = NULL;
+                //ALIGN(cur->base);
+                return HDR_TO_PTR(cur);
             }
         }
 
@@ -169,24 +172,25 @@ static void* mpool_alloc(mpool_t* mp, size_t length)
 
     //mpool_footer_t* ft = (mpool_footer_t*)((uintptr_t)ptr + length);
     //ft->next = NULL;
-    ft->base = (void*)((uintptr_t)ft + ALIGNMENT);
+    //ft->base = (void*)((uintptr_t)ft + ALIGNMENT);
     ft->length = length;
 #ifdef MPOOL_CHECK
     ft->in_pool = 0;
 #endif
     //mp->num_allocs++;
     //printf("%p alloc addr %p length %llu\n", mp, ft->base, (uint64_t)length); fflush(stdout);
-    ft->next = NULL;
+    //ft->next = NULL;
     //__lwsync();
-    ALIGN(ft->base);
-    return ft->base;
+    //ALIGN(ft->base);
+    return HDR_TO_PTR(ft); 
 }
 
 
 //Return a buffer to the mpool for later reuse.
 static void mpool_free(mpool_t* mp, void* ptr)
 {
-    mpool_footer_t* ft = (mpool_footer_t*)((uintptr_t)ptr - ALIGNMENT);
+    //mpool_footer_t* ft = (mpool_footer_t*)((uintptr_t)ptr - ALIGNMENT);
+    mpool_footer_t* ft = PTR_TO_HDR(ptr);
 
     //printf("%p free ptr %p length %llu\n", mp, ptr, (uint64_t)ft->length);
     //fflush(stdout);

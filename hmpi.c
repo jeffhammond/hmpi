@@ -92,9 +92,9 @@ static int SRC_TAG_ANY = MPI_ANY_TAG; //Filled in during init
 //#define PREFETCH(x) __builtin_prefetch(x)
 
 
-PROFILE_DECLARE();
 
 #ifdef FULL_PROFILE
+//PROFILE_DECLARE();
 #define FULL_PROFILE_VAR(v) PROFILE_VAR(v)
 #define FULL_PROFILE_START(v) PROFILE_START(v)
 #define FULL_PROFILE_STOP(v) PROFILE_STOP(v)
@@ -347,8 +347,8 @@ static inline void update_send_reqs(HMPI_Request_list* local_list, HMPI_Request_
         //change out from under us.
 
     //FENCE();
-        __lwsync();
-        __fence();
+        //__lwsync();
+        //__fence();
         //TODO - possible BG hang here? read could come before branch check
         local_list->tail->next = shared_list->head.next;
 
@@ -536,7 +536,7 @@ static inline int get_reqstat(const HMPI_Request req) {
 }
 
 
-int tmain(int argc, char** argv);
+int __attribute__((weak)) tmain(int argc, char** argv);
 
 //Weak version of main so applications don't have to keep redefining it.
 int __attribute__((weak)) main(int argc, char** argv)
@@ -810,6 +810,7 @@ int HMPI_Init(int *argc, char ***argv, int (*start_routine)(int argc, char** arg
   free(g_send_reqs);
   free(threads);
   free(g_tcomms);
+  MPI_Finalize();
   return 0;
 }
 
@@ -841,6 +842,7 @@ int HMPI_Finalize()
 
     FULL_PROFILE_SHOW_REDUCE(MPI_Other);
 
+    fflush(stdout);
     HMPI_Barrier(HMPI_COMM_WORLD);
 
 #if 0
@@ -866,11 +868,8 @@ int HMPI_Finalize()
     }
 #endif
 
-    //TODO - move this into init after all threads exit, no check needed.
-    if(g_tl_tid == 0) {
-        MPI_Finalize();
-    }
-
+    //Seems to prevent a segfault in MPI_Finalize()
+    barrier(&HMPI_COMM_WORLD->barr, g_tl_tid);
     return 0;
 }
 

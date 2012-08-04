@@ -9,9 +9,10 @@
 
 #define ALIGNMENT 4096
 
-#define HDR_TO_PTR(ft)  (void*)((uintptr_t)ft + ALIGNMENT)
-#define PTR_TO_HDR(ptr) (header_t*)((uintptr_t)ptr - ALIGNMENT)
+#define HDR_TO_PTR(ft)  (void*)((uintptr_t)(ft) + ALIGNMENT)
+#define PTR_TO_HDR(ptr) (header_t*)((uintptr_t)(ptr) - ALIGNMENT)
 
+#define MPOOL_CHECK 1
 
 typedef struct header_t {
     struct header_t* next;
@@ -121,14 +122,13 @@ int OPI_Alloc(void** ptr, size_t length)
                 LOCK_CLEAR(&mp->lock);
 #endif
 
-                //printf("%p reuse addr %p length %llu\n", mp, cur->base, (uint64_t)length); fflush(stdout);
+                //printf("%p reuse addr %p length %llu\n", mp, cur, (uint64_t)length); fflush(stdout);
                 //mp->num_reuses++;
 #ifdef MPOOL_CHECK
                 cur->in_pool = 0;
 #endif
-                cur->next = NULL;
+                //cur->next = NULL;
                 *ptr = HDR_TO_PTR(cur);
-                printf("allocated old buf %p %p\n", cur, *ptr);
                 return MPI_SUCCESS;
             }
         }
@@ -157,7 +157,7 @@ int OPI_Alloc(void** ptr, size_t length)
     hdr->in_pool = 0;
 #endif
 
-    //printf("%p alloc addr %p length %llu\n", mp, ft->base, (uint64_t)length); fflush(stdout);
+    //printf("%p alloc addr %p length %llu\n", mp, hdr, (uint64_t)length); fflush(stdout);
 
     *ptr = HDR_TO_PTR(hdr);
     return MPI_SUCCESS;
@@ -166,10 +166,10 @@ int OPI_Alloc(void** ptr, size_t length)
 
 int OPI_Free(void** ptr)
 {
-    header_t* hdr = PTR_TO_HDR(*ptr);
+    header_t* hdr = PTR_TO_HDR((*ptr));
     mpool_t* mp = hdr->mpool;
 
-    //printf("%p free ptr %p length %llu\n", mp, ptr, (uint64_t)hdr->length);
+    //printf("%p free ptr %p hdr %p length %llu\n", mp, ptr, HDR_TO_PTR(hdr), (uint64_t)hdr->length);
     //fflush(stdout);
 
 #ifdef MPOOL_CHECK
@@ -209,16 +209,16 @@ int OPI_Give(void** ptr, int count, MPI_Datatype datatype, int rank, int tag, MP
 {
     req->ptr = *ptr;
 
-    if(HMPI_Comm_local(comm, rank)) {
+    //if(HMPI_Comm_local(comm, rank)) {
         //Owner passing!
         MPI_Isend(&req->ptr, sizeof(void*), MPI_BYTE,
                 rank, tag, comm, (MPI_Request*)req);
         req->do_free = 0;
-    } else {
+    /*} else {
         //Remote node, use MPI
         MPI_Isend(*ptr, count, datatype, rank, tag, comm, (MPI_Request*)req);
         req->do_free = 1;
-    }
+    }*/
 
     *ptr = NULL;
     return MPI_SUCCESS;
@@ -227,11 +227,11 @@ int OPI_Give(void** ptr, int count, MPI_Datatype datatype, int rank, int tag, MP
 
 int OPI_Take(void** ptr, int count, MPI_Datatype datatype, int rank, int tag, MPI_Comm comm, OPI_Request* req)
 {
-    if(HMPI_Comm_local(comm, rank)) {
+    //if(HMPI_Comm_local(comm, rank)) {
         //Owner passing!
         MPI_Irecv(ptr, sizeof(void*), MPI_BYTE,
                 rank, tag, comm, (MPI_Request*)req);
-    } else {
+    /*} else {
         //Remote node, use MPI
         int type_size;
         MPI_Type_size(datatype, &type_size);
@@ -239,7 +239,7 @@ int OPI_Take(void** ptr, int count, MPI_Datatype datatype, int rank, int tag, MP
         OPI_Alloc(ptr, type_size * count);
 
         MPI_Irecv(*ptr, count, datatype, rank, tag, comm, (MPI_Request*)req);
-    }
+    }*/
 
     req->do_free = 0;
     return MPI_SUCCESS;
@@ -270,7 +270,7 @@ int OPI_Testall(int count, OPI_Request *requests, int* flag, HMPI_Status *status
 
 int OPI_Wait(OPI_Request *request, HMPI_Status *status)
 {
-    int ret = HMPI_Wait((MPI_Request*)request, status);
+    int ret = HMPI_Wait(&request->req, status);
     if(request->do_free == 1) {
         OPI_Free(&request->ptr);
     }
@@ -281,8 +281,14 @@ int OPI_Wait(OPI_Request *request, HMPI_Status *status)
 int OPI_Waitall(int count, OPI_Request* requests, HMPI_Status* statuses)
 {
     //TODO - maybe this could deadlock?
-    for(int i = 0; i < count; i++) {
-        OPI_Wait(&requests[i], &statuses[i]);
+    if(statuses != HMPI_STATUSES_IGNORE) {
+        for(int i = 0; i < count; i++) {
+            OPI_Wait(&requests[i], &statuses[i]);
+        }
+    } else {
+        for(int i = 0; i < count; i++) {
+            OPI_Wait(&requests[i], MPI_STATUS_IGNORE);
+        }
     }
 
     return MPI_SUCCESS;

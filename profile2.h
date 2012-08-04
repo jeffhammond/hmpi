@@ -72,22 +72,18 @@ extern THREAD FILE* _profile_fd;
 #define PROFILE_DECLARE() \
   THREAD FILE* _profile_fd; \
   THREAD int _profile_eventset = PAPI_NULL;
-//  __thread struct profile_info_t _profile_info; 
 
 #else
 #define PROFILE_DECLARE() \
   THREAD int _profile_eventset = PAPI_NULL;
-//  __thread struct profile_info_t _profile_info; 
 #endif
 
-#else
+#else //_PROFILE_PAPI_EVENTS != 1
 
 #define PROFILE_DECLARE()
-//  __thread struct profile_info_t _profile_info; 
 
 #endif
 
-//extern __thread struct profile_info_t _profile_info;
 extern THREAD int _profile_eventset;
 
 typedef struct profile_vars_t {
@@ -115,8 +111,6 @@ typedef struct profile_vars_t {
 #define PROFILE_RESET(v) \
     memset(&_profile_ ## v, 0, sizeof(profile_vars_t))
 
-//This needs to be declared once in a C file somewhere
-//extern /*__thread*/ struct profile_info_t _profile_info;
 
 PROFILE_EXTERN(MPI_Other);
 
@@ -160,6 +154,7 @@ static inline void PROFILE_INIT(int tid)
 #endif
 
 #if _PROFILE_PAPI_EVENTS == 1
+    _profile_eventset = PAPI_NULL;
     int ret = PAPI_create_eventset(&_profile_eventset);
     if(ret != PAPI_OK) {
         printf("PAPI create eventset error %s\n", PAPI_strerror(ret));
@@ -175,8 +170,8 @@ static inline void PROFILE_INIT(int tid)
                 printf("ERROR PAPI_get_event_info %d\n", i);
                 //continue;
             } else {
-                //printf("PAPI event %16s %s\n", info.symbol, info.long_descr);
-                //fflush(stdout);
+                printf("PAPI event %16s %s\n", info.symbol, info.long_descr);
+                fflush(stdout);
                 strcpy(_profile_event_names[i], info.symbol);
             }
         }
