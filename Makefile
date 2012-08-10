@@ -6,20 +6,22 @@ WARN=-Wall -Wuninitialized #-Wno-unused-function
 CFLAGS=$(WARN) -O3 -march=native -fomit-frame-pointer
 
 LIBS=#-lrt -lpapi
-INCS=-D_PROFILE=1 -D_PROFILE_HMPI=1 #-D_PROFILE_PAPI_EVENTS=1
+INCS=#-D_PROFILE=1 -D_PROFILE_HMPI=1 #-D_PROFILE_PAPI_EVENTS=1
 SRCS=hmpi.c hmpi_coll.c nbc_op.c
 MAIN=main.c
 HDRS=hmpi.h barrier.h lock.h profile2.h
 
-OPI_SRCS=example_opi.c opi.c
+OPI_SRCS=opi.c
 
 PSM_SRCS=hmpi_psm.c hmpi_coll.c nbc_op.c libpsm.c
 PSM_HDRS=hmpi_psm.h barrier.h lock.h profile2.h libpsm.h
 PSM_LIBS=$(LIBS) -lpsm_infinipath
 
-all: $(SRCS:%.c=%.o)
-	ar r hmpi.a hmpi.o hmpi_coll.o nbc_op.o
+all: $(SRCS:%.c=%.o) $(OPI_SRCS:%.c=%.o)
+	ar r hmpi.a $(SRCS:%.c=%.o)
 	ranlib hmpi.a
+	ar r opi.a $(OPI_SRCS:%.c=%.o)
+	ranlib opi.a
 
 udawn: LIBS =
 udawn: $(SRCS:%.c=%.o)
@@ -56,6 +58,7 @@ opi: all example_opi.c
 opi_useq: LIBS =
 opi_useq: CC=mpixlc
 opi_useq: CFLAGS=-O5 -qhot=novector -qsimd=auto -qlist -qreport -qsource
+opi_useq: OPI_SRCS += example_opi.c
 opi_useq: all $(OPI_SRCS:%.c=%.o) opi.h
 	$(CC) $(CCFLAGS) $(LDFLAGS) -o example_opi $(OPI_SRCS:%.c=%.o) hmpi.a  $(LIBS)
 
@@ -63,5 +66,5 @@ opi_useq: all $(OPI_SRCS:%.c=%.o) opi.h
 	$(CC) $(INCS) $(CFLAGS) $(CPPFLAGS) -c $<
 
 clean:
-	rm -f *.o $(PROG)
+	rm -f *.o *.a
 

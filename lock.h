@@ -4,6 +4,8 @@
 //#define CACHE_LINE 128
 
 //Use MCS locks by default.
+// Algorithms for Scalable Synchronization on Shared-Memory Multiprocessors
+// by John Mellor-Crummey and Michael Scott
 #define USE_MCS 1
 
 //MCS locks aren't faster on POWER chips.

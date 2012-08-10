@@ -148,6 +148,7 @@ static inline void PROFILE_INIT(int tid)
   }
 
 #if _PROFILE_HMPI == 1
+  printf("tid %d\n", tid); fflush(stdout);
     barrier(&HMPI_COMM_WORLD->barr, tid);
 //#else
   //MPI_Barrier(MPI_COMM_WORLD);

@@ -12,12 +12,12 @@
 #define HDR_TO_PTR(ft)  (void*)((uintptr_t)(ft) + ALIGNMENT)
 #define PTR_TO_HDR(ptr) (header_t*)((uintptr_t)(ptr) - ALIGNMENT)
 
-#define MPOOL_CHECK 1
+//#define MPOOL_CHECK 1
 
 typedef struct header_t {
     struct header_t* next;
     //void* base;
-    struct mpool_t* mpool;  //Owner of this allocation
+    //struct mpool_t* mpool;  //Owner of this allocation
     size_t length;          //Does not include footer structure!
 #ifdef MPOOL_CHECK
     int in_pool;
@@ -27,10 +27,12 @@ typedef struct header_t {
 
 typedef struct mpool_t {
     header_t* head;
+#if 0
 #ifdef USE_MCS
     mcs_lock_t lock;
 #else
     lock_t lock;
+#endif
 #endif
 } mpool_t;
 
@@ -45,13 +47,13 @@ void OPI_Init(void)
     //Initialize the local memory pool.
     mpool.head = NULL;
 
+#if 0
 #ifdef USE_MCS
     MCS_LOCK_INIT(&mpool.lock);
 #else
     LOCK_INIT(&mpool.lock, 0);
 #endif
-
-
+#endif
 }
 
 
@@ -84,28 +86,15 @@ int OPI_Alloc(void** ptr, size_t length)
     header_t* cur;
     header_t* prev;
 
+#if 0
 #ifdef USE_MCS
     mcs_qnode_t q;
     MCS_LOCK_ACQUIRE(&mp->lock, &q);
 #else
     LOCK_SET(&mp->lock);
 #endif
-#if 0
-    cur = mp->head;
-    if(cur != NULL) {
-        if(length <= cur->length) {
-            mp->head = cur->next;
-            //MCS_LOCK_RELEASE(&mp->lock, &q);
-            LOCK_CLEAR(&mp->lock);
-#ifdef MPOOL_CHECK
-            cur->in_pool = 0;
 #endif
-            return cur->base;
-        }
-        LOCK_CLEAR(&mp->lock);
-#endif            
 
-        //for(prev = cur, cur = cur->next; cur != NULL;
         for(prev = NULL, cur = mp->head; cur != NULL;
                 prev = cur, cur = cur->next) {
             if(length <= cur->length) {
@@ -116,10 +105,12 @@ int OPI_Alloc(void** ptr, size_t length)
                     //Not at head of list, just remove.
                     prev->next = cur->next;
                 }
+#if 0
 #ifdef USE_MCS
                 MCS_LOCK_RELEASE(&mp->lock, &q);
 #else
                 LOCK_CLEAR(&mp->lock);
+#endif
 #endif
 
                 //printf("%p reuse addr %p length %llu\n", mp, cur, (uint64_t)length); fflush(stdout);
@@ -133,24 +124,19 @@ int OPI_Alloc(void** ptr, size_t length)
             }
         }
 
+#if 0
 #ifdef USE_MCS
         MCS_LOCK_RELEASE(&mp->lock, &q);
 #else
         LOCK_CLEAR(&mp->lock);
 #endif
-#if 0
-    } else {
-        //MCS_LOCK_RELEASE(&mp->lock, &q);
-        LOCK_CLEAR(&mp->lock);
-    }
 #endif
-
 
     //If no existing allocation is found, allocate a new one.
     header_t* hdr = (header_t*)memalign(ALIGNMENT, length + ALIGNMENT);
 
     //hdr->next = NULL;
-    hdr->mpool = mp;
+    //hdr->mpool = mp;
     hdr->length = length;
 
 #ifdef MPOOL_CHECK
@@ -167,7 +153,8 @@ int OPI_Alloc(void** ptr, size_t length)
 int OPI_Free(void** ptr)
 {
     header_t* hdr = PTR_TO_HDR((*ptr));
-    mpool_t* mp = hdr->mpool;
+    //mpool_t* mp = hdr->mpool;
+    mpool_t* mp = &mpool;
 
     //printf("%p free ptr %p hdr %p length %llu\n", mp, ptr, HDR_TO_PTR(hdr), (uint64_t)hdr->length);
     //fflush(stdout);
@@ -183,23 +170,25 @@ int OPI_Free(void** ptr)
 #endif
 
 
+#if 0
 #ifdef USE_MCS
     mcs_qnode_t q;
     MCS_LOCK_ACQUIRE(&mp->lock, &q);
 #else
     LOCK_SET(&mp->lock);
 #endif
+#endif
 
     hdr->next = mp->head;
-    //__lwsync();
     mp->head = hdr;
 
+#if 0
 #ifdef USE_MCS
     MCS_LOCK_RELEASE(&mp->lock, &q);
 #else
     LOCK_CLEAR(&mp->lock);
 #endif
-
+#endif
     *ptr = NULL;
     return MPI_SUCCESS;
 }
