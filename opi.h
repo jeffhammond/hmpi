@@ -6,11 +6,13 @@
 extern "C" {
 #endif
 
-typedef struct OPI_Request {
+typedef struct OPI_Request_info {
     HMPI_Request req;
     void* ptr;
     int do_free;
-} OPI_Request;
+} OPI_Request_info;
+
+typedef OPI_Request_info* OPI_Request;
 
 
 void OPI_Init(void);

@@ -4,13 +4,20 @@
 #include <unistd.h>
 #include <malloc.h>
 #include "hmpi.h"
-#include "opi.h"
 #include "lock.h"
+
+
+#define likely(x)       __builtin_expect((x),1)
+#define unlikely(x)     __builtin_expect((x),0)
+
 
 #define ALIGNMENT 4096
 
 #define HDR_TO_PTR(ft)  (void*)((uintptr_t)(ft) + ALIGNMENT)
 #define PTR_TO_HDR(ptr) (header_t*)((uintptr_t)(ptr) - ALIGNMENT)
+
+#define MAX_BUF_COUNT 128 //This threshold triggers buffer frees
+#define MIN_BUF_COUNT (MAX_BUF_COUNT - 16) //Keep this many buffers
 
 //#define MPOOL_CHECK 1
 
@@ -27,6 +34,7 @@ typedef struct header_t {
 
 typedef struct mpool_t {
     header_t* head;
+    int buf_count;
 #if 0
 #ifdef USE_MCS
     mcs_lock_t lock;
@@ -46,6 +54,7 @@ void OPI_Init(void)
 {
     //Initialize the local memory pool.
     mpool.head = NULL;
+    mpool.buf_count = 0;
 
 #if 0
 #ifdef USE_MCS
@@ -118,7 +127,7 @@ int OPI_Alloc(void** ptr, size_t length)
 #ifdef MPOOL_CHECK
                 cur->in_pool = 0;
 #endif
-                //cur->next = NULL;
+                mp->buf_count--;
                 *ptr = HDR_TO_PTR(cur);
                 return MPI_SUCCESS;
             }
@@ -135,8 +144,6 @@ int OPI_Alloc(void** ptr, size_t length)
     //If no existing allocation is found, allocate a new one.
     header_t* hdr = (header_t*)memalign(ALIGNMENT, length + ALIGNMENT);
 
-    //hdr->next = NULL;
-    //hdr->mpool = mp;
     hdr->length = length;
 
 #ifdef MPOOL_CHECK
@@ -179,6 +186,27 @@ int OPI_Free(void** ptr)
 #endif
 #endif
 
+    if(unlikely(mp->buf_count >= MAX_BUF_COUNT)) {
+        //Remove old buffers.
+        header_t* cur = mp->head;
+
+        //Traverse forward
+        for(int i = 1; i < MIN_BUF_COUNT; i++) {
+            cur = cur->next;
+        }
+
+        header_t* temp;
+        while(cur != NULL) {
+            temp = cur->next;
+            free(cur);
+            cur = temp;
+        }
+
+        mp->buf_count = MIN_BUF_COUNT;
+    } else{
+        mp->buf_count++;
+    }
+
     hdr->next = mp->head;
     mp->head = hdr;
 
@@ -194,8 +222,9 @@ int OPI_Free(void** ptr)
 }
 
 
-int OPI_Give(void** ptr, int count, MPI_Datatype datatype, int rank, int tag, MPI_Comm comm, OPI_Request* req)
+int OPI_Give(void** ptr, int count, MPI_Datatype datatype, int rank, int tag, MPI_Comm comm, OPI_Request* request)
 {
+    OPI_Request req = *request;
     req->ptr = *ptr;
 
     //if(HMPI_Comm_local(comm, rank)) {
@@ -214,8 +243,10 @@ int OPI_Give(void** ptr, int count, MPI_Datatype datatype, int rank, int tag, MP
 }
 
 
-int OPI_Take(void** ptr, int count, MPI_Datatype datatype, int rank, int tag, MPI_Comm comm, OPI_Request* req)
+int OPI_Take(void** ptr, int count, MPI_Datatype datatype, int rank, int tag, MPI_Comm comm, OPI_Request* request)
 {
+    OPI_Request req = *request;
+
     //if(HMPI_Comm_local(comm, rank)) {
         //Owner passing!
         MPI_Irecv(ptr, sizeof(void*), MPI_BYTE,
@@ -237,9 +268,11 @@ int OPI_Take(void** ptr, int count, MPI_Datatype datatype, int rank, int tag, MP
 
 int OPI_Test(OPI_Request *request, int *flag, HMPI_Status *status)
 {
-    int ret = HMPI_Test((HMPI_Request*)request, flag, status);
-    if(flag && request->do_free == 1) {
-        OPI_Free(&request->ptr);
+    OPI_Request req = *request;
+
+    int ret = HMPI_Test(&req->req, flag, status);
+    if(flag && req->do_free == 1) {
+        OPI_Free(&req->ptr);
     }
 
     return ret;
@@ -259,9 +292,11 @@ int OPI_Testall(int count, OPI_Request *requests, int* flag, HMPI_Status *status
 
 int OPI_Wait(OPI_Request *request, HMPI_Status *status)
 {
-    int ret = HMPI_Wait(&request->req, status);
-    if(request->do_free == 1) {
-        OPI_Free(&request->ptr);
+    OPI_Request req = *request;
+
+    int ret = HMPI_Wait(&req->req, status);
+    if(req->do_free == 1) {
+        OPI_Free(&req->ptr);
     }
 
     return ret;
@@ -290,7 +325,7 @@ int OPI_Waitany(int count, OPI_Request* requests, int* index, HMPI_Status *statu
 
     do {
         for(int i = 0; i < count; i++) {
-            if(requests[i].req == HMPI_REQUEST_NULL) {
+            if(requests[i]->req == HMPI_REQUEST_NULL) {
                 continue;
             }
 

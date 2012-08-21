@@ -70,6 +70,11 @@ typedef struct HMPI_Status {
 #define MPI_SEND 3
 #define MPI_RECV 4
 #define HMPI_RECV_ANY_SOURCE 5
+#ifdef ENABLE_OPI
+#define OPI_GIVE 6
+#define OPI_TAKE 7
+#define OPI_TAKE_ANY_SOURCE 8
+#endif
 
 //HMPI request states
 //ACTIVE and COMPLETE specifically chosen to match MPI test flags
@@ -261,6 +266,17 @@ static int HMPI_Comm_group(HMPI_Comm comm, HMPI_Group* group)
     *group = NULL;
     return MPI_SUCCESS;    
 }
+
+
+#ifdef ENABLE_OPI
+int OPI_Alloc(void** ptr, size_t length);
+int OPI_Free(void** ptr);
+
+int OPI_Give(void** ptr, int count, MPI_Datatype datatype, int rank, int tag, HMPI_Comm comm, HMPI_Request* req);
+
+int OPI_Take(void** ptr, int count, MPI_Datatype datatype, int rank, int tag, HMPI_Comm comm, HMPI_Request* req);
+#endif
+
 
 
 //Defines to redirect MPI calls to HMPI.
