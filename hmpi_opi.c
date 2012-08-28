@@ -6,6 +6,8 @@
 #include "hmpi.h"
 #include "lock.h"
 
+#include "profile2.h"
+
 #ifdef FULL_PROFILE
 #define FULL_PROFILE_VAR(v) PROFILE_VAR(v)
 #define FULL_PROFILE_EXTERN(v) PROFILE_EXTERN(v)
@@ -41,24 +43,21 @@ FULL_PROFILE_EXTERN(OPI_Take);
 typedef struct opi_hdr_t {
     struct opi_hdr_t* next;
     size_t length;          //Does not include footer structure!
-    //struct mpool_t* mpool;
+    struct mpool_t* mpool;
 #ifdef MPOOL_CHECK
     int in_pool;
 #endif
 } opi_hdr_t;
 
 
-//static __thread opi_hdr_t* g_opi_buf_head = NULL;
-
 typedef struct mpool_t {
     opi_hdr_t* head;
-    int buf_count;
-#if 0
+    //int buf_count;
+
 #ifdef USE_MCS
     mcs_lock_t lock;
 #else
     lock_t lock;
-#endif
 #endif
 } mpool_t;
 
@@ -69,14 +68,12 @@ void OPI_Init(void)
 {
     //Initialize the local memory pool.
     g_mpool.head = NULL;
-    g_mpool.buf_count = 0;
+    //g_mpool.buf_count = 0;
 
-#if 0
 #ifdef USE_MCS
     MCS_LOCK_INIT(&g_mpool.lock);
 #else
     LOCK_INIT(&g_mpool.lock, 0);
-#endif
 #endif
 }
 
@@ -108,13 +105,11 @@ int OPI_Alloc(void** ptr, size_t length)
     opi_hdr_t* cur;
     opi_hdr_t* prev;
 
-#if 0
 #ifdef USE_MCS
     mcs_qnode_t q;
     MCS_LOCK_ACQUIRE(&mp->lock, &q);
 #else
     LOCK_SET(&mp->lock);
-#endif
 #endif
 
     for(prev = NULL, cur = mp->head; cur != NULL;
@@ -128,37 +123,33 @@ int OPI_Alloc(void** ptr, size_t length)
                 prev->next = cur->next;
             }
 
-#if 0
 #ifdef USE_MCS
                 MCS_LOCK_RELEASE(&mp->lock, &q);
 #else
                 LOCK_CLEAR(&mp->lock);
-#endif
 #endif
 
             //printf("%p reuse addr %p length %llu\n", mp, cur, (uint64_t)length); fflush(stdout);
 #ifdef MPOOL_CHECK
             cur->in_pool = 0;
 #endif
-            mp->buf_count--;
+            //mp->buf_count--;
             *ptr = HDR_TO_PTR(cur);
             return MPI_SUCCESS;
         }
     }
 
-#if 0
 #ifdef USE_MCS
         MCS_LOCK_RELEASE(&mp->lock, &q);
 #else
         LOCK_CLEAR(&mp->lock);
-#endif
 #endif
 
     //If no existing allocation is found, allocate a new one.
     opi_hdr_t* hdr = (opi_hdr_t*)memalign(ALIGNMENT, length + ALIGNMENT);
 
     hdr->length = length;
-    //hdr->mpool = mp;
+    hdr->mpool = mp;
 
 #ifdef MPOOL_CHECK
     hdr->in_pool = 0;
@@ -177,9 +168,9 @@ int OPI_Free(void** ptr)
 {
     FULL_PROFILE_STOP(MPI_Other);
     FULL_PROFILE_START(OPI_Free);
-    mpool_t* mp = &g_mpool;
+    //mpool_t* mp = &g_mpool;
     opi_hdr_t* hdr = PTR_TO_HDR((*ptr));
-    //mpool_t* mp = hdr->mpool;
+    mpool_t* mp = hdr->mpool;
 
     //printf("%p free ptr %p hdr %p length %llu\n", mp, ptr, HDR_TO_PTR(hdr), (uint64_t)hdr->length);
     //fflush(stdout);
@@ -195,15 +186,14 @@ int OPI_Free(void** ptr)
 #endif
 
 
-#if 0
 #ifdef USE_MCS
     mcs_qnode_t q;
     MCS_LOCK_ACQUIRE(&mp->lock, &q);
 #else
     LOCK_SET(&mp->lock);
 #endif
-#endif
 
+#if 0
     if(unlikely(mp->buf_count >= MAX_BUF_COUNT)) {
         //Remove old buffers.
         opi_hdr_t* cur = mp->head;
@@ -224,16 +214,15 @@ int OPI_Free(void** ptr)
     } else{
         mp->buf_count++;
     }
+#endif
 
     hdr->next = mp->head;
     mp->head = hdr;
 
-#if 0
 #ifdef USE_MCS
     MCS_LOCK_RELEASE(&mp->lock, &q);
 #else
     LOCK_CLEAR(&mp->lock);
-#endif
 #endif
 
     *ptr = NULL;

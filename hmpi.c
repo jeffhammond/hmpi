@@ -58,6 +58,7 @@ static int SRC_TAG_ANY = MPI_ANY_TAG; //Filled in during init
 #include <string.h>
 #include "lock.h"
 
+//#define MALLOC(t, s) (t*)__builtin_assume_aligned(memalign(64, sizeof(t) * s), 64)
 #define MALLOC(t, s) (t*)memalign(64, sizeof(t) * s)
 
 //Wrappers to GCC/ICC extensions
@@ -65,22 +66,23 @@ static int SRC_TAG_ANY = MPI_ANY_TAG; //Filled in during init
 #define likely(x)       __builtin_expect((x),1)
 #define unlikely(x)     __builtin_expect((x),0)
 
-#define PREFETCH(x)
-//#define PREFETCH(x) __builtin_prefetch(x)
-
 
 
 #ifdef FULL_PROFILE
-//PROFILE_DECLARE();
+PROFILE_DECLARE();
+#define FULL_PROFILE_INIT(v) PROFILE_INIT(v)
 #define FULL_PROFILE_VAR(v) PROFILE_VAR(v)
 #define FULL_PROFILE_START(v) PROFILE_START(v)
 #define FULL_PROFILE_STOP(v) PROFILE_STOP(v)
-#define FULL_PROFILE_SHOW_REDUCE(v) PROFILE_SHOW_REDUCE(v)
+#define FULL_PROFILE_RESET(v) PROFILE_RESET(v)
+#define FULL_PROFILE_SHOW(v) PROFILE_SHOW(v)
 #else
+#define FULL_PROFILE_INIT(v)
 #define FULL_PROFILE_VAR(v)
 #define FULL_PROFILE_START(v)
 #define FULL_PROFILE_STOP(v)
-#define FULL_PROFILE_SHOW_REDUCE(v)
+#define FULL_PROFILE_RESET(v)
+#define FULL_PROFILE_SHOW(v)
 #endif
 
 FULL_PROFILE_VAR(MPI_Other);
@@ -107,6 +109,11 @@ FULL_PROFILE_VAR(MPI_Alltoall);
 
 
 #ifdef ENABLE_OPI
+FULL_PROFILE_VAR(OPI_Alloc);
+FULL_PROFILE_VAR(OPI_Free);
+FULL_PROFILE_VAR(OPI_Give);
+FULL_PROFILE_VAR(OPI_Take);
+
 void OPI_Init(void);
 void OPI_Finalize(void);
 #endif
@@ -119,6 +126,18 @@ int g_rank=-1;                      //Underlying MPI rank for this node
 int g_size=-1;                      //Underlying MPI world size
 __thread int g_hmpi_rank=-1;        //HMPI rank for this thread
 __thread int g_tl_tid=-1;           //HMPI node-local rank for this thread (tid)
+
+typedef struct local_info_t {
+    int g_ncores;                //Cores per socket
+    int g_nsockets;              //Sockets per node
+    int g_nthreads;                  //Threads per node
+    int g_rank;                      //Underlying MPI rank for this node
+    int g_size;                      //Underlying MPI world size
+    int g_hmpi_rank;        //HMPI rank for this thread
+    int g_tl_tid;           //HMPI node-local rank for this thread (tid)
+} local_info_t;
+
+static __thread local_info_t* local_info;
 
 HMPI_Comm HMPI_COMM_WORLD;
 
@@ -216,7 +235,6 @@ typedef struct HMPI_Request_list {
     HMPI_Item* tail;
 
 #ifdef USE_MCS 
-#warning "mcs"
     mcs_lock_t lock;
 #else
     lock_t lock;
@@ -232,6 +250,7 @@ static __thread HMPI_Request_list g_tl_send_reqs;   //Receiver-local send Q
 static __thread HMPI_Item* g_free_reqs = NULL;
 
 
+//TODO - Maybe send reqs should be allocated on the receiver.  How?
 static inline HMPI_Request acquire_req(void)
 {
     HMPI_Item* item = g_free_reqs;
@@ -414,7 +433,6 @@ static inline HMPI_Request match_recv(HMPI_Request_list* req_list, HMPI_Request 
 #else
         if(req->proc == proc && (req->tag == tag || tag == MPI_ANY_TAG)) {
 #endif
-            //PREFETCH(req->buf);
             remove_send_req(req_list, prev, cur);
 
             //recv_req->proc = req->proc; //Not necessary, no ANY_SRC
@@ -454,7 +472,6 @@ static inline HMPI_Request match_take(HMPI_Request_list* req_list, HMPI_Request 
 #else
         if(req->proc == proc && (req->tag == tag || tag == MPI_ANY_TAG)) {
 #endif
-            //PREFETCH(req->buf);
             remove_send_req(req_list, prev, cur);
 
             //recv_req->proc = req->proc; //Not necessary, no ANY_SRC
@@ -485,7 +502,6 @@ static inline HMPI_Request match_recv_any(HMPI_Request_list* req_list, HMPI_Requ
         req = (HMPI_Request)cur;
 
         if(req->tag == tag || tag == MPI_ANY_TAG) {
-            //PREFETCH(req->buf);
             remove_send_req(req_list, prev, cur);
 
             recv_req->proc = req->proc;
@@ -506,7 +522,6 @@ static inline int match_probe(int source, int tag, HMPI_Comm comm, HMPI_Request*
     update_send_reqs(req_list, g_tl_my_send_reqs);
 
     for(cur = req_list->head.next; cur != NULL; cur = cur->next) {
-        PREFETCH(cur->next);
         req = (HMPI_Request)cur;
 
         //The send request can't have ANY_SOURCE or ANY_TAG,
@@ -531,9 +546,13 @@ static inline void update_reqstat(HMPI_Request req, int stat) {
 }
 
 
+#if 0
 static inline int get_reqstat(const HMPI_Request req) {
   return req->stat;
 }
+#endif
+
+#define get_reqstat(req) req->stat
 
 
 int __attribute__((weak)) tmain(int argc, char** argv);
@@ -562,13 +581,6 @@ void* trampoline(void* tid) {
 
 #ifdef PIN_WITH_PTHREAD
     {
-    //TODO - consider using this in HMPI
-#if 0
-    PAPI_hw_info_t* info = PAPI_get_hardware_info();
-
-    printf("PAPI ncpu %d nnodes %d totalcpus %d\n", info->ncpu, info->nnodes, info->totalcpus);
-#endif
-
         int core = rank % (g_ncores * g_nsockets);
         int idx;
 
@@ -638,7 +650,17 @@ void* trampoline(void* tid) {
     g_msgs_tail = &g_msgs_head;
 #endif
 
-    PROFILE_INIT(g_tl_tid);
+    //Copy global vars to local mem
+    local_info = MALLOC(local_info_t, 1);
+    local_info->g_ncores = g_ncores;
+    local_info->g_nsockets = g_nsockets;
+    local_info->g_nthreads = g_nthreads;
+    local_info->g_rank = g_rank;
+    local_info->g_size = g_size;
+    local_info->g_hmpi_rank = g_hmpi_rank;
+    local_info->g_tl_tid = g_tl_tid;
+
+    FULL_PROFILE_INIT(g_tl_tid);
 
     // Don't head off to user land until all threads are ready 
 
@@ -653,6 +675,7 @@ void* trampoline(void* tid) {
     OPI_Init();
 #endif
 
+    FULL_PROFILE_RESET(MPI_Other);
     FULL_PROFILE_START(MPI_Other);
 
     // call user function
@@ -715,6 +738,13 @@ int HMPI_Init(int *argc, char ***argv, int (*start_routine)(int argc, char** arg
 
   printf("threads %d cores %d sockets %d\n", g_nthreads, g_ncores, g_nsockets);
   fflush(stdout);
+
+    //TODO - consider using this in HMPI
+#if 0
+    PAPI_hw_info_t* info = PAPI_get_hardware_info();
+
+    printf("PAPI ncpu %d nnodes %d totalcpus %d\n", info->ncpu, info->nnodes, info->totalcpus);
+#endif
 
   HMPI_COMM_WORLD = (HMPI_Comm_info*)MALLOC(HMPI_Comm_info, 1);
   HMPI_COMM_WORLD->mpicomm = MPI_COMM_WORLD;
@@ -787,30 +817,29 @@ int HMPI_Finalize()
 {
     FULL_PROFILE_STOP(MPI_Other);
     FULL_PROFILE_START(MPI_Other);
-    FULL_PROFILE_SHOW_REDUCE(MPI_Isend);
-    FULL_PROFILE_SHOW_REDUCE(MPI_Irecv);
-    FULL_PROFILE_SHOW_REDUCE(MPI_Test);
-    FULL_PROFILE_SHOW_REDUCE(MPI_Testall);
-    FULL_PROFILE_SHOW_REDUCE(MPI_Wait);
-    FULL_PROFILE_SHOW_REDUCE(MPI_Waitall);
-    FULL_PROFILE_SHOW_REDUCE(MPI_Waitany);
-    FULL_PROFILE_SHOW_REDUCE(MPI_Iprobe);
+    FULL_PROFILE_SHOW(MPI_Isend);
+    FULL_PROFILE_SHOW(MPI_Irecv);
+    FULL_PROFILE_SHOW(MPI_Test);
+    FULL_PROFILE_SHOW(MPI_Testall);
+    FULL_PROFILE_SHOW(MPI_Wait);
+    FULL_PROFILE_SHOW(MPI_Waitall);
+    FULL_PROFILE_SHOW(MPI_Waitany);
+    FULL_PROFILE_SHOW(MPI_Iprobe);
 
-    FULL_PROFILE_SHOW_REDUCE(MPI_Barrier);
-    FULL_PROFILE_SHOW_REDUCE(MPI_Reduce);
-    FULL_PROFILE_SHOW_REDUCE(MPI_Allreduce);
-    FULL_PROFILE_SHOW_REDUCE(MPI_Scan);
-    FULL_PROFILE_SHOW_REDUCE(MPI_Bcast);
-    FULL_PROFILE_SHOW_REDUCE(MPI_Scatter);
-    FULL_PROFILE_SHOW_REDUCE(MPI_Gather);
-    FULL_PROFILE_SHOW_REDUCE(MPI_Gatherv);
-    FULL_PROFILE_SHOW_REDUCE(MPI_Allgather);
-    FULL_PROFILE_SHOW_REDUCE(MPI_Allgatherv);
-    FULL_PROFILE_SHOW_REDUCE(MPI_Alltoall);
+    FULL_PROFILE_SHOW(MPI_Barrier);
+    FULL_PROFILE_SHOW(MPI_Reduce);
+    FULL_PROFILE_SHOW(MPI_Allreduce);
+    FULL_PROFILE_SHOW(MPI_Scan);
+    FULL_PROFILE_SHOW(MPI_Bcast);
+    FULL_PROFILE_SHOW(MPI_Scatter);
+    FULL_PROFILE_SHOW(MPI_Gather);
+    FULL_PROFILE_SHOW(MPI_Gatherv);
+    FULL_PROFILE_SHOW(MPI_Allgather);
+    FULL_PROFILE_SHOW(MPI_Allgatherv);
+    FULL_PROFILE_SHOW(MPI_Alltoall);
 
-    FULL_PROFILE_SHOW_REDUCE(MPI_Other);
+    FULL_PROFILE_SHOW(MPI_Other);
 
-    fflush(stdout);
     HMPI_Barrier(HMPI_COMM_WORLD);
 
 #if 0
@@ -1084,7 +1113,6 @@ static inline void HMPI_Progress(HMPI_Request_list* local_list, HMPI_Request_lis
     // prev pointer.
     for(prev = &g_recv_reqs_head, cur = prev->next;
             cur != NULL; cur = cur->next) {
-        PREFETCH(cur->next);
         req = (HMPI_Request)cur;
 
         if(likely(req->type == HMPI_RECV)) {
@@ -1356,6 +1384,7 @@ int HMPI_Testall(int count, HMPI_Request *requests, int* flag, HMPI_Status *stat
 int HMPI_Wait(HMPI_Request *request, HMPI_Status *status) {
     FULL_PROFILE_STOP(MPI_Other);
     FULL_PROFILE_START(MPI_Wait);
+
     HMPI_Request req = *request;
 
 #ifdef DEBUG
@@ -1798,7 +1827,6 @@ int HMPI_Irecv(void* buf, int count, MPI_Datatype datatype, int source, int tag,
 
   int source_mpi_rank = source / g_nthreads;
   if(unlikely(source == MPI_ANY_SOURCE)) {
-    // test both layers and pick first 
     req->type = HMPI_RECV_ANY_SOURCE;
 
     add_recv_req(req);
