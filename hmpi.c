@@ -37,6 +37,11 @@
 #include <string.h>
 #include "lock.h"
 
+#ifdef ENABLE_PSM
+#warning "PSM ENABLED"
+#include "libpsm.h"
+#endif
+
 //#define MALLOC(t, s) (t*)__builtin_assume_aligned(memalign(64, sizeof(t) * s), 64)
 #define MALLOC(t, s) (t*)memalign(64, sizeof(t) * s)
 
@@ -73,6 +78,10 @@ FULL_PROFILE_VAR(MPI_Wait);
 FULL_PROFILE_VAR(MPI_Waitall);
 FULL_PROFILE_VAR(MPI_Waitany);
 FULL_PROFILE_VAR(MPI_Iprobe);
+
+FULL_PROFILE_VAR(post_send);
+FULL_PROFILE_VAR(post_recv);
+FULL_PROFILE_VAR(poll);
 
 FULL_PROFILE_VAR(MPI_Barrier);
 FULL_PROFILE_VAR(MPI_Reduce);
@@ -329,6 +338,7 @@ static inline HMPI_Request match_recv(HMPI_Request_list* req_list, HMPI_Request 
 
 
 //Match for takes
+#ifdef ENABLE_OPI
 static inline HMPI_Request match_take(HMPI_Request_list* req_list, HMPI_Request recv_req)
 {
     HMPI_Item* cur;
@@ -345,12 +355,8 @@ static inline HMPI_Request match_take(HMPI_Request_list* req_list, HMPI_Request 
             cur != NULL; prev = cur, cur = cur->next) {
         req = (HMPI_Request)cur;
 
-#ifdef ENABLE_OPI
         if(req->type == OPI_GIVE &&
                 req->proc == proc && (req->tag == tag || tag == MPI_ANY_TAG)) {
-#else
-        if(req->proc == proc && (req->tag == tag || tag == MPI_ANY_TAG)) {
-#endif
             remove_send_req(req_list, prev, cur);
 
             //recv_req->proc = req->proc; //Not necessary, no ANY_SRC
@@ -365,6 +371,7 @@ static inline HMPI_Request match_take(HMPI_Request_list* req_list, HMPI_Request 
 
     return HMPI_REQUEST_NULL;
 }
+#endif
 
 
 //Match for receives with ANY_SOURCE.
@@ -381,6 +388,14 @@ static inline HMPI_Request match_recv_any(HMPI_Request_list* req_list, HMPI_Requ
         req = (HMPI_Request)cur;
 
         if(req->tag == tag || tag == MPI_ANY_TAG) {
+#ifdef ENABLE_PSM
+            //Before doing anything, try to cancel the PSM receive.
+            if(!cancel(&req->u.remote.req)) {
+                //Also matched a PSM recv!
+                return HMPI_REQUEST_NULL;
+            }
+#endif
+
             remove_send_req(req_list, prev, cur);
 
             recv_req->proc = req->proc;
@@ -576,8 +591,13 @@ int HMPI_Init(int *argc, char ***argv, int (*start_routine)(int argc, char** arg
   int provided;
   long int thr;
 
+  //TODO - is this necessary with PSM used for comms?
   MPI_Init_thread(argc, argv, MPI_THREAD_MULTIPLE, &provided);
   assert(MPI_THREAD_MULTIPLE == provided);
+
+#ifdef ENABLE_PSM
+  libpsm_init();
+#endif
 
   g_argc = *argc;
   g_argv = *argv; 
@@ -620,6 +640,13 @@ int HMPI_Init(int *argc, char ***argv, int (*start_routine)(int argc, char** arg
   MPI_Comm_rank(MPI_COMM_WORLD, &g_rank);
   MPI_Comm_size(MPI_COMM_WORLD, &g_size);
 
+#ifndef ENABLE_PSM
+  if(g_size > 1) {
+      printf("HMPI wasn't compiled with any multi-node support!\n");
+      MPI_Abort(MPI_COMM_WORLD, 0);
+  }
+#endif
+
   //Bluegene P/Q has a 1-thread/core limit, so this thread will run as rank 0.
   for(thr=1; thr < nthreads; thr++) {
     //Create the thread
@@ -656,6 +683,9 @@ int HMPI_Finalize()
     FULL_PROFILE_SHOW(MPI_Waitall);
     FULL_PROFILE_SHOW(MPI_Waitany);
     FULL_PROFILE_SHOW(MPI_Iprobe);
+    FULL_PROFILE_SHOW(poll);
+    FULL_PROFILE_SHOW(post_send);
+    FULL_PROFILE_SHOW(post_recv);
 
     FULL_PROFILE_SHOW(MPI_Barrier);
     FULL_PROFILE_SHOW(MPI_Reduce);
@@ -835,14 +865,6 @@ static inline void HMPI_Complete_take(HMPI_Request recv_req, HMPI_Request send_r
     //Mark send and receive requests done
     update_reqstat(send_req, HMPI_REQ_COMPLETE);
     update_reqstat(recv_req, HMPI_REQ_COMPLETE);
-
-#ifdef DEBUG
-    printf("%d completed local-level TAKE buf %p size %lu source %d tag %d\n",
-            g_hmpi_rank, recv_req->buf, recv_req->size, recv_req->proc, recv_req->tag);
-    printf("%d completed local-level GIVE buf %p size %lu dest %d tag %d\n",
-            send_req->proc, send_req->buf, send_req->size, g_hmpi_rank, send_req->tag);
-    fflush(stdout);
-#endif
 }
 #endif
 
@@ -850,6 +872,22 @@ static inline void HMPI_Complete_take(HMPI_Request recv_req, HMPI_Request send_r
 //For req->type == MPI_SEND || req->type == MPI_RECV
 static inline int HMPI_Progress_mpi(HMPI_Request req)
 {
+#ifdef ENABLE_PSM
+    libpsm_status_t status;
+
+    if(test(&req->u.remote.req, &status)) {
+        //ANY_SOURCE isn't possible here, so proc is already correct.
+        req->size = status.nbytes;
+        req->tag = TAG_GET_TAG(status.msg_tag);
+
+        update_reqstat(req, HMPI_REQ_COMPLETE);
+        return 1;
+    }
+
+    return 0; 
+
+#else
+
     int flag;
     MPI_Status status;
 
@@ -868,18 +906,8 @@ static inline int HMPI_Progress_mpi(HMPI_Request req)
         update_reqstat(req, HMPI_REQ_COMPLETE);
     }
 
-#ifdef DEBUG
-    if(flag) {
-        if(req->type == MPI_SEND) {
-            printf("[%d] completed MPI-level SEND %d proc %d tag %d\n", g_hmpi_rank, req->type, req->proc, req->tag);
-        } else {
-            printf("[%d] completed MPI-level RECV %d proc %d tag %d\n", g_hmpi_rank, req->type, req->proc, req->tag);
-        }
-        fflush(stdout);
-    }
-#endif
-
     return flag;
+#endif
 }
 
 
@@ -888,6 +916,15 @@ static inline void HMPI_Progress(HMPI_Request_list* local_list, HMPI_Request_lis
     HMPI_Item* cur;
     HMPI_Item* prev;
     HMPI_Request req;
+
+#ifdef ENABLE_PSM
+    //PSM's test doesn't make any progress, so poll here.
+    if(g_size > 1) {
+        FULL_PROFILE_START(poll);
+        poll();
+        FULL_PROFILE_STOP(poll);
+    }
+#endif
 
     //With a separate Q, this will need to be duplicated
     update_send_reqs(local_list, shared_list);
@@ -929,6 +966,21 @@ static inline void HMPI_Progress(HMPI_Request_list* local_list, HMPI_Request_lis
                 remove_recv_req(prev, cur);
                 continue; //Whenever we remove a req, dont update prev
             } else if(g_size > 1) {
+#ifdef ENABLE_PSM
+                libpsm_status_t status;
+
+                if(test(&req->u.remote.req, &status)) {
+                    //PSM receive matched! handle it
+                    //TODO - can check for truncation here: nbytes == msg_length
+                    req->size = status.nbytes;
+                    req->proc = TAG_GET_RANK(status.msg_tag);
+                    req->tag = TAG_GET_TAG(status.msg_tag);
+
+                    remove_recv_req(prev, cur);
+                    update_reqstat(req, HMPI_REQ_COMPLETE);
+                    continue;
+                }
+#endif
 
             }
         }
@@ -1397,13 +1449,15 @@ int HMPI_Isend(void* buf, int count, MPI_Datatype datatype, int dest, int tag, H
     } else {
         req->type = MPI_SEND;
 
-        //TODO - off node support
+#ifdef ENABLE_PSM
+        int target_mpi_thread = dest % nthreads;
 
-        //int target_thread = dest % nthreads;
-        //printf("%d MPI send to rank %d (%d:%d) tag %d count %d size %d\n", hmpi_rank, dest, target_mpi_rank, target_thread, tag, count, req->size);
-        //fflush(stdout);
-
-        //MPI_Isend(buf, count, datatype, target_mpi_rank, tag, SRC_DST_COMM(g_tl_tid, target_thread), &req->u.remote.req);
+        FULL_PROFILE_START(post_send);
+        post_send(buf, size,
+                BUILD_TAG(hmpi_rank, target_mpi_thread, tag),
+                target_mpi_rank, &req->u.remote.req);
+        FULL_PROFILE_STOP(post_send);
+#endif
     }
 
     FULL_PROFILE_STOP(MPI_Isend);
@@ -1472,6 +1526,20 @@ int HMPI_Irecv(void* buf, int count, MPI_Datatype datatype, int source, int tag,
   if(unlikely(source == MPI_ANY_SOURCE)) {
     req->type = HMPI_RECV_ANY_SOURCE;
 
+#ifdef ENABLE_PSM
+    //Post a PSM-level receive, we can cancel it if we get a local match.
+    uint64_t tagsel = TAGSEL_ANY_SRC;
+
+    if(unlikely(tag == MPI_ANY_TAG)) {
+        tagsel ^= TAGSEL_ANY_TAG;
+    }
+
+    FULL_PROFILE_START(post_recv);
+    post_recv(buf, count * type_size, BUILD_TAG(source, g_tl_tid, tag),
+            tagsel, (uint32_t)-1, &req->u.remote.req);
+    FULL_PROFILE_STOP(post_recv);
+#endif
+
     add_recv_req(req);
   } else if(source_mpi_rank == g_rank) { //Recv on-node, but not ANY_SOURCE
     // recv from other thread in my process
@@ -1480,11 +1548,20 @@ int HMPI_Irecv(void* buf, int count, MPI_Datatype datatype, int source, int tag,
     add_recv_req(req);
   } else { //Recv off-node, but not ANY_SOURCE
     //printf("%d MPI recv buf %p count %d src %d (%d) tag %d req %p\n", g_hmpi_rank, buf, count, source, source_mpi_rank, tag, req);
-
-    //TODO - off-node support
-    //MPI_Irecv(buf, count, datatype, source_mpi_rank, tag, SRC_DST_COMM(source % g_nthreads, g_tl_tid), &req->u.remote.req);
-
     req->type = MPI_RECV;
+
+#ifdef ENABLE_PSM
+    uint64_t tagsel = TAGSEL_P2P;
+    if(unlikely(tag == MPI_ANY_TAG)) {
+        tagsel = TAGSEL_ANY_TAG;
+    }
+
+    FULL_PROFILE_START(post_recv);
+    post_recv(buf, count * type_size, BUILD_TAG(source, g_tl_tid, tag),
+            tagsel, source_mpi_rank, &req->u.remote.req);
+    FULL_PROFILE_STOP(post_recv);
+
+#endif
   }
 
     FULL_PROFILE_STOP(MPI_Irecv);

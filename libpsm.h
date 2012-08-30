@@ -18,7 +18,7 @@
 
 #define TAGSEL_P2P 0xFFFFFFFFFFFFFFFFULL //Normal pt2pt messages
 #define TAGSEL_ANY_SRC 0x00000000FFFFFFFFULL //MPI_ANY_SOURCE
-#define TAGSEL_ANY_TAG 0xFFFFFFFFFF000000ULL //MPI_ANY_SOURCE
+#define TAGSEL_ANY_TAG 0xFFFFFFFFFF000000ULL //MPI_ANY_TAG
 
 //64bits total for the PSM tag, split into 32 for the rank, 16 for tag, and 16 for comm.
 //TODO - I need to identify both the src and dest here.
@@ -74,7 +74,8 @@ typedef struct peer_t
 } peer_t;
 
 
-extern lock_t libpsm_lock;      //Used to protect ANY_SRC Iprobe/Recv sequence
+//extern lock_t libpsm_lock;      //Used to protect ANY_SRC Iprobe/Recv sequence
+extern mcs_lock_t libpsm_lock;
 extern peer_t* libpsm_peers;
 extern psm_ep_t libpsm_ep;
 extern psm_mq_t libpsm_mq;
@@ -91,6 +92,7 @@ void libpsm_connect2(uint32_t rank);     //External connect
 
 static inline void post_recv(void* buf, uint32_t len, uint64_t tag, uint64_t tagsel, uint32_t rank, libpsm_req_t* req)
 {
+#if 0
     if(likely(rank != (uint32_t)-1)) {
         peer_t* peer = &libpsm_peers[rank];
 
@@ -98,10 +100,14 @@ static inline void post_recv(void* buf, uint32_t len, uint64_t tag, uint64_t tag
             libpsm_connect(peer);
         }
     }
+#endif
 
-    LOCK_SET(&libpsm_lock);
+    //LOCK_SET(&libpsm_lock);
+    mcs_qnode_t q;
+    MCS_LOCK_ACQUIRE(&libpsm_lock, &q);
     psm_mq_irecv(libpsm_mq, tag, tagsel, 0, buf, len, NULL, req);
-    LOCK_CLEAR(&libpsm_lock);
+    //LOCK_CLEAR(&libpsm_lock);
+    MCS_LOCK_RELEASE(&libpsm_lock, &q);
 }
 
 
@@ -110,41 +116,55 @@ static inline void post_send(void* buf, uint32_t len, uint64_t tag, uint32_t ran
 {
     peer_t* peer = &libpsm_peers[rank];
 
+#if 0
     while(unlikely(peer->conn_state != CONN_CONNECTED)) {
         libpsm_connect(peer);
     }
+#endif
     
-    LOCK_SET(&libpsm_lock);
+    mcs_qnode_t q;
+    MCS_LOCK_ACQUIRE(&libpsm_lock, &q);
+    //LOCK_SET(&libpsm_lock);
     psm_mq_isend(libpsm_mq, peer->epaddr, 0, tag, buf, len, NULL, req);
-    LOCK_CLEAR(&libpsm_lock);
+    //LOCK_CLEAR(&libpsm_lock);
+    MCS_LOCK_RELEASE(&libpsm_lock, &q);
 }
 
 
 static inline int cancel(libpsm_req_t* req)
 {
-    LOCK_SET(&libpsm_lock);
+    mcs_qnode_t q;
+    MCS_LOCK_ACQUIRE(&libpsm_lock, &q);
+    //LOCK_SET(&libpsm_lock);
     int ret = psm_mq_cancel(req);
     if(ret == PSM_OK) {
         psm_mq_test(req, NULL);
     }
-    LOCK_CLEAR(&libpsm_lock);
+    //LOCK_CLEAR(&libpsm_lock);
+    MCS_LOCK_RELEASE(&libpsm_lock, &q);
     return ret == PSM_OK;
 }
 
 
 static inline void wait(libpsm_req_t* req, libpsm_status_t* status)
 {
-    LOCK_SET(&libpsm_lock);
+    mcs_qnode_t q;
+    MCS_LOCK_ACQUIRE(&libpsm_lock, &q);
+    //LOCK_SET(&libpsm_lock);
     psm_mq_wait(req, status);
-    LOCK_CLEAR(&libpsm_lock);
+    //LOCK_CLEAR(&libpsm_lock);
+    MCS_LOCK_RELEASE(&libpsm_lock, &q);
 }
 
 
 static inline int test(libpsm_req_t* req, libpsm_status_t* status)
 {
-    LOCK_SET(&libpsm_lock);
+    mcs_qnode_t q;
+    MCS_LOCK_ACQUIRE(&libpsm_lock, &q);
+    //LOCK_SET(&libpsm_lock);
     int ret = psm_mq_test(req, status) == PSM_OK;
-    LOCK_CLEAR(&libpsm_lock);
+    //LOCK_CLEAR(&libpsm_lock);
+    MCS_LOCK_RELEASE(&libpsm_lock, &q);
     return ret;
 }
 
@@ -153,11 +173,18 @@ static inline void poll(void)
     //TODO - this sucks, it results in an MPI_Iprobe.
     //Is there a better way to set up connections?
     //Can we use slurm OOB?
-    libpsm_connect(NULL);
 
-    LOCK_SET(&libpsm_lock);
-    psm_poll(libpsm_ep);
-    LOCK_CLEAR(&libpsm_lock);
+    //TODO - idea -- try the lock, if it is already acquired, skip polling.
+    //libpsm_connect(NULL);
+
+    //LOCK_SET(&libpsm_lock);
+    //if(LOCK_TRY(&libpsm_lock)) {
+    mcs_qnode_t q;
+    MCS_LOCK_ACQUIRE(&libpsm_lock, &q);
+        psm_poll(libpsm_ep);
+        //LOCK_CLEAR(&libpsm_lock);
+    MCS_LOCK_RELEASE(&libpsm_lock, &q);
+    //}
 }
 
 

@@ -210,6 +210,10 @@ int HMPI_Allreduce(void *sendbuf, void *recvbuf, int count, MPI_Datatype datatyp
                     (void*)cur->buf, op, datatype, count);
         }
 
+        if(g_size > 1) {
+            MPI_Allreduce(MPI_IN_PLACE, recvbuf, count, datatype, op, comm->mpicomm);
+        }
+
         //Signal everyone else that they can copy out.
         //TODO - can something smarter be done?
         barrier(&comm->barr, g_tl_tid);
@@ -241,7 +245,6 @@ int HMPI_Allreduce(void *sendbuf, void *recvbuf, int count, MPI_Datatype datatyp
 }
 
 #else
-
 int HMPI_Allreduce(void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype, MPI_Op op, HMPI_Comm comm)
 {
     FULL_PROFILE_STOP(MPI_Other);
@@ -288,10 +291,6 @@ int HMPI_Allreduce(void *sendbuf, void *recvbuf, int count, MPI_Datatype datatyp
         for(i=1; i<g_nthreads; ++i) {
             NBC_Operation(recvbuf, recvbuf,
                     (void*)comm->sbuf[i], op, datatype, count);
-        }
-
-        if(g_size > 1) {
-            MPI_Allreduce(MPI_IN_PLACE, recvbuf, count, datatype, op, comm->mpicomm);
         }
 
         //barrier_cb(&comm->barr, g_tl_tid, barrier_iprobe);

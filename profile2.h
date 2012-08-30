@@ -169,7 +169,6 @@ static void PROFILE_CALIBRATE()
             MPI_UNSIGNED_LONG_LONG, MPI_MIN, MPI_COMM_WORLD);
 #endif
 
-    printf("min %lu\n", min);
 #if _PROFILE_HMPI == 1
     if(rank == 0)
 #endif

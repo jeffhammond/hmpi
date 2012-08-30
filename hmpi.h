@@ -5,6 +5,9 @@
 #include <assert.h>
 #include "barrier.h"
 #include "lock.h"
+#ifdef ENABLE_PSM
+#include "libpsm.h"
+#endif
 
 #ifdef __cplusplus
 extern "C" {
@@ -110,7 +113,11 @@ typedef struct HMPI_Request_info {
         } local /*__attribute__ ((packed))*/;
         struct {
             //Used only for off-node messages via underlying MPI
+#ifdef ENABLE_PSM
+            libpsm_req_t req;
+#else
             MPI_Request req;
+#endif
         } remote /*__attribute__ ((packed))*/;
     } u;
 } HMPI_Request_info;

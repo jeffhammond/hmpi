@@ -4,6 +4,11 @@
 #include <assert.h>
 #include "libpsm.h"
 
+
+#ifdef MVAPICH2_VERSION
+#error "HMPI-PSM won't work with MVAPICH2, try MPICH2 instead"
+#endif
+
 #define MPI_OOB_TAG 44648
 #define TIMEOUT 10000000000
 
@@ -30,7 +35,8 @@ typedef struct peer_t
 } peer_t;
 #endif
 
-lock_t libpsm_lock;      //Protects all PSM calls
+//lock_t libpsm_lock;      //Protects all PSM calls
+mcs_lock_t libpsm_lock;      //Protects all PSM calls
 lock_t libpsm_conn_lock; //Protects the connectino mechanism
 
 int libpsm_mpi_rank;
@@ -51,7 +57,8 @@ void libpsm_init(void)
     int i;
     psm_error_t err;
 
-    LOCK_INIT(&libpsm_lock, 0);
+    //LOCK_INIT(&libpsm_lock, 0);
+    MCS_LOCK_INIT(&libpsm_lock);
     LOCK_INIT(&libpsm_conn_lock, 0);
     
     MPI_Comm_rank(MPI_COMM_WORLD, &libpsm_mpi_rank);
@@ -128,6 +135,26 @@ void libpsm_init(void)
         printf("%d ERROR psm_mq_init\n", libpsm_mpi_rank);
         exit(-1);
     }
+
+    MPI_Barrier(MPI_COMM_WORLD);
+
+    //Fully connect right now.
+    for(i = 1; i < size; i++) {
+        printf("%d starting connect to %d\n", libpsm_mpi_rank, (libpsm_mpi_rank + i) % size);
+        fflush(stdout);
+        libpsm_connect(&libpsm_peers[(libpsm_mpi_rank + i) % size]);
+    }
+
+    for(i = 1; i < size; i++) {
+        printf("%d waiting connect to %d\n", libpsm_mpi_rank, (libpsm_mpi_rank + i) % size);
+        fflush(stdout);
+        peer_t* peer = &libpsm_peers[(libpsm_mpi_rank + i) % size];
+        while(peer->conn_state != CONN_CONNECTED) {
+            libpsm_connect(peer);
+        }
+    }
+
+
 
     //Connect to self
 #if 0
@@ -206,10 +233,13 @@ void libpsm_connect(peer_t* peer)
                 st.MPI_SOURCE, MPI_OOB_TAG, MPI_COMM_WORLD, &st);
 
         //psm_error_register_handler(ep, PSM_ERRHANDLER_NOP);
-        LOCK_SET(&libpsm_lock);
+        //LOCK_SET(&libpsm_lock);
+        mcs_qnode_t q;
+        MCS_LOCK_ACQUIRE(&libpsm_lock, &q);
         err = psm_ep_connect(libpsm_ep, 1, &peer->epid, NULL, &err2,
                 &peer->epaddr, 0);
-        LOCK_CLEAR(&libpsm_lock);
+        //LOCK_CLEAR(&libpsm_lock);
+        MCS_LOCK_RELEASE(&libpsm_lock, &q);
 
         if(err != PSM_OK) {
             printf("%d ERROR psm_ep_connect %d %d\n", libpsm_mpi_rank, err, err2);
