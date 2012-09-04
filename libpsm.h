@@ -131,6 +131,21 @@ static inline void post_send(void* buf, uint32_t len, uint64_t tag, uint32_t ran
 }
 
 
+static inline void post_recv_nl(void* buf, uint32_t len, uint64_t tag, uint64_t tagsel, uint32_t rank, libpsm_req_t* req)
+{
+    psm_mq_irecv(libpsm_mq, tag, tagsel, 0, buf, len, NULL, req);
+}
+
+
+//Rank is the MPI/PSM level rank to send to.
+static inline void post_send_nl(void* buf, uint32_t len, uint64_t tag, uint32_t rank, libpsm_req_t* req)
+{
+    peer_t* peer = &libpsm_peers[rank];
+
+    psm_mq_isend(libpsm_mq, peer->epaddr, 0, tag, buf, len, NULL, req);
+}
+
+
 static inline int cancel(libpsm_req_t* req)
 {
     mcs_qnode_t q;
@@ -179,11 +194,13 @@ static inline void poll(void)
 
     //LOCK_SET(&libpsm_lock);
     //if(LOCK_TRY(&libpsm_lock)) {
+    if(libpsm_lock == NULL) {
     mcs_qnode_t q;
     MCS_LOCK_ACQUIRE(&libpsm_lock, &q);
         psm_poll(libpsm_ep);
         //LOCK_CLEAR(&libpsm_lock);
     MCS_LOCK_RELEASE(&libpsm_lock, &q);
+    }
     //}
 }
 

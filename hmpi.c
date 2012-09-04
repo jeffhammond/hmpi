@@ -79,10 +79,6 @@ FULL_PROFILE_VAR(MPI_Waitall);
 FULL_PROFILE_VAR(MPI_Waitany);
 FULL_PROFILE_VAR(MPI_Iprobe);
 
-FULL_PROFILE_VAR(post_send);
-FULL_PROFILE_VAR(post_recv);
-FULL_PROFILE_VAR(poll);
-
 FULL_PROFILE_VAR(MPI_Barrier);
 FULL_PROFILE_VAR(MPI_Reduce);
 FULL_PROFILE_VAR(MPI_Allreduce);
@@ -683,9 +679,6 @@ int HMPI_Finalize()
     FULL_PROFILE_SHOW(MPI_Waitall);
     FULL_PROFILE_SHOW(MPI_Waitany);
     FULL_PROFILE_SHOW(MPI_Iprobe);
-    FULL_PROFILE_SHOW(poll);
-    FULL_PROFILE_SHOW(post_send);
-    FULL_PROFILE_SHOW(post_recv);
 
     FULL_PROFILE_SHOW(MPI_Barrier);
     FULL_PROFILE_SHOW(MPI_Reduce);
@@ -920,9 +913,7 @@ static inline void HMPI_Progress(HMPI_Request_list* local_list, HMPI_Request_lis
 #ifdef ENABLE_PSM
     //PSM's test doesn't make any progress, so poll here.
     if(g_size > 1) {
-        FULL_PROFILE_START(poll);
         poll();
-        FULL_PROFILE_STOP(poll);
     }
 #endif
 
@@ -1452,11 +1443,9 @@ int HMPI_Isend(void* buf, int count, MPI_Datatype datatype, int dest, int tag, H
 #ifdef ENABLE_PSM
         int target_mpi_thread = dest % nthreads;
 
-        FULL_PROFILE_START(post_send);
         post_send(buf, size,
                 BUILD_TAG(hmpi_rank, target_mpi_thread, tag),
                 target_mpi_rank, &req->u.remote.req);
-        FULL_PROFILE_STOP(post_send);
 #endif
     }
 
@@ -1534,10 +1523,8 @@ int HMPI_Irecv(void* buf, int count, MPI_Datatype datatype, int source, int tag,
         tagsel ^= TAGSEL_ANY_TAG;
     }
 
-    FULL_PROFILE_START(post_recv);
     post_recv(buf, count * type_size, BUILD_TAG(source, g_tl_tid, tag),
             tagsel, (uint32_t)-1, &req->u.remote.req);
-    FULL_PROFILE_STOP(post_recv);
 #endif
 
     add_recv_req(req);
@@ -1556,10 +1543,8 @@ int HMPI_Irecv(void* buf, int count, MPI_Datatype datatype, int source, int tag,
         tagsel = TAGSEL_ANY_TAG;
     }
 
-    FULL_PROFILE_START(post_recv);
     post_recv(buf, count * type_size, BUILD_TAG(source, g_tl_tid, tag),
             tagsel, source_mpi_rank, &req->u.remote.req);
-    FULL_PROFILE_STOP(post_recv);
 
 #endif
   }

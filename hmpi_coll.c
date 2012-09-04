@@ -22,6 +22,9 @@
 #include <stdio.h>
 #include <string.h>
 #include "lock.h"
+#ifdef ENABLE_PSM
+#include "libpsm.h"
+#endif
 
 
 #ifdef FULL_PROFILE
@@ -56,12 +59,17 @@ extern __thread int g_tl_tid;       //HMPI node-local rank for this thread (tid)
 
 
 //Callback used in barriers to cause MPI library progress while waiting
+#ifdef ENABLE_PSM
+//Just call PSM poll directly, no need for a wrapper.
+#define barrier_iprobe poll
+#elif defined(ENABLE_MPI)
 static inline void barrier_iprobe(void)
 {
     int flag;
 
     MPI_Iprobe(MPI_ANY_SOURCE, MPI_ANY_TAG, MPI_COMM_WORLD, &flag, MPI_STATUS_IGNORE);
 }
+#endif
 
 
 //
@@ -909,6 +917,7 @@ int HMPI_Allgatherv(void *sendbuf, int sendcount, MPI_Datatype sendtype, void *r
 //TODO - the proper thing would be to have our own internal MPI comm for colls
 #define HMPI_ALLTOALL_TAG 7546347
 
+#ifdef ENABLE_MPI
 int HMPI_Alltoall(void* sendbuf, int sendcount, MPI_Datatype sendtype, void* recvbuf, int recvcount, MPI_Datatype recvtype, HMPI_Comm comm) 
 {
     FULL_PROFILE_STOP(MPI_Other);
@@ -1066,10 +1075,136 @@ int HMPI_Alltoall(void* sendbuf, int sendcount, MPI_Datatype sendtype, void* rec
   return MPI_SUCCESS;
 }
 
+#elif defined(ENABLE_PSM)
+#warning "PSM alltoall"
+
+//Write a new alltoall that memcpy's into one buffer then sends to all nodes.
+// Use an MCS entry like I did in allreduce to skip the initial barrier.
+int HMPI_Alltoall(void* sendbuf, int sendcount, MPI_Datatype sendtype, void* recvbuf, int recvcount, MPI_Datatype recvtype, HMPI_Comm comm) 
+{
+    FULL_PROFILE_STOP(MPI_Other);
+    FULL_PROFILE_START(MPI_Alltoall);
+    int32_t send_size;
+    int thr;
+    int tid = g_tl_tid;
+    int nthreads = g_nthreads;
+    int rank = g_rank;
+    int size = g_size;
+    int hmpi_rank = g_hmpi_rank;
+
+    HMPI_Type_size(sendtype, &send_size);
+
+    //TODO - is there a cool way to do this without entry barriers?
+    //We have to sync towards the end, since every rank needs data from every
+    // other rank.
+
+    //Each rank set its buf and flag when it arrives.
+    // Maybe even do it as a linked list like MCS?
+    //  Add self to queue -- if queue was empty, act as root and reduce the
+    //   others as they arrive.  Then we can do an exit barrier like usual.
+
+    comm->sbuf[tid] = sendbuf;
+    //comm->scount[g_tl_tid] = sendcount;
+    //comm->stype[g_tl_tid] = sendtype;
+
+    //comm->rbuf[g_tl_tid] = recvbuf;
+    //comm->rcount[g_tl_tid] = recvcount;
+    //comm->rtype[g_tl_tid] = recvtype;
+
+    int copy_len = send_size * sendcount;
+
+    //Post receives from every non-local rank.
+    libpsm_req_t* send_reqs =
+            (libpsm_req_t*)alloca(sizeof(libpsm_req_t) * (size - 1) * nthreads);
+    libpsm_req_t* recv_reqs =
+            (libpsm_req_t*)alloca(sizeof(libpsm_req_t) * (size - 1) * nthreads);
+
+        mcs_qnode_t q;
+        MCS_LOCK_ACQUIRE(&libpsm_lock, &q);
+    for(int i = 0; i < size - 1; i++) {
+        int node = (rank + i + 1) % size;
+        for(int j = 0; j < nthreads; j++) {
+            int r = node * nthreads + j;
+            //Post a receive from HMPI rank r
+            post_recv_nl((void*)((uintptr_t)recvbuf + (r * copy_len)),
+                    copy_len, BUILD_TAG(r, tid, HMPI_ALLTOALL_TAG),
+                    TAGSEL_P2P, node, &recv_reqs[i * nthreads + j]);
+
+            //Send to HMPI rank r
+            post_send_nl((void*)((uintptr_t)sendbuf + (r * copy_len)),
+                    copy_len, BUILD_TAG(hmpi_rank, j, HMPI_ALLTOALL_TAG),
+                    node, &send_reqs[i * nthreads + j]);
+        }
+    }
+        MCS_LOCK_RELEASE(&libpsm_lock, &q);
+
+    //Do the self copy
+    memcpy((void*)((uintptr_t)recvbuf + (hmpi_rank * copy_len)),
+           (void*)((uintptr_t)sendbuf + (hmpi_rank * copy_len)), copy_len);
+
+    //barrier(&comm->barr, tid);
+    //if(tid == 0) {
+    //    barrier_cb(&comm->barr, tid, barrier_iprobe);
+    //} else {
+        barrier(&comm->barr, tid);
+    //}
+
+    for(thr = 1; thr < g_nthreads; thr++) {
+        int rt = (tid + thr) % nthreads;    //Index for sbuf
+        int lt = rt + (nthreads * rank);    //Offset into recvbuf
+
+        //Copy from everyone else into my recv buf.
+        memcpy((void*)((uintptr_t)recvbuf + (lt * copy_len)),
+               (void*)((uintptr_t)comm->sbuf[rt] + (hmpi_rank * copy_len)) , copy_len);
+        //memcpy((void*)((uintptr_t)comm->rbuf[thr] + (g_tl_tid * copy_len)),
+        //       (void*)((uintptr_t)sendbuf + (thr * copy_len)) , copy_len);
+    }
+
+    int not_done;
+    int flag;
+    do {
+        not_done = 0;
+        if(tid == 0) {
+            poll();
+        }
+
+        for(int i = 0; i < (size - 1) * nthreads; i++) {
+            if(recv_reqs[i] != NULL) {
+#if 0
+                if(test(recv_reqs[i])) {
+                    not_done = 1;
+                }
+#endif
+                not_done |= !test(&recv_reqs[i], NULL);
+            }
+
+            if(send_reqs[i] != NULL) {
+                not_done |= !test(&send_reqs[i], NULL);
+#if 0
+                if(test(send_reqs[i])) {
+                    not_done = 1;
+                }
+#endif
+            }
+        }
+    } while(not_done);
+
+    if(tid == 0) {
+        barrier_cb(&comm->barr, tid, barrier_iprobe);
+    } else {
+        barrier(&comm->barr, tid);
+    }
+
+    FULL_PROFILE_STOP(MPI_Alltoall);
+    FULL_PROFILE_START(MPI_Other);
+    return MPI_SUCCESS;
+}
+
+#else //No multi-node support
 
 //AWF - this version of alltoall assumes only one node, so no need to mess with
 //MPI stuff.  Made to be as fast as possible for the local case..
-int HMPI_Alltoall_local(void* sendbuf, int sendcount, MPI_Datatype sendtype, void* recvbuf, int recvcount, MPI_Datatype recvtype, HMPI_Comm comm) 
+int HMPI_Alltoall(void* sendbuf, int sendcount, MPI_Datatype sendtype, void* recvbuf, int recvcount, MPI_Datatype recvtype, HMPI_Comm comm) 
 {
     FULL_PROFILE_STOP(MPI_Other);
     FULL_PROFILE_START(MPI_Alltoall);
@@ -1144,4 +1279,5 @@ int HMPI_Alltoall_local(void* sendbuf, int sendcount, MPI_Datatype sendtype, voi
   return MPI_SUCCESS;
 }
 
+#endif
 

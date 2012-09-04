@@ -143,6 +143,18 @@ static inline void barrier_cb(barrier_t *barrier, int tid, void (*cbfn)(void)) {
   while(barrier->global_sense != local_sense) {
       cbfn();
   }
+
+#if 0
+  do {
+      for(int i = 0; i < 100; i++) {
+          if(barrier->global_sense == local_sense) {
+              return;
+          }
+      }
+
+      cbfn();
+  } while(1);
+#endif
   return;
 }
 

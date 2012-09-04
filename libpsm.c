@@ -140,14 +140,14 @@ void libpsm_init(void)
 
     //Fully connect right now.
     for(i = 1; i < size; i++) {
-        printf("%d starting connect to %d\n", libpsm_mpi_rank, (libpsm_mpi_rank + i) % size);
-        fflush(stdout);
+        //printf("%d starting connect to %d\n", libpsm_mpi_rank, (libpsm_mpi_rank + i) % size);
+        //fflush(stdout);
         libpsm_connect(&libpsm_peers[(libpsm_mpi_rank + i) % size]);
     }
 
     for(i = 1; i < size; i++) {
-        printf("%d waiting connect to %d\n", libpsm_mpi_rank, (libpsm_mpi_rank + i) % size);
-        fflush(stdout);
+        //printf("%d waiting connect to %d\n", libpsm_mpi_rank, (libpsm_mpi_rank + i) % size);
+        //fflush(stdout);
         peer_t* peer = &libpsm_peers[(libpsm_mpi_rank + i) % size];
         while(peer->conn_state != CONN_CONNECTED) {
             libpsm_connect(peer);
