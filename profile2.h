@@ -296,6 +296,25 @@ static inline void PROFILE_FINALIZE()
 }
 
 
+#ifdef __bg__
+#ifdef __IBMCPP__
+#include <builtins.h>
+#endif
+#include <hwi/include/bqc/A2_core.h>
+//#define BGQ_NS_PER_CYCLE ((double)1e9/(double)1.6e9)
+#define BGQ_NS_PER_CYCLE ((double)0.625)
+
+// 64-bit read of BGQ Cycle counter register.
+static inline uint64_t get_bgq_cycles()
+{
+    uint64_t dest;
+    asm volatile ("mfspr %0,%1" : "=&r" (dest) : "i" (SPRN_TBRO));
+    //return dest * BGQ_NS_PER_CYCLE;
+    return dest;
+}
+
+#endif
+
 #define PROFILE_START(v) __PROFILE_START(&(_profile_ ## v))
 
 static void __PROFILE_START(struct profile_vars_t* v)
@@ -308,10 +327,17 @@ static void __PROFILE_START(struct profile_vars_t* v)
     }
 #endif
 
+#ifdef __bg__
+    //Time is stored in cycles
+    v->start = get_bgq_cycles();
+    __fence();
+#else
     //Time is stored in nanoseconds
     struct timespec ts;
     clock_gettime(CLOCK_MONOTONIC, &ts);
     v->start = ((uint64_t)ts.tv_sec * 1000000000 + (uint64_t)ts.tv_nsec);
+#endif
+    //printf("start %lu %lu %lu\n", v->start, ts.tv_sec, ts.tv_nsec);
 }
 
 
@@ -320,9 +346,14 @@ static void __PROFILE_START(struct profile_vars_t* v)
 
 static void __PROFILE_STOP(const char* name, struct profile_vars_t* v)
 {
+    //Grab the time right away
     //Do as little as possible until time and PAPI counters are grabbed.
+#ifdef __bg__
+    uint64_t cycles = get_bgq_cycles();
+#else
     struct timespec ts;
     clock_gettime(CLOCK_MONOTONIC, &ts);
+#endif
 
 #if _PROFILE_PAPI_EVENTS == 1
     //Grab counter values
@@ -337,7 +368,12 @@ static void __PROFILE_STOP(const char* name, struct profile_vars_t* v)
 #endif
 
     //Calculate time taken
+#ifdef __bg__
+    __fence();
+    uint64_t t = ((double)(cycles - v->start) * BGQ_NS_PER_CYCLE);
+#else
     uint64_t t = ((uint64_t)ts.tv_sec * 1000000000 + (uint64_t)ts.tv_nsec) - v->start;
+#endif
 
     if(t < _profile_overhead) {
         t = 0;

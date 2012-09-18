@@ -127,8 +127,6 @@ static __thread local_info_t* local_info;
 
 HMPI_Comm HMPI_COMM_WORLD;
 
-//static MPI_Comm* g_tcomms;
-//static lock_t g_mpi_lock;      //Used to protect ANY_SRC Iprobe/Recv sequence
 
 //Argument passthrough
 static int g_argc;
@@ -153,7 +151,8 @@ typedef struct HMPI_Request_list {
 #ifdef USE_MCS 
     mcs_lock_t lock;
 #else
-    lock_t lock;
+    L2_lock_t lock;
+    char padding[1024];
 #endif 
 } HMPI_Request_list;
 
@@ -198,19 +197,20 @@ static inline void add_send_req(HMPI_Request_list* req_list,
     HMPI_Item* item = (HMPI_Item*)req;
 
 #ifndef USE_MCS
-    LOCK_SET(&req_list->lock);
-    //FENCE();
+    L2_LOCK_SET(&req_list->lock);
 #else
     mcs_qnode_t q;
     MCS_LOCK_ACQUIRE(&req_list->lock, &q);
 #endif
 
+    //NOTE -- On BG/Q other cores can see these two writes in a different order
+    // than what is written here.  Thus update_send_reqs() needs to be careful
+    // to acquire the lock before relying on some ordering here.
     req_list->tail->next = item;
     req_list->tail = item;
 
 #ifndef USE_MCS
-    //FENCE();
-    LOCK_CLEAR(&req_list->lock);
+    L2_LOCK_CLEAR(&req_list->lock);
 #else
     MCS_LOCK_RELEASE(&req_list->lock, &q);
 #endif
@@ -235,26 +235,30 @@ static inline void update_send_reqs(HMPI_Request_list* local_list, HMPI_Request_
 {
     HMPI_Item* tail;
 
-    //FENCE();
     if(shared_list->tail != &shared_list->head) {
         //g_tl_send_reqs.tail->next = req_list->head.next;
         //This is safe, the branch ensures at least one node.
         //Senders only add at the tail, so head.next won't
         //change out from under us.
-
-    //FENCE();
-        //__lwsync();
-        //__fence();
-        //TODO - possible BG hang here? read could come before branch check
-        local_list->tail->next = shared_list->head.next;
+        
+        //NOTE - we can safely compare head/tail here, but we need the lock to
+        // do more on BQ/Q.  On x86 it's safe to grab the first node in the
+        // shared Q, But on BG/Q we can see the two writes in add_send_req() in
+        // reverse order.  Thus we need to acquire the lock, ensuring that we
+        // see both writes before grabbing head.next in the next statement.  If
+        // we move the lock after that statement, it is possible to see the
+        // updated tail in add_send_req(), come through and grab the shared
+        // head.next before we see the updated head.next.
 
 #ifndef USE_MCS
-        LOCK_SET(&shared_list->lock);
-    //FENCE();
+        L2_LOCK_SET(&shared_list->lock);
 #else
         mcs_qnode_t q;
         MCS_LOCK_ACQUIRE(&shared_list->lock, &q);
 #endif
+
+        //TODO - possible BG hang here? read could come before branch check
+        local_list->tail->next = shared_list->head.next;
 
         //g_tl_send_reqs.tail = req_list->tail;
         //local_list->tail = req_list->tail;
@@ -262,14 +266,16 @@ static inline void update_send_reqs(HMPI_Request_list* local_list, HMPI_Request_
         shared_list->tail = &shared_list->head;
 
 #ifndef USE_MCS
-    //FENCE();
-        LOCK_CLEAR(&shared_list->lock);
+        L2_LOCK_CLEAR(&shared_list->lock);
 #else
         MCS_LOCK_RELEASE(&shared_list->lock, &q);
 #endif
 
+        //This is safe, the pointers involved here are now only accessible by
+        // this core.
         local_list->tail = tail;
         tail->next = NULL;
+
     }
 }
 
@@ -504,6 +510,7 @@ static inline int match_probe(int source, int tag, HMPI_Comm comm, HMPI_Request*
 static inline void update_reqstat(HMPI_Request req, int stat) {
 #ifdef __bg__
     __lwsync();
+    //FENCE();
 #endif
     req->stat = stat;
 }
@@ -601,7 +608,7 @@ void* trampoline(void* tid) {
     g_send_reqs[rank].tail = &g_send_reqs[rank].head;
     g_tl_my_send_reqs = &g_send_reqs[rank];
 #ifndef USE_MCS
-    LOCK_INIT(&g_send_reqs[rank].lock, 0);
+    L2_LOCK_INIT(&g_send_reqs[rank].lock, 0);
 #else
     MCS_LOCK_INIT(&g_send_reqs[rank].lock);
 #endif
@@ -674,7 +681,6 @@ int HMPI_Init(int *argc, char ***argv, int (*start_routine)(int argc, char** arg
   g_nthreads = nthreads;
   g_ncores = ncores;
   g_nsockets = nsockets;
-  //LOCK_INIT(&g_mpi_lock, 0);
 
   printf("threads %d cores %d sockets %d\n", g_nthreads, g_ncores, g_nsockets);
 
@@ -852,6 +858,7 @@ static inline void HMPI_Complete_recv(HMPI_Request recv_req, HMPI_Request send_r
 
     if(size < BLOCK_SIZE * 2) {
         memcpy((void*)recv_req->buf, send_req->buf, size);
+        //FENCE();
     } else {
         //The setting of send_req->match_req signals to sender that they can
         // start doing copying as well, if they are testing the req.
