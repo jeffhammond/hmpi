@@ -467,7 +467,9 @@ static inline void MCS_LOCK_ACQUIRE(mcs_lock_t* __restrict l, mcs_qnode_t* q) {
         STORE_FENCE();  //Prevent q->locked from being set afer pred->next
 
         pred->next = q;
-        while(*locked == 1);
+        while(*locked == 1) {
+        //    __asm__("pause");
+        }
     }
 }
 
@@ -487,7 +489,9 @@ static inline void MCS_LOCK_RELEASE(mcs_lock_t* __restrict l, mcs_qnode_t* q) {
         //AWF - the way this type is declared is CRITICAL for correctness!!!
         mcs_qnode_t* volatile * vol_next = (mcs_qnode_t* volatile *)&q->next;
 
-        while((next = *vol_next) == NULL);
+        while((next = *vol_next) == NULL) {
+        //    __asm__("pause");
+        }
     }
 
     next->locked = 0;

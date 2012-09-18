@@ -37,6 +37,8 @@
 #include <string.h>
 #include "lock.h"
 
+#define printf(...) printf(__VA_ARGS__); fflush(stdout)
+
 #ifdef ENABLE_PSM
 #warning "PSM ENABLED"
 #include "libpsm.h"
@@ -125,8 +127,8 @@ static __thread local_info_t* local_info;
 
 HMPI_Comm HMPI_COMM_WORLD;
 
-static MPI_Comm* g_tcomms;
-static lock_t g_mpi_lock;      //Used to protect ANY_SRC Iprobe/Recv sequence
+//static MPI_Comm* g_tcomms;
+//static lock_t g_mpi_lock;      //Used to protect ANY_SRC Iprobe/Recv sequence
 
 //Argument passthrough
 static int g_argc;
@@ -293,6 +295,79 @@ static inline void remove_recv_req(HMPI_Item* prev, const HMPI_Item* cur) {
     }
 }
 
+#if 0
+//#ifdef ENABLE_PSM
+static void post_recv_cb(HMPI_Request req)
+{
+    psm_mq_irecv(libpsm_mq, req->u.remote.tag, req->u.remote.tagsel, 0,
+            req->buf, req->size, NULL, &req->u.remote.req);
+}
+
+static void post_send_cb(HMPI_Request req)
+{
+    peer_t* peer = &libpsm_peers[req->u.remote.rank];
+
+    psm_mq_isend(libpsm_mq, peer->epaddr, 0, req->u.remote.tag,
+            req->buf, req->size, NULL, &req->u.remote.req);
+}
+
+static void poll_cb(HMPI_Request req)
+{
+        psm_poll(libpsm_ep);
+}
+
+HMPI_Request psm_queue = NULL;
+
+static void do_work(HMPI_Request req)
+{
+    STORE_FENCE(); //TODO - needed?
+
+#if 0
+        mcs_qnode_t q;
+        MCS_LOCK_ACQUIRE(&libpsm_lock, &q);
+        req->u.remote.cb(req);
+        MCS_LOCK_RELEASE(&libpsm_lock, &q);
+#endif
+    //Swap our req into the queue.
+    HMPI_Request pred = (HMPI_Request)FETCH_STORE((void**)&psm_queue, req);
+
+    if(pred != NULL) {
+        //printf("%d Q work %p\n", g_hmpi_rank, req);
+        //Someone is already doing PSM stuff, add our work to the line.
+        pred->u.remote.next = req;
+
+        //We don't want to wait, so no lock spin here.
+    } else { //pred == NULL
+        //No predecessor.
+        //How do we know it's safe to do work now?
+        //Nobody else was in the queue.  IF someone tries to enter now,
+        //they see non-NULL and will just add their work.
+
+        mcs_qnode_t q;
+        MCS_LOCK_ACQUIRE(&libpsm_lock, &q);
+
+        //Do our work.
+        req->u.remote.cb(req);
+
+        //Now finish with the lock.
+        while(!CAS_PTR_BOOL(&psm_queue, req, NULL)) {
+            //A thread jumped in between the branch and the CAS --
+            //Wait for them to set our next pointer.
+            HMPI_Request volatile * vol_next =
+                (HMPI_Request volatile *)&req->u.remote.next;
+
+            while((req = *vol_next) == NULL);
+
+            //OK, do the work they queued and try again.
+            req->u.remote.cb(req);
+            //printf("%d doing other work %p\n", g_hmpi_rank, req);
+        }
+        MCS_LOCK_RELEASE(&libpsm_lock, &q);
+    }
+}
+
+#endif
+
 
 //Match for receives that are *NOT* ANY_SOURCE
 static inline HMPI_Request match_recv(HMPI_Request_list* req_list, HMPI_Request recv_req)
@@ -323,7 +398,6 @@ static inline HMPI_Request match_recv(HMPI_Request_list* req_list, HMPI_Request 
             recv_req->tag = req->tag;
             //printf("%d matched recv req %d proc %d tag %d to send req %p\n",
             //        g_hmpi_rank, recv_req, proc, tag, req);
-            //fflush(stdout);
             return req;
         }
 
@@ -359,7 +433,6 @@ static inline HMPI_Request match_take(HMPI_Request_list* req_list, HMPI_Request 
             recv_req->tag = req->tag;
             //printf("%d matched recv req %d proc %d tag %d to send req %p\n",
             //        g_hmpi_rank, recv_req, proc, tag, req);
-            //fflush(stdout);
             return req;
         }
 
@@ -601,10 +674,9 @@ int HMPI_Init(int *argc, char ***argv, int (*start_routine)(int argc, char** arg
   g_nthreads = nthreads;
   g_ncores = ncores;
   g_nsockets = nsockets;
-  LOCK_INIT(&g_mpi_lock, 0);
+  //LOCK_INIT(&g_mpi_lock, 0);
 
   printf("threads %d cores %d sockets %d\n", g_nthreads, g_ncores, g_nsockets);
-  fflush(stdout);
 
     //TODO - consider using this in HMPI
 #if 0
@@ -661,7 +733,7 @@ int HMPI_Init(int *argc, char ***argv, int (*start_routine)(int argc, char** arg
 
   free(g_send_reqs);
   free(threads);
-  free(g_tcomms);
+  //free(g_tcomms);
   MPI_Finalize();
   return 0;
 }
@@ -774,7 +846,6 @@ static inline void HMPI_Complete_recv(HMPI_Request recv_req, HMPI_Request send_r
 #if 0
     if(unlikely(send_size > size)) {
         printf("%d ERROR recv message from %d of size %ld truncated to %ld\n", g_hmpi_rank, send_req->proc, send_size, size);
-        fflush(stdout);
         MPI_Abort(MPI_COMM_WORLD, 5);
     }
 #endif
@@ -816,7 +887,6 @@ static inline void HMPI_Complete_recv(HMPI_Request recv_req, HMPI_Request send_r
             g_hmpi_rank, recv_req->buf, recv_req->size, recv_req->proc, recv_req->tag);
     printf("%d completed local-level SEND buf %p size %lu dest %d tag %d\n",
             send_req->proc, send_req->buf, send_req->size, g_hmpi_rank, send_req->tag);
-    fflush(stdout);
 #endif
 }
 
@@ -837,7 +907,6 @@ static inline void HMPI_Complete_take(HMPI_Request recv_req, HMPI_Request send_r
 #if 0
     if(unlikely(send_size > size)) {
         printf("%d ERROR recv message from %d of size %ld truncated to %ld\n", g_hmpi_rank, send_req->proc, send_size, size);
-        fflush(stdout);
         MPI_Abort(MPI_COMM_WORLD, 5);
     }
 #endif
@@ -1080,7 +1149,6 @@ int HMPI_Wait(HMPI_Request *request, HMPI_Status *status) {
 
 #ifdef DEBUG
     printf("%i HMPI_Wait(%x, %x) type: %i\n", g_hmpi_rank, req, status, req->type);
-    fflush(stdout);
 #endif
 
     if(unlikely(req == HMPI_REQUEST_NULL)) {
@@ -1148,7 +1216,6 @@ int HMPI_Waitall(int count, HMPI_Request *requests, HMPI_Status *statuses)
 
 #ifdef DEBUG
     printf("[%i] HMPI_Waitall(%d, %p, %p)\n", g_hmpi_rank, count, requests, statuses);
-    fflush(stdout);
 #endif
 
     do {
@@ -1347,6 +1414,9 @@ int HMPI_Iprobe(int source, int tag, HMPI_Comm comm, int* flag, HMPI_Status* sta
         }
     } else if(g_size > 1) {
         //Probe MPI (off-node) layer only if more than one MPI rank
+        //TODO - PSM support
+        assert(0);
+#if 0
         MPI_Status st;
                 assert(0);
         MPI_Iprobe(source, tag, g_tcomms[g_tl_tid], flag, &st);
@@ -1359,6 +1429,7 @@ int HMPI_Iprobe(int source, int tag, HMPI_Comm comm, int* flag, HMPI_Status* sta
             status->MPI_TAG = st.MPI_TAG;
             status->MPI_ERROR = st.MPI_ERROR;
         }
+#endif
     }
 
     return MPI_SUCCESS;
@@ -1383,7 +1454,6 @@ int HMPI_Isend(void* buf, int count, MPI_Datatype datatype, int dest, int tag, H
     FULL_PROFILE_START(MPI_Isend);
 #ifdef DEBUG
     printf("[%i] HMPI_Isend(%p, %i, %p, %i, %i, %p, %p) (proc null: %i)\n", g_hmpi_rank, buf, count, (void*)datatype, dest, tag, comm, req);
-    fflush(stdout);
 #endif
 
     //Freed when req completion is signaled back to the user.
@@ -1446,6 +1516,16 @@ int HMPI_Isend(void* buf, int count, MPI_Datatype datatype, int dest, int tag, H
         post_send(buf, size,
                 BUILD_TAG(hmpi_rank, target_mpi_thread, tag),
                 target_mpi_rank, &req->u.remote.req);
+
+#if 0
+        req->u.remote.next = NULL;
+        req->u.remote.cb = post_send_cb;
+        req->u.remote.rank = target_mpi_rank;
+        req->u.remote.tag = BUILD_TAG(hmpi_rank, target_mpi_thread, tag);
+        STORE_FENCE(); //TODO - needed?
+
+        do_work(req);
+#endif
 #endif
     }
 
@@ -1469,7 +1549,6 @@ int HMPI_Irecv(void* buf, int count, MPI_Datatype datatype, int source, int tag,
 
 #ifdef DEBUG
   printf("[%i] HMPI_Irecv(%p, %i, %p, %i, %i, %p, %p) (proc null: %i)\n", g_hmpi_rank, buf, count, (void*)datatype, source, tag, comm, req, MPI_PROC_NULL);
-  fflush(stdout);
 #endif
 
     //Freed when req completion is signaled back to the user.
@@ -1525,6 +1604,15 @@ int HMPI_Irecv(void* buf, int count, MPI_Datatype datatype, int source, int tag,
 
     post_recv(buf, count * type_size, BUILD_TAG(source, g_tl_tid, tag),
             tagsel, (uint32_t)-1, &req->u.remote.req);
+
+#if 0
+    req->u.remote.next = NULL;
+    req->u.remote.cb = post_recv_cb;
+    req->u.remote.tag = BUILD_TAG(source, g_tl_tid, tag);
+    req->u.remote.tagsel = tagsel;
+
+    do_work(req);
+#endif
 #endif
 
     add_recv_req(req);
@@ -1546,6 +1634,14 @@ int HMPI_Irecv(void* buf, int count, MPI_Datatype datatype, int source, int tag,
     post_recv(buf, count * type_size, BUILD_TAG(source, g_tl_tid, tag),
             tagsel, source_mpi_rank, &req->u.remote.req);
 
+#if 0
+    req->u.remote.next = NULL;
+    req->u.remote.cb = post_recv_cb;
+    req->u.remote.tag = BUILD_TAG(source, g_tl_tid, tag);
+    req->u.remote.tagsel = tagsel;
+
+    do_work(req);
+#endif
 #endif
   }
 

@@ -38,6 +38,7 @@
 #include <pthread.h>
 #include <time.h>
 
+
 #if _PROFILE_MPI == 1
 #include <mpi.h>
 #endif
@@ -47,6 +48,10 @@
 #endif
 
 
+
+#ifdef __cplusplus
+extern "C" {
+#endif
 
 #if _PROFILE_PAPI_EVENTS == 1
 #include <papi.h>
@@ -91,6 +96,10 @@ extern THREAD FILE* _profile_fd;
 #endif //_PROFILE_PAPI_EVENTS != 1
 
 extern uint64_t _profile_overhead;
+
+#ifdef __cplusplus
+}
+#endif
 
 
 typedef struct profile_vars_t {

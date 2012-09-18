@@ -80,6 +80,7 @@ extern peer_t* libpsm_peers;
 extern psm_ep_t libpsm_ep;
 extern psm_mq_t libpsm_mq;
 extern int libpsm_mpi_rank;
+extern volatile int libpsm_poll;
 
 
 void libpsm_init(void);
@@ -102,11 +103,9 @@ static inline void post_recv(void* buf, uint32_t len, uint64_t tag, uint64_t tag
     }
 #endif
 
-    //LOCK_SET(&libpsm_lock);
     mcs_qnode_t q;
     MCS_LOCK_ACQUIRE(&libpsm_lock, &q);
     psm_mq_irecv(libpsm_mq, tag, tagsel, 0, buf, len, NULL, req);
-    //LOCK_CLEAR(&libpsm_lock);
     MCS_LOCK_RELEASE(&libpsm_lock, &q);
 }
 
@@ -115,6 +114,7 @@ static inline void post_recv(void* buf, uint32_t len, uint64_t tag, uint64_t tag
 static inline void post_send(void* buf, uint32_t len, uint64_t tag, uint32_t rank, libpsm_req_t* req)
 {
     peer_t* peer = &libpsm_peers[rank];
+    psm_epaddr_t epaddr = peer->epaddr;
 
 #if 0
     while(unlikely(peer->conn_state != CONN_CONNECTED)) {
@@ -124,9 +124,7 @@ static inline void post_send(void* buf, uint32_t len, uint64_t tag, uint32_t ran
     
     mcs_qnode_t q;
     MCS_LOCK_ACQUIRE(&libpsm_lock, &q);
-    //LOCK_SET(&libpsm_lock);
-    psm_mq_isend(libpsm_mq, peer->epaddr, 0, tag, buf, len, NULL, req);
-    //LOCK_CLEAR(&libpsm_lock);
+    psm_mq_isend(libpsm_mq, epaddr, 0, tag, buf, len, NULL, req);
     MCS_LOCK_RELEASE(&libpsm_lock, &q);
 }
 
@@ -150,12 +148,10 @@ static inline int cancel(libpsm_req_t* req)
 {
     mcs_qnode_t q;
     MCS_LOCK_ACQUIRE(&libpsm_lock, &q);
-    //LOCK_SET(&libpsm_lock);
     int ret = psm_mq_cancel(req);
     if(ret == PSM_OK) {
         psm_mq_test(req, NULL);
     }
-    //LOCK_CLEAR(&libpsm_lock);
     MCS_LOCK_RELEASE(&libpsm_lock, &q);
     return ret == PSM_OK;
 }
@@ -165,9 +161,7 @@ static inline void wait(libpsm_req_t* req, libpsm_status_t* status)
 {
     mcs_qnode_t q;
     MCS_LOCK_ACQUIRE(&libpsm_lock, &q);
-    //LOCK_SET(&libpsm_lock);
     psm_mq_wait(req, status);
-    //LOCK_CLEAR(&libpsm_lock);
     MCS_LOCK_RELEASE(&libpsm_lock, &q);
 }
 
@@ -176,9 +170,7 @@ static inline int test(libpsm_req_t* req, libpsm_status_t* status)
 {
     mcs_qnode_t q;
     MCS_LOCK_ACQUIRE(&libpsm_lock, &q);
-    //LOCK_SET(&libpsm_lock);
     int ret = psm_mq_test(req, status) == PSM_OK;
-    //LOCK_CLEAR(&libpsm_lock);
     MCS_LOCK_RELEASE(&libpsm_lock, &q);
     return ret;
 }
@@ -192,15 +184,14 @@ static inline void poll(void)
     //TODO - idea -- try the lock, if it is already acquired, skip polling.
     //libpsm_connect(NULL);
 
-    //LOCK_SET(&libpsm_lock);
-    //if(LOCK_TRY(&libpsm_lock)) {
-    if(libpsm_lock == NULL) {
-    mcs_qnode_t q;
-    MCS_LOCK_ACQUIRE(&libpsm_lock, &q);
+    //if(libpsm_poll == 0) {
+    //    libpsm_poll = 1;
+    //if(libpsm_lock == NULL) {
+        mcs_qnode_t q;
+        MCS_LOCK_ACQUIRE(&libpsm_lock, &q);
         psm_poll(libpsm_ep);
-        //LOCK_CLEAR(&libpsm_lock);
-    MCS_LOCK_RELEASE(&libpsm_lock, &q);
-    }
+        MCS_LOCK_RELEASE(&libpsm_lock, &q);
+    //    libpsm_poll = 0;
     //}
 }
 

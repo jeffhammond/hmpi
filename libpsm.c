@@ -46,6 +46,7 @@ peer_t* libpsm_peers = NULL;
 psm_ep_t libpsm_ep;
 static psm_epid_t libpsm_epid;
 psm_mq_t libpsm_mq;
+volatile int libpsm_poll = 0;
 
 
 void libpsm_connect(peer_t* peer);

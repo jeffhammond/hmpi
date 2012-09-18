@@ -114,6 +114,11 @@ typedef struct HMPI_Request_info {
         struct {
             //Used only for off-node messages via underlying MPI
 #ifdef ENABLE_PSM
+            //volatile struct HMPI_Request_info* next;
+            //void (*cb)(struct HMPI_Request_info*);
+            //uint32_t rank;  //Destination PSM rank used for sends
+            //uint64_t tag;
+            //uint64_t tagsel;    //Used only for recv
             libpsm_req_t req;
 #else
             MPI_Request req;

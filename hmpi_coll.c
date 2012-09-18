@@ -63,11 +63,16 @@ extern __thread int g_tl_tid;       //HMPI node-local rank for this thread (tid)
 //Just call PSM poll directly, no need for a wrapper.
 #define barrier_iprobe poll
 #elif defined(ENABLE_MPI)
-static inline void barrier_iprobe(void)
+static void barrier_iprobe(void)
 {
     int flag;
 
     MPI_Iprobe(MPI_ANY_SOURCE, MPI_ANY_TAG, MPI_COMM_WORLD, &flag, MPI_STATUS_IGNORE);
+}
+#else
+//No off-node support, nothing to poll.
+static void barrier_iprobe(void)
+{
 }
 #endif
 
@@ -1078,6 +1083,146 @@ int HMPI_Alltoall(void* sendbuf, int sendcount, MPI_Datatype sendtype, void* rec
 #elif defined(ENABLE_PSM)
 #warning "PSM alltoall"
 
+int HMPI_Alltoall(void* sendbuf, int sendcount, MPI_Datatype sendtype, void* recvbuf, int recvcount, MPI_Datatype recvtype, HMPI_Comm comm) 
+{
+    FULL_PROFILE_STOP(MPI_Other);
+    FULL_PROFILE_START(MPI_Alltoall);
+    int32_t send_size;
+    uint64_t size;
+  int rank = g_rank;
+  int nthreads = g_nthreads;
+  int tid = g_tl_tid;
+  libpsm_req_t* send_reqs = NULL;
+  libpsm_req_t* recv_reqs = NULL;
+
+  HMPI_Type_size(sendtype, &send_size);
+
+  uint64_t comm_size = nthreads * g_size;
+  uint64_t data_size = send_size * sendcount;
+
+  comm->sbuf[tid] = sendbuf;
+
+  if(tid == 0) {
+      //Alloc temp send/recv buffers
+      comm->mpi_sbuf = memalign(4096, data_size * nthreads * comm_size);
+      comm->mpi_rbuf = memalign(4096, data_size * nthreads * comm_size);
+
+      send_reqs = (libpsm_req_t*)alloca(sizeof(libpsm_req_t) * g_size);
+      recv_reqs = (libpsm_req_t*)alloca(sizeof(libpsm_req_t) * g_size);
+
+      //Seems like we should multiply by comm_size, but alltoall already
+      // assumes one element per process.  We do have nthreads per process
+      // though, so we multiply by that.
+
+      //Post receives from each other rank, except self.
+      int len = data_size * nthreads * nthreads;
+      for(int i = 0; i < g_size; i++) {
+          if(i != rank) {
+              post_recv((void*)((uintptr_t)comm->mpi_rbuf + (len * i)),
+                      len,
+                      BUILD_TAG(i * nthreads, 0, HMPI_ALLTOALL_TAG),
+                      TAGSEL_P2P, i, &recv_reqs[i]);
+          }
+      }
+      recv_reqs[rank] = NULL;
+  }
+
+  barrier_cb(&comm->barr, tid, barrier_iprobe);
+
+  //Copy into the shared send buffer on a stride by nthreads
+  //This way our temp buffer has all the data going to proc 0, then proc 1, etc
+  uintptr_t offset = tid * data_size;
+  uintptr_t scale = data_size * nthreads;
+
+  //Verified from (now missing) prints, this is correct
+  // Data is pushed here -- remote thread can't read it
+  for(uintptr_t i = 0; i < comm_size; i++) {
+      if(!HMPI_Comm_local(comm, i)) {
+          //Copy to send buffer to go out over network
+          memcpy((void*)((uintptr_t)(comm->mpi_sbuf) + (scale * i) + offset),
+                  (void*)((uintptr_t)sendbuf + data_size * i), data_size);
+      }
+  }
+
+  //Start sends to each other rank
+  barrier_cb(&comm->barr, tid, barrier_iprobe);
+
+  if(tid == 0) {
+      int len = data_size * nthreads * nthreads;
+      for(int i = 1; i < g_size; i++) {
+          int r = (rank + i) % g_size;
+          if(r != rank) {
+              //MPI_Isend((void*)((uintptr_t)comm->mpi_sbuf + (len * r)), 1,
+              //        dt_send, r, HMPI_ALLTOALL_TAG, comm->mpicomm, &send_reqs[r]);
+              post_send((void*)((uintptr_t)comm->mpi_sbuf + (len * r)),
+                      data_size * nthreads * nthreads,
+                      BUILD_TAG(g_hmpi_rank, 0, HMPI_ALLTOALL_TAG),
+                      r, &send_reqs[r]);
+          }
+      }
+
+      send_reqs[rank] = NULL;
+  }
+
+  //Pull local data from other threads' send buffers.
+  //For each thread, memcpy from their send buffer into my receive buffer.
+  int r = rank * nthreads; //Base rank
+  for(uintptr_t thr = 0; thr < nthreads; thr++) {
+      //Note careful use of addition by r to get the right offsets
+      int t = (tid + thr) % nthreads;
+      memcpy((void*)((uintptr_t)recvbuf + ((r + t) * data_size)),
+             (void*)((uintptr_t)comm->sbuf[t] + ((r + tid) * data_size)),
+             data_size);
+  }
+
+  //Wait on sends and receives to complete
+  if(tid == 0) {
+    int not_done;
+    do {
+        not_done = 0;
+        poll();
+
+        for(int i = 0; i < g_size; i++) {
+            if(recv_reqs[i] != NULL) {
+                not_done |= !test(&recv_reqs[i], NULL);
+            }
+
+            if(send_reqs[i] != NULL) {
+                not_done |= !test(&send_reqs[i], NULL);
+            }
+        }
+    } while(not_done);
+  }
+
+  barrier_cb(&comm->barr, tid, barrier_iprobe);
+
+  //Need to do g_size memcpy's -- one block of data per MPI process.
+  // We copy nthreads * data_size at a time.
+  offset = tid * data_size * nthreads;
+  scale = data_size * nthreads * nthreads;
+  size = nthreads * data_size;
+
+  for(uint64_t i = 0; i < g_size; i++) {
+      if(i != rank) {
+          memcpy((void*)((uintptr_t)recvbuf + size * i),
+                  (void*)((uintptr_t)comm->mpi_rbuf + (scale * i) + offset),
+                  size);
+      }
+  }
+
+  barrier_cb(&comm->barr, tid, barrier_iprobe);
+
+  if(tid == 0) {
+      free((void*)comm->mpi_sbuf);
+      free((void*)comm->mpi_rbuf);
+  }
+
+    FULL_PROFILE_STOP(MPI_Alltoall);
+    FULL_PROFILE_START(MPI_Other);
+  return MPI_SUCCESS;
+}
+
+#if 0
 //Write a new alltoall that memcpy's into one buffer then sends to all nodes.
 // Use an MCS entry like I did in allreduce to skip the initial barrier.
 int HMPI_Alltoall(void* sendbuf, int sendcount, MPI_Datatype sendtype, void* recvbuf, int recvcount, MPI_Datatype recvtype, HMPI_Comm comm) 
@@ -1142,12 +1287,11 @@ int HMPI_Alltoall(void* sendbuf, int sendcount, MPI_Datatype sendtype, void* rec
     memcpy((void*)((uintptr_t)recvbuf + (hmpi_rank * copy_len)),
            (void*)((uintptr_t)sendbuf + (hmpi_rank * copy_len)), copy_len);
 
-    //barrier(&comm->barr, tid);
-    //if(tid == 0) {
-    //    barrier_cb(&comm->barr, tid, barrier_iprobe);
-    //} else {
+    if(tid == 0) {
+        barrier_cb(&comm->barr, tid, barrier_iprobe);
+    } else {
         barrier(&comm->barr, tid);
-    //}
+    }
 
     for(thr = 1; thr < g_nthreads; thr++) {
         int rt = (tid + thr) % nthreads;    //Index for sbuf
@@ -1170,21 +1314,11 @@ int HMPI_Alltoall(void* sendbuf, int sendcount, MPI_Datatype sendtype, void* rec
 
         for(int i = 0; i < (size - 1) * nthreads; i++) {
             if(recv_reqs[i] != NULL) {
-#if 0
-                if(test(recv_reqs[i])) {
-                    not_done = 1;
-                }
-#endif
                 not_done |= !test(&recv_reqs[i], NULL);
             }
 
             if(send_reqs[i] != NULL) {
                 not_done |= !test(&send_reqs[i], NULL);
-#if 0
-                if(test(send_reqs[i])) {
-                    not_done = 1;
-                }
-#endif
             }
         }
     } while(not_done);
@@ -1199,6 +1333,7 @@ int HMPI_Alltoall(void* sendbuf, int sendcount, MPI_Datatype sendtype, void* rec
     FULL_PROFILE_START(MPI_Other);
     return MPI_SUCCESS;
 }
+#endif
 
 #else //No multi-node support
 
