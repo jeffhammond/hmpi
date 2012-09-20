@@ -1,34 +1,16 @@
 #ifndef _LOCK_H_
 #define _LOCK_H_
 #include <stdio.h>
-//#define CACHE_LINE 128
-
-//Use MCS locks by default.
-// Algorithms for Scalable Synchronization on Shared-Memory Multiprocessors
-// by John Mellor-Crummey and Michael Scott
-#define USE_MCS 1
-
-//MCS locks aren't faster on POWER chips.
-#if defined(__bg__)  || defined(__powerpc64__)
-#endif
 
 //AWF - I made my own primitives for several reasons:
 // - Referencing the OPA atomic types requires a pointer dereference.  The
 //   compiler probably eliminates them, but still results in less clean code.
 // - OPA lacks a size_t (64bit) integer atomic type.
 
-//TODO - make sure this is always aligned
-typedef struct lock_t {
-#if defined __powerpc64__
-    // POWER architectures (works on Q)
-    volatile int32_t lock;
-#else
-    // Default GCC/ICC (x86)
-    volatile int lock;
-#endif
-//    char padding[CACHE_LINE - sizeof(int)];
-} lock_t;
-
+//Use MCS locks by default.
+// Algorithms for Scalable Synchronization on Shared-Memory Multiprocessors
+// by John Mellor-Crummey and Michael Scott
+#define USE_MCS 1
 
 #if (defined __IBMC__ || defined __IBMCPP__) && defined __64BIT__ && defined __bg__
 #warning "Using BlueGene/Q (64bit) primitives"
@@ -36,21 +18,9 @@ typedef struct lock_t {
 //MCS locks aren't faster on POWER chips.
 #undef USE_MCS
 
-//Using Q atomics to build a lock:
-//Lock is a ptr to special L2 atomic memory, allocated in lock_init
-//lock_acquire: use load-clear (fetch value and store zero), repeat while value is 0
-//lock_release: use store with a value of !0 (1?)
-
 //fetch-add for send-recv offset support:
 // Wrap the atomic alloc call for HMPI to call
 // Provide L2-atomic load-increment (fetch and add) operation
-
-//TODO - maybe i can eliminate the match lock.  use the offset as an atomic value.
-// Sender checks if offset >0, if so do the send-recv copy path.
-//  End case is offset >= length.
-// Receiver enters send-recv path when msg is large enough, and start incrementing offset.
-//  Signal completion by completing the send.  But how does it know when sender is done copying?
-//   This is why the lock is used.
 
 #if defined __IBMCPP__
 #include <builtins.h>
@@ -101,17 +71,20 @@ static inline void* FETCH_STORE(void** ptr, void* val)
 
 // Lock routines
 
+//As-is, this works, but not as fast as the L2 routines.
+#if 0
 static inline void LOCK_INIT(lock_t* __restrict l, int locked) {
     l->lock = locked;
     STORE_FENCE();
 }
 
 static inline void LOCK_SET(lock_t* __restrict l) {
-    //__fence();
-    //__lwsync();
+    __fence();
+    __lwsync();
     while(__check_lock_mp((int*)(&l->lock), 0, 1));
     __isync();
-    //__lwsync();
+    __lwsync();
+    __fence();
 }
 
 //Returns non-zero if lock was acquired, 0 if not.
@@ -135,17 +108,15 @@ static inline void LOCK_CLEAR(lock_t* __restrict l) {
 static inline long int LOCK_GET(lock_t* __restrict l) {
     return (long int)l->lock;
 }
-
+#endif
 
 // Lock routines
-//#include <spi/include/l2/atomic.h>
-//#include <spi/include/kernel/memory.h>
 #include <spi/include/kernel/memory.h>
 #include <spi/include/l2/lock.h>
 
-typedef L2_Lock_t L2_lock_t;
+typedef L2_Lock_t lock_t;
 
-static inline void L2_LOCK_INIT(L2_lock_t* __restrict l, int locked) {
+static inline void LOCK_INIT(lock_t* __restrict l, int locked) {
     //TODO - do I need to use AtomicAlloc?
     if(Kernel_L2AtomicsAllocate(l, sizeof(L2_lock_t))) {
         printf("ERROR Unable to allocate L2 atomic memory\n");
@@ -159,25 +130,23 @@ static inline void L2_LOCK_INIT(L2_lock_t* __restrict l, int locked) {
     }
 }
 
-static inline void L2_LOCK_SET(L2_lock_t* __restrict l) {
+static inline void L2_LOCK_SET(lock_t* __restrict l) {
     L2_LockAcquire(l);
 }
 
 //Returns non-zero if lock was acquired, 0 if not.
-static inline long int L2_LOCK_TRY(L2_lock_t* __restrict l) {
+static inline long int L2_LOCK_TRY(lock_t* __restrict l) {
     return L2_LockTryAcquire(l);
 }
 
-static inline void L2_LOCK_CLEAR(L2_lock_t* __restrict l) {
+static inline void L2_LOCK_CLEAR(lock_t* __restrict l) {
     L2_LockRelease(l);
 }
 
-static inline long int L2_LOCK_GET(L2_lock_t* __restrict l) {
+static inline long int L2_LOCK_GET(lock_t* __restrict l) {
     assert(0); //I want to see if/when this is used; below may be wrong.
     return !L2_LockIsBusy(l);
 }
-
-
 
 
 //This code works on BGQ, but MCS offers no performance advantage due to Q's
@@ -264,6 +233,17 @@ static inline void MCS_LOCK_RELEASE(mcs_lock_t* __restrict l, mcs_qnode_t* q) {
 //MCS locks aren't faster on POWER chips.
 #undef USE_MCS
 
+typedef struct lock_t {
+#if defined __powerpc64__
+    // POWER architectures (works on Q)
+    volatile int32_t lock;
+#else
+    // Default GCC/ICC (x86)
+    volatile int lock;
+#endif
+} lock_t;
+
+
 #if defined __IBMCPP__
 #include <builtins.h>
 #endif
@@ -335,6 +315,17 @@ static inline int LOCK_GET(lock_t* __restrict l) {
 
 //This is generic locking support using GCC/ICC atomic builtins.
 #elif defined __GNUC__ //Should cover ICC too
+
+typedef struct lock_t {
+#if defined __powerpc64__
+    // POWER architectures (works on Q)
+    volatile int32_t lock;
+#else
+    // Default GCC/ICC (x86)
+    volatile int lock;
+#endif
+} lock_t;
+
 
 #ifdef __x86_64__ //Better x86 versions
 #define STORE_FENCE() __asm__ volatile ("sfence")

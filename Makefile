@@ -17,6 +17,11 @@ PSM_SRCS=hmpi_psm.c hmpi_coll.c nbc_op.c libpsm.c
 PSM_HDRS=hmpi_psm.h barrier.h lock.h profile2.h libpsm.h
 PSM_LIBS=$(LIBS) -lpsm_infinipath
 
+PAMI_SRCS=hmpi.c hmpi_coll.c nbc_op.c libpami.c
+PAMI_HDRS=barrier.h lock.h profile2.h libpami.h
+PAMI_LIBS= -lpami
+
+
 all: $(SRCS:%.c=%.o) 
 	ar r hmpi.a $(SRCS:%.c=%.o)
 	ranlib hmpi.a
@@ -32,11 +37,10 @@ udawn: $(SRCS:%.c=%.o)
 	ar r hmpi.a hmpi.o hmpi_coll.o nbc_op.o
 	ranlib hmpi.a
 
-useq: LIBS =
 useq: CC=mpixlc
-useq: CFLAGS=-O5 -qhot=novector -qsimd=auto
-useq: $(SRCS:%.c=%.o)
-	ar r hmpi.a hmpi.o hmpi_coll.o nbc_op.o
+useq: CFLAGS=-O5 -qhot=novector -qsimd=auto -DENABLE_PAMI
+useq: $(PAMI_SRCS:%.c=%.o)
+	ar r hmpi.a $(PAMI_SRCS:%.c=%.o)
 	ranlib hmpi.a
 
 useq_debug: LIBS =

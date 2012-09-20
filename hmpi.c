@@ -44,6 +44,11 @@
 #include "libpsm.h"
 #endif
 
+#ifdef ENABLE_PAMI
+#warning "PAMI ENABLED"
+#include "libpami.h"
+#endif
+
 //#define MALLOC(t, s) (t*)__builtin_assume_aligned(memalign(64, sizeof(t) * s), 64)
 #define MALLOC(t, s) (t*)memalign(64, sizeof(t) * s)
 
@@ -151,7 +156,7 @@ typedef struct HMPI_Request_list {
 #ifdef USE_MCS 
     mcs_lock_t lock;
 #else
-    L2_lock_t lock;
+    lock_t lock;
     char padding[1024];
 #endif 
 } HMPI_Request_list;
@@ -197,7 +202,7 @@ static inline void add_send_req(HMPI_Request_list* req_list,
     HMPI_Item* item = (HMPI_Item*)req;
 
 #ifndef USE_MCS
-    L2_LOCK_SET(&req_list->lock);
+    LOCK_SET(&req_list->lock);
 #else
     mcs_qnode_t q;
     MCS_LOCK_ACQUIRE(&req_list->lock, &q);
@@ -210,7 +215,7 @@ static inline void add_send_req(HMPI_Request_list* req_list,
     req_list->tail = item;
 
 #ifndef USE_MCS
-    L2_LOCK_CLEAR(&req_list->lock);
+    LOCK_CLEAR(&req_list->lock);
 #else
     MCS_LOCK_RELEASE(&req_list->lock, &q);
 #endif
@@ -250,15 +255,25 @@ static inline void update_send_reqs(HMPI_Request_list* local_list, HMPI_Request_
         // updated tail in add_send_req(), come through and grab the shared
         // head.next before we see the updated head.next.
 
+#ifdef __x86__
+        //For x86, this statement is safe outside the lock.
+        // See comments above and non-x86 statement below.
+        local_list->tail->next = shared_list->head.next;
+#endif
+
+
 #ifndef USE_MCS
-        L2_LOCK_SET(&shared_list->lock);
+        LOCK_SET(&shared_list->lock);
 #else
         mcs_qnode_t q;
         MCS_LOCK_ACQUIRE(&shared_list->lock, &q);
 #endif
 
-        //TODO - possible BG hang here? read could come before branch check
+#ifndef __x86__
+        //For non x86 (eg PPC) this statement needs to be protected.
+        // See comments and x86 statement above.
         local_list->tail->next = shared_list->head.next;
+#endif
 
         //g_tl_send_reqs.tail = req_list->tail;
         //local_list->tail = req_list->tail;
@@ -266,7 +281,7 @@ static inline void update_send_reqs(HMPI_Request_list* local_list, HMPI_Request_
         shared_list->tail = &shared_list->head;
 
 #ifndef USE_MCS
-        L2_LOCK_CLEAR(&shared_list->lock);
+        LOCK_CLEAR(&shared_list->lock);
 #else
         MCS_LOCK_RELEASE(&shared_list->lock, &q);
 #endif
@@ -608,7 +623,7 @@ void* trampoline(void* tid) {
     g_send_reqs[rank].tail = &g_send_reqs[rank].head;
     g_tl_my_send_reqs = &g_send_reqs[rank];
 #ifndef USE_MCS
-    L2_LOCK_INIT(&g_send_reqs[rank].lock, 0);
+    LOCK_INIT(&g_send_reqs[rank].lock, 0);
 #else
     MCS_LOCK_INIT(&g_send_reqs[rank].lock);
 #endif
@@ -673,6 +688,10 @@ int HMPI_Init(int *argc, char ***argv, int (*start_routine)(int argc, char** arg
 
 #ifdef ENABLE_PSM
   libpsm_init();
+#endif
+
+#ifdef ENABLE_PAMI
+  libpami_init();
 #endif
 
   g_argc = *argc;
@@ -801,6 +820,13 @@ static inline int HMPI_Progress_send(const HMPI_Request send_req)
     if(get_reqstat(send_req) == HMPI_REQ_COMPLETE) {
         return HMPI_REQ_COMPLETE;
     }
+
+    //TODO - maybe i can eliminate the match lock.  use the offset as an atomic value.
+    // Sender checks if offset >0, if so do the send-recv copy path.
+    //  End case is offset >= length.
+    // Receiver enters send-recv path when msg is large enough, and start incrementing offset.
+    //  Signal completion by completing the send.  But how does it know when sender is done copying?
+    //   This is why the lock is used.
 
     //Write blocks on this send req if receiver has matched it.
     //If mesage is short, receiver won't bother clearing the match lock, and
