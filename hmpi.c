@@ -716,6 +716,7 @@ int HMPI_Init(int *argc, char ***argv, int (*start_routine)(int argc, char** arg
   L2_barrier_init(&HMPI_COMM_WORLD->barr, nthreads);
 #else
   barrier_init(&HMPI_COMM_WORLD->barr, nthreads);
+  treebarrier_init(&HMPI_COMM_WORLD->tbarr, nthreads);
 #endif
 
   HMPI_COMM_WORLD->sbuf = MALLOC(volatile void*, nthreads);
@@ -1666,7 +1667,6 @@ int HMPI_Irecv(void* buf, int count, MPI_Datatype datatype, int source, int tag,
 
     post_recv(buf, count * type_size, BUILD_TAG(source, g_tl_tid, tag),
             tagsel, source_mpi_rank, &req->u.remote.req);
-
 #if 0
     req->u.remote.next = NULL;
     req->u.remote.cb = post_recv_cb;

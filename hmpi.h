@@ -46,6 +46,7 @@ typedef struct {
   hmpi_coll_t* coll;        //Used by allreduce
 
   barrier_t barr;       //Barrier for local ranks in this comm
+  treebarrier_t tbarr;
   //L2_barrier_t barr;       //Barrier for local ranks in this comm
   MPI_Comm mpicomm;     //Underyling MPI comm
   //MPI_Comm* tcomms;

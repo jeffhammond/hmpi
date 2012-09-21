@@ -3,15 +3,32 @@
 #include <stdio.h>
 #include <math.h>
 
+#include "profile2.h"
+
+PROFILE_VAR(barrier);
+PROFILE_DECLARE();
+
+
 int tmain(int argc, char** argv){
 
   int p,r;
   HMPI_Comm_rank (HMPI_COMM_WORLD, &r);
   HMPI_Comm_size (HMPI_COMM_WORLD, &p);
+
+  PROFILE_INIT(r);
   
-  printf("rank %i of %i\n", r, p);
+  //printf("rank %i of %i\n", r, p);
+
+  for(int i = 0; i < 10000; i++) {
+    PROFILE_START(barrier);
+    MPI_Barrier(MPI_COMM_WORLD);
+    PROFILE_STOP(barrier);
+  }
+
+  PROFILE_SHOW(barrier);
 
 
+#if 0
 //#define PINGPONG
 #ifdef PINGPONG
 #define MAXSIZE 1024 //*1024*5
@@ -170,6 +187,7 @@ int tmain(int argc, char** argv){
         printf("[%i] alltoall %d: %d %s\n", r, i, recvbuf[i], i == recvbuf[i] ? "GOOD" : "BAD");
     }
     fflush(stdout);
+#endif
 #endif
   HMPI_Finalize();
   return 0;

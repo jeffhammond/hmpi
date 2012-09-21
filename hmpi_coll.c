@@ -99,7 +99,9 @@ int HMPI_Barrier(HMPI_Comm comm) {
     FULL_PROFILE_STOP(MPI_Other);
     FULL_PROFILE_START(MPI_Barrier);
 
-    barrier_cb(&comm->barr, g_tl_tid, barrier_iprobe);
+    //barrier_cb(&comm->barr, g_tl_tid, barrier_iprobe);
+    //barrier(&comm->barr, g_tl_tid);
+    treebarrier(&comm->tbarr, g_tl_tid);
 
     if(g_size > 1) {
         // all root-threads perform MPI_Barrier 
