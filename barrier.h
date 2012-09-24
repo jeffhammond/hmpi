@@ -14,56 +14,64 @@
 
 //#define CACHE_LINE 64
 //#define CACHE_LINE 1
-#if (defined __IBMC__ || defined __IBMCPP__) && defined __64BIT__ && defined __bg__
+//#if (defined __IBMC__ || defined __IBMCPP__) && defined __64BIT__ && defined __bg__
 
+#if 0
+#define USE_L2_BARRIER
 #include <spi/include/kernel/memory.h>
 #include <spi/include/l2/barrier.h>
 
-typedef L2_Barrier_t L2_barrier_t;
+//typedef L2_Barrier_t L2_barrier_t;
+typedef struct barrier_t
+{
+    L2_Barrier_t barrier;
+    int nthreads;
+} barrier_t;
 
-static int L2_barrier_init(L2_barrier_t *barrier, int threads) __attribute__((unused));
+static int barrier_init(barrier_t *barrier, int nthreads) __attribute__((unused));
 
-static int L2_barrier_init(L2_barrier_t *barrier, int threads) {
-    if(Kernel_L2AtomicsAllocate(barrier, sizeof(L2_barrier_t))) {
+static int barrier_init(barrier_t *barrier, int nthreads) {
+    if(Kernel_L2AtomicsAllocate(&barrier->barrier, sizeof(L2_Barrier_t))) {
         printf("ERROR Unable to allocate L2 atomic memory\n");
         fflush(stdout);
         assert(0);
     }
 
-    //*barrier = L2_BARRIER_INITIALIZER;
-    memset(barrier, 0, sizeof(L2_barrier_t));
+    memset(&barrier->barrier, 0, sizeof(L2_Barrier_t));
+    barrier->nthreads = nthreads;
     return 0;
 }
 
 
-static int L2_barrier_destroy(L2_barrier_t *barrier) __attribute__((unused));
+static int barrier_destroy(barrier_t *barrier) __attribute__((unused));
 
-static int L2_barrier_destroy(L2_barrier_t *barrier) {
+static int barrier_destroy(barrier_t *barrier) {
   return 0;
 }
 
 
 //Standard barrier
-static inline void L2_barrier(L2_barrier_t *barrier, int numthreads) __attribute__((unused));
+static inline void barrier(barrier_t *barrier) __attribute__((unused));
 
-static inline void L2_barrier(L2_barrier_t *barrier, int numthreads) {
-    L2_Barrier(barrier, numthreads);
+static inline void barrier(barrier_t *barrier) {
+    L2_Barrier(&barrier->barrier, barrier->nthreads);
 }
 
 
 //Barrier with a callback -- usually used to poll MPI to prevent deadlock
-static inline void L2_barrier_cb(L2_barrier_t *barrier, int numthreads, void (*cbfn)(void)) __attribute__((unused));
+static inline void barrier_cb(barrier_t *barrier, void (*cbfn)(void)) __attribute__((unused));
 
 
 //This is a copy of IBM's L2_Barrier modified to use the callback while waiting.
-static inline void L2_barrier_cb(L2_barrier_t *barrier, int numthreads, void (*cbfn)(void)) {
-    uint64_t target = barrier->start + numthreads;
-    uint64_t current = L2_AtomicLoadIncrement(&barrier->count) + 1;
+static inline void barrier_cb(barrier_t *barrier, void (*cbfn)(void)) {
+    L2_Barrier_t* b = &barrier->barrier;
+    uint64_t target = b->start + barrier->nthreads;
+    uint64_t current = L2_AtomicLoadIncrement(&b->count) + 1;
 
     if (current == target) {
-        barrier->start = current;  // advance to next round
+        b->start = current;  // advance to next round
     } else {
-        while (barrier->start < current) {  // wait for advance to next round
+        while (b->start < current) {  // wait for advance to next round
             cbfn();
         }
 
@@ -73,35 +81,21 @@ static inline void L2_barrier_cb(L2_barrier_t *barrier, int numthreads, void (*c
     }
 }
 
-
 #endif
 //#else //Default
 
 typedef struct {
-#if 0
-  //Centralized barrier
-  int32_t* local_sense;
-  volatile int32_t global_sense;
-  volatile int32_t count;
-  int32_t threads;
-#endif
-  uint64_t threads;
+  uint64_t nthreads;
   volatile uint64_t count;
   char padding[48];
   volatile uint64_t cur;
 } barrier_t;
 
 
-static int barrier_init(barrier_t *barrier, int threads) __attribute__((unused));
+static int barrier_init(barrier_t *barrier, int nthreads) __attribute__((unused));
 
-static int barrier_init(barrier_t *barrier, int threads) {
-#if 0
-  barrier->local_sense = (int32_t*)calloc(sizeof(int32_t) /** CACHE_LINE*/, threads);
-  barrier->global_sense = 0;
-  barrier->count = threads;
-  barrier->threads = threads;
-#endif
-  barrier->threads = threads;
+static int barrier_init(barrier_t *barrier, int nthreads) {
+  barrier->nthreads = nthreads;
   barrier->count = 0;
   barrier->cur = 0;
   return 0;
@@ -111,17 +105,16 @@ static int barrier_init(barrier_t *barrier, int threads) {
 static int barrier_destroy(barrier_t *barrier) __attribute__((unused));
 
 static int barrier_destroy(barrier_t *barrier) {
-  //free(barrier->local_sense);
   return 0;
 }
 
 
 //Standard barrier
-static inline void barrier(barrier_t *barrier, int tid) __attribute__((unused));
+static inline void barrier(barrier_t *barrier) __attribute__((unused));
 
-static inline void barrier(barrier_t *barrier, int tid) {
-    uint64_t count = barrier->count + barrier->threads;
-    uint64_t cur = FETCH_ADD64(&barrier->cur, (uint64_t)1) + 1;
+static inline void barrier(barrier_t *barrier) {
+    uint64_t count = barrier->count + barrier->nthreads;
+    uint64_t cur = FETCH_ADD64((long*)&barrier->cur, (uint64_t)1) + 1;
 
     if(cur == count) {
         //Last thread in.. change barrier's count.
@@ -131,34 +124,15 @@ static inline void barrier(barrier_t *barrier, int tid) {
 
     //Wait for barrier's count to change value.
     while(barrier->count < count);
-
-
-#if 0
-  int32_t local_sense = barrier->local_sense[tid] = ~barrier->local_sense[tid];
-
-  //if(__sync_fetch_and_sub(&barrier->count, (int)1) == 1) {
-  //int64_t val = __sync_fetch_and_sub(&barrier->count, (int64_t)1);
-  int32_t val = FETCH_ADD32((int*)&barrier->count, (int32_t)-1);
-
-  if(val == 1) {
-      barrier->count = barrier->threads;
-      STORE_FENCE();
-      barrier->global_sense = local_sense;
-      return;
-  }
-
-  //while(barrier->global_sense != barrier->local_sense[tid]) {
-  while(barrier->global_sense != local_sense);
-#endif
 }
 
 
 //Barrier with a callback -- usually used to poll MPI to prevent deadlock
-static inline void barrier_cb(barrier_t *barrier, int tid, void (*cbfn)(void)) __attribute__((unused));
+static inline void barrier_cb(barrier_t *barrier, void (*cbfn)(void)) __attribute__((unused));
 
-static inline void barrier_cb(barrier_t *barrier, int tid, void (*cbfn)(void)) {
-    uint64_t count = barrier->count + barrier->threads;
-    uint64_t cur = FETCH_ADD64(&barrier->cur, (uint64_t)1) + 1;
+static inline void barrier_cb(barrier_t *barrier, void (*cbfn)(void)) {
+    uint64_t count = barrier->count + barrier->nthreads;
+    uint64_t cur = FETCH_ADD64((long*)&barrier->cur, (uint64_t)1) + 1;
 
     if(cur == count) {
         barrier->count = count;
@@ -168,40 +142,8 @@ static inline void barrier_cb(barrier_t *barrier, int tid, void (*cbfn)(void)) {
     while(barrier->count < count) {
         cbfn();
     }
-
-#if 0
-  int32_t local_sense = barrier->local_sense[tid] = ~barrier->local_sense[tid];
-
-  //if(__sync_fetch_and_sub(&barrier->count, (int)1) == 1) {
-  //int32_t val = __sync_fetch_and_sub(&barrier->count, (int32_t)1);
-  int32_t val = FETCH_ADD32((int*)&barrier->count, (int32_t)-1);
-
-  if(val == 1) {
-      barrier->count = barrier->threads;
-      barrier->global_sense = local_sense;
-      return;
-  }
-
-  //while(barrier->global_sense != barrier->local_sense[tid]) {
-  while(barrier->global_sense != local_sense) {
-      cbfn();
-  }
-
-#if 0
-  do {
-      for(int i = 0; i < 100; i++) {
-          if(barrier->global_sense == local_sense) {
-              return;
-          }
-      }
-
-      cbfn();
-  } while(1);
-#endif
-#endif
 }
 
-//#endif
 
 
 typedef struct treenode_t
@@ -215,7 +157,6 @@ typedef struct treenode_t
         uint8_t b[8];
         uint32_t w;
     } have_child;
-    //volatile uint8_t child_not_ready[4];
     union {
         volatile uint8_t b[4];
         volatile uint32_t w;
@@ -298,6 +239,6 @@ static void treebarrier(treebarrier_t* barrier, int tid)
     *(n->c_ptrs[1]) = sense;
     n->sense = ~n->sense;
 }
-
+//#endif //Default implementations (x86)
 
 #endif

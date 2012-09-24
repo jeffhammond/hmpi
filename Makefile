@@ -1,11 +1,11 @@
-CC=mpicc -std=gnu99
-#CC=mpixlc
+#CC=mpicc -std=gnu99
+CC=mpixlc
 
 WARN=-Wall -Wuninitialized #-Wno-unused-function
-#CFLAGS=$(WARN) -O3 -mcpu=power7 -fomit-frame-pointer
-CFLAGS=$(WARN) -O3 -march=native -fomit-frame-pointer
+CFLAGS=$(WARN) -O3 -mcpu=power7 -fomit-frame-pointer
+#CFLAGS=$(WARN) -O3 -march=native -fomit-frame-pointer
 
-LIBS=-lrt -lpapi
+LIBS=-lrt
 INCS=#-DENABLE_OPI=1 #-D_PROFILE=1 -D_PROFILE_HMPI=1 #-D_PROFILE_PAPI_EVENTS=1
 SRCS=hmpi.c hmpi_coll.c nbc_op.c hmpi_opi.c
 MAIN=main.c
@@ -51,7 +51,8 @@ useq_debug: $(SRCS:%.c=%.o)
 	ranlib hmpi.a
 
 #main: CFLAGS = -g -O -D_PROFILE=1 -D_PROFILE_HMPI=1
-main: CFLAGS = -O3 -march=native -fomit-frame-pointer -D_PROFILE=1 -D_PROFILE_HMPI=1
+#main: CFLAGS+=-D_PROFILE=1 -D_PROFILE_HMPI=1
+main: CFLAGS=-O5 -qhot=novector -qsimd=auto -D_PROFILE=1 -D_PROFILE_HMPI=1
 main: all $(MAIN:%.c=%.o)
 	$(CC) $(CCFLAGS) $(LDFLAGS) -o main main.o hmpi.a $(LIBS)
 

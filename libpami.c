@@ -24,6 +24,7 @@
 
 void libpami_init(void)
 {
+#if 0
     pami_result_t result = PAMI_ERROR;
     size_t world_size;
     size_t world_rank;
@@ -66,14 +67,16 @@ void libpami_init(void)
 
     result = PAMI_Context_createv( client, &config, 0, contexts, num_contexts );
     TEST_ASSERT(result == PAMI_SUCCESS,"PAMI_Context_createv");
+#endif
 }
 
 
 void libpami_shutdown(void)
 {
+#if 0
     /* finalize the client */
     result = PAMI_Client_destroy( &client );
     TEST_ASSERT(result == PAMI_SUCCESS,"PAMI_Client_destroy");
-
+#endif
 }
 

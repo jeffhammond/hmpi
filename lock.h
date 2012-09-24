@@ -7,10 +7,7 @@
 //   compiler probably eliminates them, but still results in less clean code.
 // - OPA lacks a size_t (64bit) integer atomic type.
 
-//Use MCS locks by default.
-// Algorithms for Scalable Synchronization on Shared-Memory Multiprocessors
-// by John Mellor-Crummey and Michael Scott
-#define USE_MCS 1
+//#define USE_MCS 1
 
 #if (defined __IBMC__ || defined __IBMCPP__) && defined __64BIT__ && defined __bg__
 #warning "Using BlueGene/Q (64bit) primitives"
@@ -30,11 +27,31 @@
 #define LOAD_FENCE() __sync()
 #define FENCE() __lwsync(); __fence()
 
+#define CAS_PTR_BOOL(ptr, oldval, newval) \
+  __sync_bool_compare_and_swap((uintptr_t*)(ptr), \
+          (uintptr_t)(oldval), (uintptr_t)(newval))
+
+#define CAS_PTR_VAL(ptr, oldval, newval) \
+  (void*)__sync_val_compare_and_swap((uintptr_t*)(ptr), \
+          (uintptr_t)(oldval), (uintptr_t)(newval))
+
+#define CAS_T_BOOL(t, ptr, oldval, newval) \
+  __sync_bool_compare_and_swap((t*)(ptr), (t)(oldval), (t)(newval))
+
+
+#define FETCH_ADD32(ptr, val) \
+    __sync_fetch_and_add(ptr, val)
+
+#define FETCH_ADD64(ptr, val) \
+    __sync_fetch_and_add(ptr, val)
+
+
 //The __compare_and_swap function is useful when a single word value must be
 //updated only if it has not been changed since it was last read. If you use
 //__compare_and_swap as a locking primitive, insert a call to the __isync
 //built-in function at the start of any critical sections.
 
+#if 0
 static inline int CAS_PTR_BOOL(void** restrict ptr, void* oldval, void* newval)
 {
     return __compare_and_swaplp((volatile long*)ptr, (long*)&oldval, (long)newval);
@@ -61,6 +78,7 @@ static inline int FETCH_ADD64(long int* ptr, long int val)
 
     return ret;
 }
+#endif
 
 static inline void* FETCH_STORE(void** ptr, void* val)
 {
@@ -68,57 +86,14 @@ static inline void* FETCH_STORE(void** ptr, void* val)
 }
 
 
-
-// Lock routines
-
-//As-is, this works, but not as fast as the L2 routines.
-#if 0
-static inline void LOCK_INIT(lock_t* __restrict l, int locked) {
-    l->lock = locked;
-    STORE_FENCE();
-}
-
-static inline void LOCK_SET(lock_t* __restrict l) {
-    __fence();
-    __lwsync();
-    while(__check_lock_mp((int*)(&l->lock), 0, 1));
-    __isync();
-    __lwsync();
-    __fence();
-}
-
-//Returns non-zero if lock was acquired, 0 if not.
-static inline long int LOCK_TRY(lock_t* __restrict l) {
-    //__fence();
-    if(l->lock == 0) {
-        __isync();
-        return __check_lock_mp((int*)(&l->lock), 0, 1) == 0;
-    } else {
-        return 0;
-    }
-}
-
-static inline void LOCK_CLEAR(lock_t* __restrict l) {
-    __fence();
-    __lwsync();
-    __clear_lock_mp((int*)(&l->lock), 0);
-    //__lwsync();
-}
-
-static inline long int LOCK_GET(lock_t* __restrict l) {
-    return (long int)l->lock;
-}
-#endif
-
 // Lock routines
 #include <spi/include/kernel/memory.h>
 #include <spi/include/l2/lock.h>
 
 typedef L2_Lock_t lock_t;
 
-static inline void LOCK_INIT(lock_t* __restrict l, int locked) {
-    //TODO - do I need to use AtomicAlloc?
-    if(Kernel_L2AtomicsAllocate(l, sizeof(L2_lock_t))) {
+static void LOCK_INIT(lock_t* __restrict l, int locked) {
+    if(Kernel_L2AtomicsAllocate(l, sizeof(lock_t))) {
         printf("ERROR Unable to allocate L2 atomic memory\n");
         fflush(stdout);
         assert(0);
@@ -130,20 +105,20 @@ static inline void LOCK_INIT(lock_t* __restrict l, int locked) {
     }
 }
 
-static inline void L2_LOCK_SET(lock_t* __restrict l) {
+static inline void LOCK_ACQUIRE(lock_t* __restrict l) {
     L2_LockAcquire(l);
 }
 
 //Returns non-zero if lock was acquired, 0 if not.
-static inline long int L2_LOCK_TRY(lock_t* __restrict l) {
+static inline long int LOCK_TRY(lock_t* __restrict l) {
     return L2_LockTryAcquire(l);
 }
 
-static inline void L2_LOCK_CLEAR(lock_t* __restrict l) {
+static inline void LOCK_RELEASE(lock_t* __restrict l) {
     L2_LockRelease(l);
 }
 
-static inline long int L2_LOCK_GET(lock_t* __restrict l) {
+static inline long int LOCK_GET(lock_t* __restrict l) {
     assert(0); //I want to see if/when this is used; below may be wrong.
     return !L2_LockIsBusy(l);
 }
@@ -294,7 +269,7 @@ static inline void LOCK_INIT(lock_t* __restrict l, int locked) {
     STORE_FENCE();
 }
 
-static inline void LOCK_SET(lock_t* __restrict l) {
+static inline void LOCK_ACQUIRE(lock_t* __restrict l) {
     while(__check_lock_mp((int*)(&l->lock), 0, 1));
 }
 
@@ -303,7 +278,7 @@ static inline int LOCK_TRY(lock_t* __restrict l) {
     return __check_lock_mp((int*)(&l->lock), 0, 1) == 0;
 }
 
-static inline void LOCK_CLEAR(lock_t* __restrict l) {
+static inline void LOCK_RELEASE(lock_t* __restrict l) {
     __clear_lock_mp((int*)(&l->lock), 0);
 }
 
@@ -355,35 +330,31 @@ typedef struct lock_t {
     __sync_fetch_and_add(ptr, val)
 
 
-// Lock routines
+static inline void* FETCH_STORE(void** ptr, void* val)
+{
+    void* out;
 
-static inline void LOCK_INIT(lock_t* __restrict l, int locked) {
-    l->lock = locked;
+#ifdef __x86_64__
+    asm volatile ("lock xchg %0, (%1)" : "=r" (out) : "r" (ptr), "0" (val));
+#else
+#warning "FETCH_STORE not implemented for this architecture"
+    //This builtin, as described by Intel, is not a traditional test-and-set
+    // operation, but rather an atomic exchange operation. It writes value into
+    // *ptr, and returns the previous contents of *ptr.
     //STORE_FENCE();
-}
+    out = __sync_lock_test_and_set(ptr, val);
+#endif
 
-static inline void LOCK_SET(lock_t* __restrict l) {
-    while(__sync_lock_test_and_set(&l->lock, 1) == 1);
-}
-
-//Returns non-zero if lock was acquired, 0 if not.
-static inline int LOCK_TRY(lock_t* __restrict l) {
-    if(l->lock == 0) {
-        return __sync_lock_test_and_set(&l->lock, 1) == 0;
-    } else {
-        return 0;
-    }
-}
-
-static inline void LOCK_CLEAR(lock_t* __restrict l) {
-    __sync_lock_release(&l->lock);
-}
-
-static inline int LOCK_GET(lock_t* __restrict l) {
-    return (int)l->lock;
+    return out;
 }
 
 
+
+#ifdef __x86_64__ //Better x86 versions
+
+//Use MCS locks by default.
+// Algorithms for Scalable Synchronization on Shared-Memory Multiprocessors
+// by John Mellor-Crummey and Michael Scott
 
 typedef struct mcs_qnode_t {
     struct mcs_qnode_t* next;
@@ -393,50 +364,8 @@ typedef struct mcs_qnode_t {
 typedef mcs_qnode_t* mcs_lock_t;
 
 
-static inline void MCS_LOCK_INIT(mcs_lock_t* __restrict l) {
+static void MCS_LOCK_INIT(mcs_lock_t* __restrict l) {
     *l = NULL;
-    STORE_FENCE();
-}
-    
-
-static inline void* FETCH_STORE(void** ptr, void* val)
-{
-    void* out;
-#ifdef __x86_64__
-    asm volatile ("lock xchg %0, (%1)" : "=r" (out) : "r" (ptr), "0" (val));
-#elif defined(__powerpc64__)
-#if 0
-    do {
-        out = __ldarx(ptr);
-    } while(__stdcx(ptr, val));
-#endif
-#if 0
-    asm volatile (
-            "       lwsync\n"
-            "   1:  ldarx %0,0,%2\n"
-            "       stdcx. %3,0,%2\n"
-            "       bne-  1b\n"
-            "       isync\n"
-                : "=&r" (out), "+m" (*(volatile unsigned long*)ptr)
-                : "r" (ptr), "r" (0), "r" (val)
-                : "cc", "memory");
-
-#endif
-    LOAD_FENCE();
-    out = __sync_lock_test_and_set(ptr, val);
-    LOAD_FENCE();
-
-#else
-#warning "Fetch and store not implemented for this architecture"
-    void* old;
-    do {
-        old = *ptr;
-        out = __sync_val_compare_and_swap(ptr, old, val);
-    } while(old != out);
-    //out = __sync_lock_test_and_set(ptr, val);
-#endif
-
-    return out;
 }
 
 static inline void MCS_LOCK_ACQUIRE(mcs_lock_t* __restrict l, mcs_qnode_t* q) {
@@ -458,9 +387,7 @@ static inline void MCS_LOCK_ACQUIRE(mcs_lock_t* __restrict l, mcs_qnode_t* q) {
         STORE_FENCE();  //Prevent q->locked from being set afer pred->next
 
         pred->next = q;
-        while(*locked == 1) {
-        //    __asm__("pause");
-        }
+        while(*locked == 1);
     }
 }
 
@@ -480,13 +407,44 @@ static inline void MCS_LOCK_RELEASE(mcs_lock_t* __restrict l, mcs_qnode_t* q) {
         //AWF - the way this type is declared is CRITICAL for correctness!!!
         mcs_qnode_t* volatile * vol_next = (mcs_qnode_t* volatile *)&q->next;
 
-        while((next = *vol_next) == NULL) {
-        //    __asm__("pause");
-        }
+        while((next = *vol_next) == NULL);
     }
 
     next->locked = 0;
 }
+
+#else //Default lock implementation
+
+// Lock routines
+
+static inline void LOCK_INIT(lock_t* __restrict l, int locked) {
+    l->lock = locked;
+}
+
+static inline void LOCK_ACQUIRE(lock_t* __restrict l) {
+    while(__sync_lock_test_and_set(&l->lock, 1) == 1);
+}
+
+//Returns non-zero if lock was acquired, 0 if not.
+static inline int LOCK_TRY(lock_t* __restrict l) {
+    if(l->lock == 0) {
+        return __sync_lock_test_and_set(&l->lock, 1) == 0;
+    } else {
+        return 0;
+    }
+}
+
+static inline void LOCK_RELEASE(lock_t* __restrict l) {
+    __sync_lock_release(&l->lock);
+}
+
+static inline int LOCK_GET(lock_t* __restrict l) {
+    return (int)l->lock;
+}
+
+
+
+#endif
 
 #else
 #error "Unrecognized platform; no atomics defined"

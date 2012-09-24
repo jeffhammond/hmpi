@@ -202,7 +202,7 @@ static inline void add_send_req(HMPI_Request_list* req_list,
     HMPI_Item* item = (HMPI_Item*)req;
 
 #ifndef USE_MCS
-    LOCK_SET(&req_list->lock);
+    LOCK_ACQUIRE(&req_list->lock);
 #else
     mcs_qnode_t q;
     MCS_LOCK_ACQUIRE(&req_list->lock, &q);
@@ -215,7 +215,7 @@ static inline void add_send_req(HMPI_Request_list* req_list,
     req_list->tail = item;
 
 #ifndef USE_MCS
-    LOCK_CLEAR(&req_list->lock);
+    LOCK_RELEASE(&req_list->lock);
 #else
     MCS_LOCK_RELEASE(&req_list->lock, &q);
 #endif
@@ -263,7 +263,7 @@ static inline void update_send_reqs(HMPI_Request_list* local_list, HMPI_Request_
 
 
 #ifndef USE_MCS
-        LOCK_SET(&shared_list->lock);
+        LOCK_ACQUIRE(&shared_list->lock);
 #else
         mcs_qnode_t q;
         MCS_LOCK_ACQUIRE(&shared_list->lock, &q);
@@ -281,7 +281,7 @@ static inline void update_send_reqs(HMPI_Request_list* local_list, HMPI_Request_
         shared_list->tail = &shared_list->head;
 
 #ifndef USE_MCS
-        LOCK_CLEAR(&shared_list->lock);
+        LOCK_RELEASE(&shared_list->lock);
 #else
         MCS_LOCK_RELEASE(&shared_list->lock, &q);
 #endif
@@ -645,12 +645,7 @@ void* trampoline(void* tid) {
 
     // Don't head off to user land until all threads are ready 
 
-//#ifdef USE_L2_BARRIER
-//#warning "L2 barrier"
-   // L2_barrier(&HMPI_COMM_WORLD->barr, g_nthreads);
-//#else
-    barrier(&HMPI_COMM_WORLD->barr, g_tl_tid);
-//#endif
+    barrier(&HMPI_COMM_WORLD->barr);
 
 #ifdef ENABLE_OPI
     OPI_Init();
@@ -712,12 +707,8 @@ int HMPI_Init(int *argc, char ***argv, int (*start_routine)(int argc, char** arg
 
   HMPI_COMM_WORLD = (HMPI_Comm_info*)MALLOC(HMPI_Comm_info, 1);
   HMPI_COMM_WORLD->mpicomm = MPI_COMM_WORLD;
-#ifdef USE_L2_BARRIER
-  L2_barrier_init(&HMPI_COMM_WORLD->barr, nthreads);
-#else
   barrier_init(&HMPI_COMM_WORLD->barr, nthreads);
-  treebarrier_init(&HMPI_COMM_WORLD->tbarr, nthreads);
-#endif
+  //treebarrier_init(&HMPI_COMM_WORLD->tbarr, nthreads);
 
   HMPI_COMM_WORLD->sbuf = MALLOC(volatile void*, nthreads);
   HMPI_COMM_WORLD->rbuf = MALLOC(volatile void*, nthreads);
@@ -794,13 +785,7 @@ int HMPI_Finalize()
 
     HMPI_Barrier(HMPI_COMM_WORLD);
 
-#if 0
-#ifdef USE_L2_BARRIER
-    L2_barrier(&HMPI_COMM_WORLD->barr, g_nthreads);
-#else
-    barrier(&HMPI_COMM_WORLD->barr, g_tl_tid);
-#endif
-#endif
+    barrier(&HMPI_COMM_WORLD->barr);
 
     //Free the local request pool
     for(HMPI_Item* cur = g_free_reqs; cur != NULL;) {
@@ -810,7 +795,7 @@ int HMPI_Finalize()
     }
 
     //Seems to prevent a segfault in MPI_Finalize()
-    barrier(&HMPI_COMM_WORLD->barr, g_tl_tid);
+    barrier(&HMPI_COMM_WORLD->barr);
     return 0;
 }
 
@@ -822,17 +807,14 @@ static inline int HMPI_Progress_send(const HMPI_Request send_req)
         return HMPI_REQ_COMPLETE;
     }
 
-    //TODO - maybe i can eliminate the match lock.  use the offset as an atomic value.
-    // Sender checks if offset >0, if so do the send-recv copy path.
-    //  End case is offset >= length.
-    // Receiver enters send-recv path when msg is large enough, and start incrementing offset.
-    //  Signal completion by completing the send.  But how does it know when sender is done copying?
-    //   This is why the lock is used.
-
     //Write blocks on this send req if receiver has matched it.
     //If mesage is short, receiver won't bother clearing the match lock, and
     // instead just does the copy and marks completion.
-    if(LOCK_TRY(&send_req->match)) {
+    
+    //if(LOCK_TRY(&send_req->match)) {
+    if(send_req->match &&
+            CAS_T_BOOL(volatile uint32_t, &send_req->match, 1, 0)) {
+    //if(send_req->offset != 0) {
         HMPI_Request recv_req = (HMPI_Request)send_req->u.local.match_req;
         uintptr_t rbuf = (uintptr_t)recv_req->buf;
 
@@ -853,7 +835,11 @@ static inline int HMPI_Progress_send(const HMPI_Request send_req)
 
         //Signal that the sender is done copying.
         //Possible for the receiver to still be copying here.
-        LOCK_CLEAR(&send_req->match);
+        //LOCK_CLEAR(&send_req->match);
+#ifdef __bg__
+        STORE_FENCE();
+#endif
+        send_req->match = 1;
 
         //Receiver will set completion soon, wait rather than running off.
         while(get_reqstat(send_req) != HMPI_REQ_COMPLETE);
@@ -885,7 +871,6 @@ static inline void HMPI_Complete_recv(HMPI_Request recv_req, HMPI_Request send_r
 
     if(size < BLOCK_SIZE * 2) {
         memcpy((void*)recv_req->buf, send_req->buf, size);
-        //FENCE();
     } else {
         //The setting of send_req->match_req signals to sender that they can
         // start doing copying as well, if they are testing the req.
@@ -893,7 +878,9 @@ static inline void HMPI_Complete_recv(HMPI_Request recv_req, HMPI_Request send_r
         //recv_req->match_req = send_req; //TODO - keep this here?
         send_req->u.local.match_req = recv_req;
         send_req->u.local.offset = 0;
-        LOCK_CLEAR(&send_req->match);
+        //LOCK_CLEAR(&send_req->match);
+        STORE_FENCE();
+        send_req->match = 1;
 
         uintptr_t rbuf = (uintptr_t)recv_req->buf;
         uintptr_t sbuf = (uintptr_t)send_req->buf;
@@ -909,7 +896,9 @@ static inline void HMPI_Complete_recv(HMPI_Request recv_req, HMPI_Request send_r
         }
 
         //Wait if the sender is copying.
-        LOCK_SET(&send_req->match);
+        //LOCK_SET(&send_req->match);
+        while(CAS_T_BOOL(volatile uint32_t, &send_req->match, 1, 0));
+        //while(send_req->match == 0);
     }
 
     //Mark send and receive requests done
@@ -1537,7 +1526,12 @@ int HMPI_Isend(void* buf, int count, MPI_Datatype datatype, int dest, int tag, H
     int target_mpi_rank = dest / nthreads;
     if(target_mpi_rank == (hmpi_rank / nthreads)) {
         req->type = HMPI_SEND;
-        LOCK_INIT(&req->match, 1);
+        //LOCK_INIT(&req->match, 1);
+        req->u.local.offset = 0;
+#ifdef __bg__
+        //Have to make sure offset is reset before queueing req
+        STORE_FENCE();
+#endif
 
         int target_mpi_thread = dest % nthreads;
         add_send_req(&g_send_reqs[target_mpi_thread], req);

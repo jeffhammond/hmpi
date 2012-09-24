@@ -212,7 +212,7 @@ static void PROFILE_INIT(int tid)
 
 #if _PROFILE_HMPI == 1
     //Need to make sure PAPI is initialized before creating events
-    barrier(&HMPI_COMM_WORLD->barr, tid);
+    barrier(&HMPI_COMM_WORLD->barr);
 #endif
 
 #if _PROFILE_PAPI_EVENTS == 1

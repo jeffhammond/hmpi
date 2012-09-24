@@ -46,8 +46,7 @@ typedef struct {
   hmpi_coll_t* coll;        //Used by allreduce
 
   barrier_t barr;       //Barrier for local ranks in this comm
-  treebarrier_t tbarr;
-  //L2_barrier_t barr;       //Barrier for local ranks in this comm
+  //treebarrier_t tbarr;
   MPI_Comm mpicomm;     //Underyling MPI comm
   //MPI_Comm* tcomms;
 } HMPI_Comm_info;
@@ -103,7 +102,7 @@ typedef struct HMPI_Request_info {
     void* buf;      //User buffer
 
     MPI_Datatype datatype;  //MPI datatype
-    lock_t match;       //Synchronization for sender/recver copying
+    volatile uint32_t match;//Synchronization for sender/recver copying
 
     union {
         struct {
