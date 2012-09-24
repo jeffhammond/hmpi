@@ -153,12 +153,8 @@ typedef struct HMPI_Request_list {
     HMPI_Item head;
     HMPI_Item* tail;
 
-#ifdef USE_MCS 
-    mcs_lock_t lock;
-#else
     lock_t lock;
-    char padding[1024];
-#endif 
+    char padding[1024]; //TODO - sort this out
 } HMPI_Request_list;
 
 static HMPI_Request_list* g_send_reqs = NULL;       //Senders add sends here
@@ -201,12 +197,7 @@ static inline void add_send_req(HMPI_Request_list* req_list,
     //Insert req at tail.
     HMPI_Item* item = (HMPI_Item*)req;
 
-#ifndef USE_MCS
     LOCK_ACQUIRE(&req_list->lock);
-#else
-    mcs_qnode_t q;
-    MCS_LOCK_ACQUIRE(&req_list->lock, &q);
-#endif
 
     //NOTE -- On BG/Q other cores can see these two writes in a different order
     // than what is written here.  Thus update_send_reqs() needs to be careful
@@ -214,11 +205,7 @@ static inline void add_send_req(HMPI_Request_list* req_list,
     req_list->tail->next = item;
     req_list->tail = item;
 
-#ifndef USE_MCS
     LOCK_RELEASE(&req_list->lock);
-#else
-    MCS_LOCK_RELEASE(&req_list->lock, &q);
-#endif
 }
 
 
@@ -262,29 +249,18 @@ static inline void update_send_reqs(HMPI_Request_list* local_list, HMPI_Request_
 #endif
 
 
-#ifndef USE_MCS
         LOCK_ACQUIRE(&shared_list->lock);
-#else
-        mcs_qnode_t q;
-        MCS_LOCK_ACQUIRE(&shared_list->lock, &q);
-#endif
 
-#ifndef __x86__
+#ifndef __x86__ //NOT x86
         //For non x86 (eg PPC) this statement needs to be protected.
         // See comments and x86 statement above.
         local_list->tail->next = shared_list->head.next;
 #endif
 
-        //g_tl_send_reqs.tail = req_list->tail;
-        //local_list->tail = req_list->tail;
         tail = shared_list->tail;
         shared_list->tail = &shared_list->head;
 
-#ifndef USE_MCS
         LOCK_RELEASE(&shared_list->lock);
-#else
-        MCS_LOCK_RELEASE(&shared_list->lock, &q);
-#endif
 
         //This is safe, the pointers involved here are now only accessible by
         // this core.
@@ -622,11 +598,7 @@ void* trampoline(void* tid) {
     g_send_reqs[rank].head.next = NULL;
     g_send_reqs[rank].tail = &g_send_reqs[rank].head;
     g_tl_my_send_reqs = &g_send_reqs[rank];
-#ifndef USE_MCS
-    LOCK_INIT(&g_send_reqs[rank].lock, 0);
-#else
-    MCS_LOCK_INIT(&g_send_reqs[rank].lock);
-#endif
+    LOCK_INIT(&g_send_reqs[rank].lock);
     g_tl_send_reqs.head.next = NULL;
     g_tl_send_reqs.tail = &g_tl_send_reqs.head;
 

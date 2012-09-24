@@ -7,13 +7,8 @@
 //   compiler probably eliminates them, but still results in less clean code.
 // - OPA lacks a size_t (64bit) integer atomic type.
 
-//#define USE_MCS 1
-
 #if (defined __IBMC__ || defined __IBMCPP__) && defined __64BIT__ && defined __bg__
 #warning "Using BlueGene/Q (64bit) primitives"
-
-//MCS locks aren't faster on POWER chips.
-#undef USE_MCS
 
 //fetch-add for send-recv offset support:
 // Wrap the atomic alloc call for HMPI to call
@@ -92,7 +87,9 @@ static inline void* FETCH_STORE(void** ptr, void* val)
 
 typedef L2_Lock_t lock_t;
 
-static void LOCK_INIT(lock_t* __restrict l, int locked) {
+static void LOCK_INIT(lock_t* __restrict l) __attribute__((unused));
+
+static void LOCK_INIT(lock_t* __restrict l) {
     if(Kernel_L2AtomicsAllocate(l, sizeof(lock_t))) {
         printf("ERROR Unable to allocate L2 atomic memory\n");
         fflush(stdout);
@@ -100,9 +97,6 @@ static void LOCK_INIT(lock_t* __restrict l, int locked) {
     }
 
     L2_LockInit(l);
-    if(locked) {
-        L2_LockAcquire(l);
-    }
 }
 
 static inline void LOCK_ACQUIRE(lock_t* __restrict l) {
@@ -205,9 +199,6 @@ static inline void MCS_LOCK_RELEASE(mcs_lock_t* __restrict l, mcs_qnode_t* q) {
 #elif (defined __IBMC__ || defined __IBMCPP__) && defined __32BIT__
 #warning "Using BlueGene/P (32bit) primitives"
 
-//MCS locks aren't faster on POWER chips.
-#undef USE_MCS
-
 typedef struct lock_t {
 #if defined __powerpc64__
     // POWER architectures (works on Q)
@@ -264,8 +255,10 @@ static inline int FETCH_ADD64(volatile long int* __restrict ptr, long int val)
 
 // Lock routines
 
-static inline void LOCK_INIT(lock_t* __restrict l, int locked) {
-    l->lock = locked;
+static void LOCK_INIT(lock_t* __restrict l) __attribute__((unused));
+
+static inline void LOCK_INIT(lock_t* __restrict l) {
+    l->lock = 0;
     STORE_FENCE();
 }
 
@@ -291,6 +284,7 @@ static inline int LOCK_GET(lock_t* __restrict l) {
 //This is generic locking support using GCC/ICC atomic builtins.
 #elif defined __GNUC__ //Should cover ICC too
 
+#if 0
 typedef struct lock_t {
 #if defined __powerpc64__
     // POWER architectures (works on Q)
@@ -300,6 +294,7 @@ typedef struct lock_t {
     volatile int lock;
 #endif
 } lock_t;
+#endif
 
 
 #ifdef __x86_64__ //Better x86 versions
@@ -361,14 +356,22 @@ typedef struct mcs_qnode_t {
     int locked;
 } mcs_qnode_t;
 
-typedef mcs_qnode_t* mcs_lock_t;
+typedef mcs_qnode_t* lock_t;
 
 
-static void MCS_LOCK_INIT(mcs_lock_t* __restrict l) {
+static void LOCK_INIT(lock_t* __restrict l) __attribute__((unused));
+
+static void LOCK_INIT(lock_t* __restrict l) {
     *l = NULL;
 }
 
-static inline void MCS_LOCK_ACQUIRE(mcs_lock_t* __restrict l, mcs_qnode_t* q) {
+#define LOCK_ACQUIRE(l) \
+    mcs_qnode_t q; \
+    __LOCK_ACQUIRE(l, &q)
+
+#define LOCK_RELEASE(l) __LOCK_RELEASE(l, &q)
+
+static inline void __LOCK_ACQUIRE(lock_t* __restrict l, mcs_qnode_t* q) {
     q->next = NULL;
 
     mcs_qnode_t* pred;
@@ -391,7 +394,7 @@ static inline void MCS_LOCK_ACQUIRE(mcs_lock_t* __restrict l, mcs_qnode_t* q) {
     }
 }
 
-static inline void MCS_LOCK_RELEASE(mcs_lock_t* __restrict l, mcs_qnode_t* q) {
+static inline void __LOCK_RELEASE(lock_t* __restrict l, mcs_qnode_t* q) {
     mcs_qnode_t* next = q->next;
 
     //Is another thread waiting on the lock?
@@ -412,37 +415,6 @@ static inline void MCS_LOCK_RELEASE(mcs_lock_t* __restrict l, mcs_qnode_t* q) {
 
     next->locked = 0;
 }
-
-#else //Default lock implementation
-
-// Lock routines
-
-static inline void LOCK_INIT(lock_t* __restrict l, int locked) {
-    l->lock = locked;
-}
-
-static inline void LOCK_ACQUIRE(lock_t* __restrict l) {
-    while(__sync_lock_test_and_set(&l->lock, 1) == 1);
-}
-
-//Returns non-zero if lock was acquired, 0 if not.
-static inline int LOCK_TRY(lock_t* __restrict l) {
-    if(l->lock == 0) {
-        return __sync_lock_test_and_set(&l->lock, 1) == 0;
-    } else {
-        return 0;
-    }
-}
-
-static inline void LOCK_RELEASE(lock_t* __restrict l) {
-    __sync_lock_release(&l->lock);
-}
-
-static inline int LOCK_GET(lock_t* __restrict l) {
-    return (int)l->lock;
-}
-
-
 
 #endif
 

@@ -54,11 +54,7 @@ typedef struct mpool_t {
     opi_hdr_t* head;
     //int buf_count;
 
-#ifdef USE_MCS
-    mcs_lock_t lock;
-#else
     lock_t lock;
-#endif
 } mpool_t;
 
 static __thread mpool_t g_mpool;
@@ -70,11 +66,7 @@ void OPI_Init(void)
     g_mpool.head = NULL;
     //g_mpool.buf_count = 0;
 
-#ifdef USE_MCS
-    MCS_LOCK_INIT(&g_mpool.lock);
-#else
-    LOCK_INIT(&g_mpool.lock, 0);
-#endif
+    LOCK_INIT(&g_mpool.lock);
 }
 
 
@@ -105,12 +97,7 @@ int OPI_Alloc(void** ptr, size_t length)
     opi_hdr_t* cur;
     opi_hdr_t* prev;
 
-#ifdef USE_MCS
-    mcs_qnode_t q;
-    MCS_LOCK_ACQUIRE(&mp->lock, &q);
-#else
-    LOCK_SET(&mp->lock);
-#endif
+    LOCK_ACQUIRE(&mp->lock);
 
     for(prev = NULL, cur = mp->head; cur != NULL;
             prev = cur, cur = cur->next) {
@@ -123,11 +110,7 @@ int OPI_Alloc(void** ptr, size_t length)
                 prev->next = cur->next;
             }
 
-#ifdef USE_MCS
-                MCS_LOCK_RELEASE(&mp->lock, &q);
-#else
-                LOCK_CLEAR(&mp->lock);
-#endif
+            LOCK_RELEASE(&mp->lock);
 
             //printf("%p reuse addr %p length %llu\n", mp, cur, (uint64_t)length); fflush(stdout);
 #ifdef MPOOL_CHECK
@@ -139,11 +122,7 @@ int OPI_Alloc(void** ptr, size_t length)
         }
     }
 
-#ifdef USE_MCS
-        MCS_LOCK_RELEASE(&mp->lock, &q);
-#else
-        LOCK_CLEAR(&mp->lock);
-#endif
+        LOCK_RELEASE(&mp->lock);
 
     //If no existing allocation is found, allocate a new one.
     opi_hdr_t* hdr = (opi_hdr_t*)memalign(ALIGNMENT, length + ALIGNMENT);
@@ -186,12 +165,7 @@ int OPI_Free(void** ptr)
 #endif
 
 
-#ifdef USE_MCS
-    mcs_qnode_t q;
-    MCS_LOCK_ACQUIRE(&mp->lock, &q);
-#else
-    LOCK_SET(&mp->lock);
-#endif
+    LOCK_ACQUIRE(&mp->lock);
 
 #if 0
     if(unlikely(mp->buf_count >= MAX_BUF_COUNT)) {
@@ -219,11 +193,7 @@ int OPI_Free(void** ptr)
     hdr->next = mp->head;
     mp->head = hdr;
 
-#ifdef USE_MCS
-    MCS_LOCK_RELEASE(&mp->lock, &q);
-#else
-    LOCK_CLEAR(&mp->lock);
-#endif
+    LOCK_RELEASE(&mp->lock);
 
     *ptr = NULL;
     FULL_PROFILE_STOP(OPI_Free);
