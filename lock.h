@@ -7,21 +7,8 @@
 //   compiler probably eliminates them, but still results in less clean code.
 // - OPA lacks a size_t (64bit) integer atomic type.
 
-#if (defined __IBMC__ || defined __IBMCPP__) && defined __64BIT__ && defined __bg__
-#warning "Using BlueGene/Q (64bit) primitives"
 
-//fetch-add for send-recv offset support:
-// Wrap the atomic alloc call for HMPI to call
-// Provide L2-atomic load-increment (fetch and add) operation
-
-#if defined __IBMCPP__
-#include <builtins.h>
-#endif
-
-#define STORE_FENCE() __lwsync()
-#define LOAD_FENCE() __sync()
-#define FENCE() __lwsync(); __fence()
-
+//Atomic Intel/GCC builtins used on all platforms.
 #define CAS_PTR_BOOL(ptr, oldval, newval) \
   __sync_bool_compare_and_swap((uintptr_t*)(ptr), \
           (uintptr_t)(oldval), (uintptr_t)(newval))
@@ -41,12 +28,30 @@
     __sync_fetch_and_add(ptr, val)
 
 
+// Platform-specific definitions
+
+#if (defined __IBMC__ || defined __IBMCPP__) && defined __64BIT__ && defined __bg__
+#warning "Using BlueGene/Q (64bit) primitives"
+
+//fetch-add for send-recv offset support:
+// Wrap the atomic alloc call for HMPI to call
+// Provide L2-atomic load-increment (fetch and add) operation
+
+#if defined __IBMCPP__
+#include <builtins.h>
+#endif
+
+#define STORE_FENCE() __lwsync()
+#define LOAD_FENCE() __sync()
+#define FENCE() __lwsync(); __fence()
+
+
+#if 0
+
 //The __compare_and_swap function is useful when a single word value must be
 //updated only if it has not been changed since it was last read. If you use
 //__compare_and_swap as a locking primitive, insert a call to the __isync
 //built-in function at the start of any critical sections.
-
-#if 0
 static inline int CAS_PTR_BOOL(void** restrict ptr, void* oldval, void* newval)
 {
     return __compare_and_swaplp((volatile long*)ptr, (long*)&oldval, (long)newval);
@@ -99,23 +104,25 @@ static void LOCK_INIT(lock_t* __restrict l) {
     L2_LockInit(l);
 }
 
-static inline void LOCK_ACQUIRE(lock_t* __restrict l) {
-    L2_LockAcquire(l);
+static void LOCK_INIT_NA(lock_t* __restrict l) {
+    L2_LockInit(l);
 }
 
-//Returns non-zero if lock was acquired, 0 if not.
-static inline long int LOCK_TRY(lock_t* __restrict l) {
-    return L2_LockTryAcquire(l);
+static inline void LOCK_ACQUIRE(lock_t* __restrict l) {
+    L2_LockAcquire(l);
 }
 
 static inline void LOCK_RELEASE(lock_t* __restrict l) {
     L2_LockRelease(l);
 }
 
-static inline long int LOCK_GET(lock_t* __restrict l) {
-    assert(0); //I want to see if/when this is used; below may be wrong.
-    return !L2_LockIsBusy(l);
-}
+// L2 atomic routins
+#include <spi/include/l2/atomic.h>
+
+#define L2_LOAD(ptr) L2_AtomicLoad((volatile uint64_t*)ptr)
+#define L2_STORE(ptr, val) \
+    L2_AtomicStore((volatile uint64_t*)ptr, (uint64_t)val)
+#define L2_LOAD_INCR(ptr) L2_AtomicLoadIncrement((volatile uint64_t*)ptr)
 
 
 //This code works on BGQ, but MCS offers no performance advantage due to Q's
@@ -200,13 +207,7 @@ static inline void MCS_LOCK_RELEASE(mcs_lock_t* __restrict l, mcs_qnode_t* q) {
 #warning "Using BlueGene/P (32bit) primitives"
 
 typedef struct lock_t {
-#if defined __powerpc64__
-    // POWER architectures (works on Q)
     volatile int32_t lock;
-#else
-    // Default GCC/ICC (x86)
-    volatile int lock;
-#endif
 } lock_t;
 
 
@@ -217,13 +218,8 @@ typedef struct lock_t {
 #define STORE_FENCE() __lwsync()
 #define LOAD_FENCE() __sync()
 
-//if *ptr == oldval, then write *newval
+//TODO - does BG/P have the GCC builtins?
 #if 0
-#define CAS_PTR_BOOL(ptr, oldval, newval) \
-  __compare_and_swap((volatile intptr_t*)(ptr), \
-          (intptr_t)(oldval), (intptr_t)(newval))
-#endif
-
 static inline int CAS_PTR_BOOL(volatile void** ptr, void* oldval, void* newval)
 {
     return __compare_and_swap((volatile int*)ptr, (int*)&oldval, (int)newval);
@@ -251,6 +247,7 @@ static inline int FETCH_ADD64(volatile long int* __restrict ptr, long int val)
 
     return ret;
 }
+#endif
 
 
 // Lock routines
@@ -259,42 +256,19 @@ static void LOCK_INIT(lock_t* __restrict l) __attribute__((unused));
 
 static inline void LOCK_INIT(lock_t* __restrict l) {
     l->lock = 0;
-    STORE_FENCE();
 }
 
 static inline void LOCK_ACQUIRE(lock_t* __restrict l) {
     while(__check_lock_mp((int*)(&l->lock), 0, 1));
 }
 
-//Returns non-zero if lock was acquired, 0 if not.
-static inline int LOCK_TRY(lock_t* __restrict l) {
-    return __check_lock_mp((int*)(&l->lock), 0, 1) == 0;
-}
-
 static inline void LOCK_RELEASE(lock_t* __restrict l) {
     __clear_lock_mp((int*)(&l->lock), 0);
 }
 
-static inline int LOCK_GET(lock_t* __restrict l) {
-    return (int)l->lock;
-}
-
-
 
 //This is generic locking support using GCC/ICC atomic builtins.
 #elif defined __GNUC__ //Should cover ICC too
-
-#if 0
-typedef struct lock_t {
-#if defined __powerpc64__
-    // POWER architectures (works on Q)
-    volatile int32_t lock;
-#else
-    // Default GCC/ICC (x86)
-    volatile int lock;
-#endif
-} lock_t;
-#endif
 
 
 #ifdef __x86_64__ //Better x86 versions
@@ -304,25 +278,6 @@ typedef struct lock_t {
 #define STORE_FENCE() __sync_synchronize()
 #define LOAD_FENCE() __sync_synchronize()
 #endif
-
-//if *ptr == oldval, then write *newval
-#define CAS_PTR_BOOL(ptr, oldval, newval) \
-  __sync_bool_compare_and_swap((uintptr_t*)(ptr), \
-          (uintptr_t)(oldval), (uintptr_t)(newval))
-
-#define CAS_PTR_VAL(ptr, oldval, newval) \
-  (void*)__sync_val_compare_and_swap((uintptr_t*)(ptr), \
-          (uintptr_t)(oldval), (uintptr_t)(newval))
-
-#define CAS_T_BOOL(t, ptr, oldval, newval) \
-  __sync_bool_compare_and_swap((t*)(ptr), (t)(oldval), (t)(newval))
-
-
-#define FETCH_ADD32(ptr, val) \
-    __sync_fetch_and_add(ptr, val)
-
-#define FETCH_ADD64(ptr, val) \
-    __sync_fetch_and_add(ptr, val)
 
 
 static inline void* FETCH_STORE(void** ptr, void* val)
@@ -414,6 +369,24 @@ static inline void __LOCK_RELEASE(lock_t* __restrict l, mcs_qnode_t* q) {
     }
 
     next->locked = 0;
+}
+
+#else
+
+typedef volatile int32_t lock_t;
+
+static void LOCK_INIT(lock_t* __restrict l) __attribute__((unused));
+
+static inline void LOCK_INIT(lock_t* __restrict l) {
+    *l = 0;
+}
+
+static inline void LOCK_ACQUIRE(lock_t* __restrict l) {
+    while(__sync_lock_test_and_set(l, 1));
+}
+
+static inline void LOCK_RELEASE(lock_t* __restrict l) {
+    __sync_lock_release(l);
 }
 
 #endif

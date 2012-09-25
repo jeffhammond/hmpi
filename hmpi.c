@@ -23,7 +23,8 @@
 
 //Block size to use when using the accelerated sender-receiver copy.
 #ifdef __bg__
-#define BLOCK_SIZE 65536
+#define BLOCK_SIZE 8192
+#define BLOCK_FACTOR 4
 #else
 #define BLOCK_SIZE 8192
 #endif
@@ -152,9 +153,14 @@ static __thread HMPI_Item* g_recv_reqs_tail = NULL;
 typedef struct HMPI_Request_list {
     HMPI_Item head;
     HMPI_Item* tail;
-
     lock_t lock;
-    char padding[1024]; //TODO - sort this out
+
+
+    //uint64_t match;
+    //volatile HMPI_Request send_req;
+    //HMPI_Request recv_req;
+    //volatile ssize_t offset;
+    char padding[64]; //maybe not necessary
 } HMPI_Request_list;
 
 static HMPI_Request_list* g_send_reqs = NULL;       //Senders add sends here
@@ -595,10 +601,24 @@ void* trampoline(void* tid) {
     // Initialize send requests list and lock
     g_recv_reqs_tail = &g_recv_reqs_head;
 
+    g_tl_my_send_reqs = &g_send_reqs[rank];
     g_send_reqs[rank].head.next = NULL;
     g_send_reqs[rank].tail = &g_send_reqs[rank].head;
-    g_tl_my_send_reqs = &g_send_reqs[rank];
-    LOCK_INIT(&g_send_reqs[rank].lock);
+
+    if(Kernel_L2AtomicsAllocate(&g_send_reqs[rank], sizeof(HMPI_Request_list))) {
+        printf("ERROR Unable to allocate L2 atomic memory\n");
+        fflush(stdout);
+        assert(0);
+    }
+
+    LOCK_INIT_NA(&g_send_reqs[rank].lock);
+
+    //LOCK_INIT_NA(&g_send_reqs[rank].match);
+    //g_send_reqs[rank].match = 0;
+    //g_send_reqs[rank].send_req = NULL;
+    //g_send_reqs[rank].recv_req = NULL;
+    //g_send_reqs[rank].offset = 0;
+
     g_tl_send_reqs.head.next = NULL;
     g_tl_send_reqs.tail = &g_tl_send_reqs.head;
 
@@ -616,7 +636,7 @@ void* trampoline(void* tid) {
     FULL_PROFILE_INIT(g_tl_tid);
 
     // Don't head off to user land until all threads are ready 
-
+    STORE_FENCE();
     barrier(&HMPI_COMM_WORLD->barr);
 
 #ifdef ENABLE_OPI
@@ -652,6 +672,8 @@ int HMPI_Init(int *argc, char ***argv, int (*start_routine)(int argc, char** arg
   //TODO - is this necessary with PSM used for comms?
   MPI_Init_thread(argc, argv, MPI_THREAD_MULTIPLE, &provided);
   assert(MPI_THREAD_MULTIPLE == provided);
+
+  printf("size %d\n", sizeof(HMPI_Request_list));
 
 #ifdef ENABLE_PSM
   libpsm_init();
@@ -773,7 +795,7 @@ int HMPI_Finalize()
 
 
 //We assume req->type == HMPI_SEND and req->stat == 0 (uncompleted send)
-static inline int HMPI_Progress_send(const HMPI_Request send_req)
+static int HMPI_Progress_send(const HMPI_Request send_req)
 {
     if(get_reqstat(send_req) == HMPI_REQ_COMPLETE) {
         return HMPI_REQ_COMPLETE;
@@ -782,36 +804,59 @@ static inline int HMPI_Progress_send(const HMPI_Request send_req)
     //Write blocks on this send req if receiver has matched it.
     //If mesage is short, receiver won't bother clearing the match lock, and
     // instead just does the copy and marks completion.
+
+    //HMPI_Request* match = &g_send_reqs[send_req->proc].match;
+    //HMPI_Request_list* req_list = &g_send_reqs[send_req->proc];
     
-    //if(LOCK_TRY(&send_req->match)) {
-    if(send_req->match &&
-            CAS_T_BOOL(volatile uint32_t, &send_req->match, 1, 0)) {
-    //if(send_req->offset != 0) {
-        HMPI_Request recv_req = (HMPI_Request)send_req->u.local.match_req;
+    //if(send_req->match &&
+    //        CAS_T_BOOL(volatile uint32_t, &send_req->match, 1, 0)) {
+    //if(L2_LOAD(match) == send_req) {
+    //    L2_STORE(match, NULL);
+    //if(req_list->send_req &&
+    //        CAS_PTR_BOOL(&req_list->send_req, send_req, NULL)) {
+    HMPI_Request recv_req;
+    //if(send_req->u.local.match_req &&
+    //        (recv_req = FETCH_STORE(&send_req->u.local.match_req, NULL)) != NULL) {
+    if((recv_req = FETCH_STORE(&send_req->u.local.match_req, NULL)) != NULL) {
+        STORE_FENCE();
+        //printf("got send req %p recv req %p %p\n", send_req, recv_req, send_req->u.local.match_req);
+        //HMPI_Request recv_req = (HMPI_Request)send_req->u.local.match_req;
+        //HMPI_Request recv_req = req_list->recv_req;
         uintptr_t rbuf = (uintptr_t)recv_req->buf;
 
         size_t send_size = send_req->size;
         size_t recv_size = recv_req->size;
         size_t size = (send_size < recv_size ? send_size : recv_size);
+        size_t block_size = size / BLOCK_FACTOR;
 
         uintptr_t sbuf = (uintptr_t)send_req->buf;
         volatile ssize_t* offsetptr = &send_req->u.local.offset;
+        //volatile ssize_t* offsetptr = &g_send_reqs[send_req->proc].offset;
+        //volatile ssize_t* offsetptr = &req_list->offset;
         ssize_t offset;
 
         //length to copy is min of len - offset and BLOCK_SIZE
-        while((offset = FETCH_ADD64(offsetptr, BLOCK_SIZE)) < size) {
+        while((offset = FETCH_ADD64(offsetptr, block_size)) < size) {
+        //while((offset = L2_LOAD_INCR(offsetptr) * block_size) < size) {
             size_t left = size - offset;
             memcpy((void*)(rbuf + offset), (void*)(sbuf + offset),
-                    (left < BLOCK_SIZE ? left : BLOCK_SIZE));
+                    (left < block_size ? left : block_size));
         }
 
         //Signal that the sender is done copying.
         //Possible for the receiver to still be copying here.
-        //LOCK_CLEAR(&send_req->match);
 #ifdef __bg__
         STORE_FENCE();
 #endif
-        send_req->match = 1;
+        //TODO - what to do about this?
+        //send_req->match = 1;
+        //L2_STORE(&req_list->send_req, send_req);
+        //printf("clear req %p\n", send_req->u.local.match_req);
+        //__clear_lockd_mp(&send_req->u.local.match_req, recv_req);
+        send_req->u.local.match_req = recv_req;
+        STORE_FENCE();
+        LOAD_FENCE();
+        //printf("cleared req %p\n", send_req->u.local.match_req);
 
         //Receiver will set completion soon, wait rather than running off.
         while(get_reqstat(send_req) != HMPI_REQ_COMPLETE);
@@ -820,6 +865,7 @@ static inline int HMPI_Progress_send(const HMPI_Request send_req)
 
     return HMPI_REQ_ACTIVE;
 }
+
 
 
 //For req->type == HMPI_RECV
@@ -844,33 +890,53 @@ static inline void HMPI_Complete_recv(HMPI_Request recv_req, HMPI_Request send_r
     if(size < BLOCK_SIZE * 2) {
         memcpy((void*)recv_req->buf, send_req->buf, size);
     } else {
+        //HMPI_Request_list* req_list = g_tl_my_send_reqs;
+
         //The setting of send_req->match_req signals to sender that they can
         // start doing copying as well, if they are testing the req.
 
         //recv_req->match_req = send_req; //TODO - keep this here?
+        //send_req->u.local.offset = 0;
+        //STORE_FENCE();
+        //printf("set send_req %p recv %p %p\n", send_req, recv_req, &send_req->u.local.match_req);
         send_req->u.local.match_req = recv_req;
-        send_req->u.local.offset = 0;
-        //LOCK_CLEAR(&send_req->match);
-        STORE_FENCE();
-        send_req->match = 1;
+        //__clear_lockd_mp(&send_req->u.local.match_req, recv_req);
+        //L2_STORE(&g_tl_my_send_reqs->offset, 0);
+
+        //req_list->recv_req = recv_req;
+        //req_list->offset = 0;
+
+        //STORE_FENCE();
+        //send_req->match = 1; //Matched! let the sender help.
+        //g_tl_my_send_reqs->match = send_req;
+        //L2_STORE(&req_list->send_req, send_req);
 
         uintptr_t rbuf = (uintptr_t)recv_req->buf;
         uintptr_t sbuf = (uintptr_t)send_req->buf;
         volatile ssize_t* offsetptr = &send_req->u.local.offset;
+        //volatile ssize_t* offsetptr = &g_tl_my_send_reqs->offset;
+        size_t block_size = size / BLOCK_FACTOR;
         ssize_t offset = 0;
 
         //length to copy is min of len - offset and BLOCK_SIZE
-        while((offset = FETCH_ADD64(offsetptr, BLOCK_SIZE)) < size) {
+        while((offset = FETCH_ADD64(offsetptr, block_size)) < size) {
+        //while((offset = L2_LOAD_INCR(offsetptr) * block_size) < size) {
+            //printf("offset %lu size %lu block_size %lu\n", offset, size, block_size);
             size_t left = size - offset;
 
             memcpy((void*)(rbuf + offset), (void*)(sbuf + offset),
-                    (left < BLOCK_SIZE ? left : BLOCK_SIZE));
+                    (left < block_size ? left : block_size));
         }
 
+        //printf("wait send req %p match %p\n", send_req, send_req->u.local.match_req);
         //Wait if the sender is copying.
-        //LOCK_SET(&send_req->match);
-        while(CAS_T_BOOL(volatile uint32_t, &send_req->match, 1, 0));
+        //while(CAS_T_BOOL(volatile uint32_t, &send_req->match, 1, 0));
         //while(send_req->match == 0);
+        //while(L2_LOAD(&req_list->send_req) != send_req);
+        HMPI_Request volatile * ptr = &send_req->u.local.match_req;
+        while(*ptr == NULL);
+        //while(send_req->u.local.match_req == NULL);
+        //while(__check_lockd_mp(&send_req->u.local.match_req, recv_req, NULL));
     }
 
     //Mark send and receive requests done
@@ -927,7 +993,7 @@ static inline void HMPI_Complete_take(HMPI_Request recv_req, HMPI_Request send_r
 
 
 //For req->type == MPI_SEND || req->type == MPI_RECV
-static inline int HMPI_Progress_mpi(HMPI_Request req)
+static int HMPI_Progress_mpi(HMPI_Request req)
 {
 #ifdef ENABLE_PSM
     libpsm_status_t status;
@@ -969,7 +1035,7 @@ static inline int HMPI_Progress_mpi(HMPI_Request req)
 
 
 //Progress local receive requests.
-static inline void HMPI_Progress(HMPI_Request_list* local_list, HMPI_Request_list* shared_list) {
+static void HMPI_Progress(HMPI_Request_list* local_list, HMPI_Request_list* shared_list) {
     HMPI_Item* cur;
     HMPI_Item* prev;
     HMPI_Request req;
@@ -1498,11 +1564,12 @@ int HMPI_Isend(void* buf, int count, MPI_Datatype datatype, int dest, int tag, H
     int target_mpi_rank = dest / nthreads;
     if(target_mpi_rank == (hmpi_rank / nthreads)) {
         req->type = HMPI_SEND;
-        //LOCK_INIT(&req->match, 1);
+        //req->match = 0;
         req->u.local.offset = 0;
+        req->u.local.match_req = NULL;
 #ifdef __bg__
         //Have to make sure offset is reset before queueing req
-        STORE_FENCE();
+        //STORE_FENCE();
 #endif
 
         int target_mpi_thread = dest % nthreads;

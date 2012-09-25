@@ -102,12 +102,12 @@ typedef struct HMPI_Request_info {
     void* buf;      //User buffer
 
     MPI_Datatype datatype;  //MPI datatype
-    volatile uint32_t match;//Synchronization for sender/recver copying
+    //volatile uint32_t match;//Synchronization for sender/recver copying
 
     union {
         struct {
             //Set only sends; matching recv req
-            struct HMPI_Request_info* match_req;
+            volatile struct HMPI_Request_info* match_req;
             //Copy offset for shared sender/recver copying
             volatile ssize_t offset;
         } local /*__attribute__ ((packed))*/;
