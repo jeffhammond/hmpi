@@ -466,6 +466,19 @@ static inline HMPI_Request match_recv_any(HMPI_Request_list* req_list, HMPI_Requ
                 //Also matched a PSM recv!
                 return HMPI_REQUEST_NULL;
             }
+#else
+            //This is dumb, but it's what MPI requires.
+            //TODO - can I wait here? do I need the status somewhere else?
+            // Or do I need to fill in more info here?
+            MPI_Status status;
+            int flag;
+
+            MPI_Cancel(&req->u.remote.req);
+            MPI_Wait(&req->u.remote.req, &status);
+            MPI_Test_cancelled(&status, &flag);
+            if(flag) {
+                return HMPI_REQUEST_NULL;
+            }
 #endif
 
             remove_send_req(req_list, prev, cur);
@@ -1018,6 +1031,7 @@ static int HMPI_Progress_mpi(HMPI_Request req)
 
     if(flag) {
         //Update status
+        //TODO - maybe I should save count and type size on the req.
         int count;
         MPI_Get_count(&status, req->datatype, &count);
 
@@ -1047,7 +1061,6 @@ static void HMPI_Progress(HMPI_Request_list* local_list, HMPI_Request_list* shar
     }
 #endif
 
-    //With a separate Q, this will need to be duplicated
     update_send_reqs(local_list, shared_list);
 
     //Progress receive requests.
@@ -1593,6 +1606,9 @@ int HMPI_Isend(void* buf, int count, MPI_Datatype datatype, int dest, int tag, H
 
         do_work(req);
 #endif
+#else // MPI
+        MPI_Isend(buf, count, datatype,
+                dest, tag, comm->mpicomm, &req->u.remote.req);
 #endif
     }
 
@@ -1680,6 +1696,12 @@ int HMPI_Irecv(void* buf, int count, MPI_Datatype datatype, int source, int tag,
 
     do_work(req);
 #endif
+#else //MPI
+    //Wish I could just run all ANY_SOURCE receives via MPI..
+    //But local senders won't know to send via MPI.
+    //I should be able to post here, and cancel later right?
+    MPI_Irecv(buf, count, datatype,
+            source, tag, comm->mpicomm, &req->u.remote.req);
 #endif
 
     add_recv_req(req);
@@ -1708,6 +1730,9 @@ int HMPI_Irecv(void* buf, int count, MPI_Datatype datatype, int source, int tag,
 
     do_work(req);
 #endif
+#else //MPI
+        MPI_Irecv(buf, count, datatype,
+                source, tag, comm->mpicomm, &req->u.remote.req);
 #endif
   }
 

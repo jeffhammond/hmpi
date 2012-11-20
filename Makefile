@@ -1,9 +1,9 @@
 CC=mpicc -std=gnu99
-CC=mpixlc
+#CC=mpixlc
 
 WARN=-Wall -Wuninitialized #-Wno-unused-function
-#CFLAGS=$(WARN) -O3 -march=native -fomit-frame-pointer
-CFLAGS=$(WARN) -O3 -mcpu=power7 -fomit-frame-pointer
+CFLAGS=$(WARN) -O3 -march=native -fomit-frame-pointer
+#CFLAGS=$(WARN) -O3 -mcpu=power7 -fomit-frame-pointer
 
 LIBS=-lrt
 INCS=#-DENABLE_OPI=1 #-D_PROFILE=1 -D_PROFILE_HMPI=1 #-D_PROFILE_PAPI_EVENTS=1
