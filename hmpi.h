@@ -4,7 +4,7 @@
 #include <unistd.h>
 #include <mpi.h>
 #include <assert.h>
-#include "barrier.h"
+//#include "barrier.h"
 #include "lock.h"
 #ifdef ENABLE_PSM
 #include "libpsm.h"
@@ -71,7 +71,7 @@ typedef struct hmpi_coll_t {
 typedef void* HMPI_Group;
 
 typedef struct {
-  MPI_Comm comm;        //Underyling MPI communicator
+  MPI_Comm comm;        //Underyling MPI communicator: MUST BE FIRST
   MPI_Comm node_comm;   //Contains only ranks in this comm on the same node
   MPI_Comm net_comm;    //Contains one rank from each node
   //MPI_Group g_comm;     //Shortcut groups for Comm_node_rank()
@@ -79,9 +79,10 @@ typedef struct {
   int node_base;   //Rank of first rank on this node
   int node_size;   //Number of ranks on this node
 
-  barrier_t* barr;       //Barrier for local ranks in this comm
+  //barrier_t* barr;       //Barrier for local ranks in this comm
   //treebarrier_t tbarr;
 
+#if 0
   //Used for intra-node sharing in various collectives
   //TODO - many will need to be in shared mem
   // Make a secondary shared comm struct?
@@ -92,6 +93,7 @@ typedef struct {
   volatile int* rcount;
   volatile MPI_Datatype* rtype;
   hmpi_coll_t* coll;        //Used by allreduce
+#endif
 } HMPI_Comm_info;
 
 typedef HMPI_Comm_info* HMPI_Comm;
@@ -221,51 +223,8 @@ static inline int HMPI_Comm_size(HMPI_Comm comm, int *size) {
 }
 
 
-
-//AWF new function -- return true (nonzero) if rank is another thread in the
-// same process.
-//TODO - replace with use of MPI3 shared-mem communicator?
-static inline int HMPI_Comm_local(HMPI_Comm comm, int rank)
-{
-#if 0
-#ifdef HMPI_SAFE
-  if(comm->comm != MPI_COMM_WORLD) {
-    printf("only MPI_COMM_WORLD is supported so far\n");
-    MPI_Abort(comm->comm, 0);
-  }
-#endif
- 
-    return (g_rank == (rank / g_nthreads));  
-#endif
-    printf("Comm_local broken\n");
-    MPI_Abort(MPI_COMM_WORLD, 0);
-    return 0;
-}
-
-
-//AWF new function -- return the thread ID of the specified rank.
-static inline void HMPI_Comm_thread(HMPI_Comm comm, int rank, int* tid)
-{
-#if 0
-#ifdef HMPI_SAFE
-  if(comm->comm != MPI_COMM_WORLD) {
-    printf("only MPI_COMM_WORLD is supported so far\n");
-    MPI_Abort(comm->comm, 0);
-  }
-#endif
-
-  *tid = rank % g_nthreads;
-#endif
-    printf("Comm_thread broken\n");
-    MPI_Abort(MPI_COMM_WORLD, 0);
-}
-
 //AWF new function -- return the node rank of some rank.
 void HMPI_Comm_node_rank(HMPI_Comm comm, int rank, int* node_rank);
-
-int HMPI_Alloc_mem(MPI_Aint size, HMPI_Info info, void *baseptr);
-int HMPI_Realloc_mem(MPI_Aint size, HMPI_Info info, void *baseptr);
-int HMPI_Free_mem(void *base);
 
 int HMPI_Send(void *buf, int count, MPI_Datatype datatype, int dest, int tag, HMPI_Comm comm );
 int HMPI_Recv(void *buf, int count, MPI_Datatype datatype, int source, int tag, HMPI_Comm comm, HMPI_Status *status );
@@ -290,14 +249,20 @@ int HMPI_Type_size(MPI_Datatype datatype, int* size);
 // Collectives
 //
 
+#if 0
 // AWF new function - barrier only among local threads
 void HMPI_Barrier_local(HMPI_Comm comm);
 
 int HMPI_Barrier(HMPI_Comm comm);
+//#define HMPI_Barrier(c) PMPI_Barrier((c)->comm)
 
 int HMPI_Reduce(void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype, MPI_Op op, int root, HMPI_Comm comm);
+//#define HMPI_Reduce(sendbuf, recvbuf, count, datatype, op, root, c) \
+//    PMPI_Reduce(sendbuf, recvbuf, count, datatype, op, root, (c)->comm)
 
 int HMPI_Allreduce(void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype, MPI_Op op, HMPI_Comm comm);
+//#define HMPI_Allreduce(sendbuf, recvbuf, count, datatype, op, c) \
+//    PMPI_Allreduce(sendbuf, recvbuf, count, datatype, op, (c)->comm)
 
 int HMPI_Scan(void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype, MPI_Op op, HMPI_Comm comm);
 
@@ -318,6 +283,7 @@ int HMPI_Alltoall(void* sendbuf, int sendcount, MPI_Datatype sendtype, void* rec
 //Assumes all ranks are local.
 int HMPI_Alltoall_local(void* sendbuf, int sendcount, MPI_Datatype sendtype, void* recvbuf, int recvcount, MPI_Datatype recvtype, HMPI_Comm comm);
 
+#endif
 
 //TODO NOT IMPLEMENTED YET
 // Added to catch apps that call these routines.
@@ -395,10 +361,6 @@ int OPI_Take(void** ptr, int count, MPI_Datatype datatype, int rank, int tag, HM
 #define MPI_Comm_rank HMPI_Comm_rank
 #define MPI_Comm_size HMPI_Comm_size
 
-#define MPI_Alloc_mem HMPI_Alloc_mem
-#define MPI_Realloc_mem HMPI_Realloc_mem
-#define MPI_Free_mem HMPI_Free_mem
-
 //These are HMPI specific routines, we define for consistency
 #define MPI_Comm_local HMPI_Comm_local
 #define MPI_Comm_thread HMPI_Comm_thread
@@ -422,21 +384,65 @@ int OPI_Take(void** ptr, int count, MPI_Datatype datatype, int rank, int tag, HM
 
 #define MPI_Get_count HMPI_Get_count
 
-#define MPI_Barrier HMPI_Barrier
-#define MPI_Reduce HMPI_Reduce
-#define MPI_Allreduce HMPI_Allreduce
-#define MPI_Scan HMPI_Scan
-#define MPI_Bcast HMPI_Bcast
-#define MPI_Scatter HMPI_Scatter
-#define MPI_Gather HMPI_Gather
-#define MPI_Gatherv HMPI_Gatherv
-#define MPI_Allgather HMPI_Allgather
-#define MPI_Allgatherv HMPI_Allgatherv
-#define MPI_Alltoall HMPI_Alltoall
+//#define MPI_Barrier HMPI_Barrier
+//#define MPI_Reduce HMPI_Reduce
+//#define MPI_Allreduce HMPI_Allreduce
+//#define MPI_Scan HMPI_Scan
+//#define MPI_Bcast HMPI_Bcast
+//#define MPI_Scatter HMPI_Scatter
+//#define MPI_Gather HMPI_Gather
+//#define MPI_Gatherv HMPI_Gatherv
+//#define MPI_Allgather HMPI_Allgather
+//#define MPI_Allgatherv HMPI_Allgatherv
+//#define MPI_Alltoall HMPI_Alltoall
+
+#define MPI_Barrier(c) MPI_Barrier((c)->comm)
+
+#define MPI_Bcast(buffer, count, datatype, root, c) \
+    MPI_Bcast(buffer, count, datatype, root, (c)->comm)
+
+#define MPI_Reduce(sendbuf, recvbuf, count, datatype, op, root, c) \
+    MPI_Reduce(sendbuf, recvbuf, count, datatype, op, root, (c)->comm)
+
+#define MPI_Allreduce(sendbuf, recvbuf, count, datatype, op, c) \
+    MPI_Allreduce(sendbuf, recvbuf, count, datatype, op, (c)->comm)
+
+#define MPI_Reduce_scatter(sendbuf, recvbuf, rcount, datatype, op, c) \
+    MPI_Reduce_scatter(sendbuf, recvbuf, rcount, datatype, op, (c)->comm)
+
+#define MPI_Scan(sendbuf, recvbuf, count, datatype, op, c) \
+    MPI_Scan(sendbuf, recvbuf, count, datatype, op, (c)->comm)
+
+#define MPI_Scatter(sbuf, scount, stype, rbuf, rcount, rtype, root, c) \
+    MPI_Scatter(sbuf, scount, stype, rbuf, rcount, rtype, root, (c)->comm)
+
+#define MPI_Scatterv(sbuf, scnts, displs, stype, rbuf, rcnt, rtype, root, c) \
+    MPI_Scatterv(sbuf, scnts, displs, stype, rbuf, rcnt, rtype, root, (c)->comm)
+
+#define MPI_Gather(sbuf, scount, stype, rbuf, rcount, rtype, root, c) \
+    MPI_Gather(sbuf, scount, stype, rbuf, rcount, rtype, root, (c)->comm)
+
+#define MPI_Gatherv(sbuf, scount, stype, rbuf, rcnts, displs, rtype, root, c) \
+    MPI_Gatherv(sbuf, scount, stype, rbuf, rcnts, displs, rtype, root, (c)->comm)
+
+#define MPI_Allgather(sbuf, scount, stype, rbuf, rcount, rtype, c) \
+    MPI_Allgather(sbuf, scount, stype, rbuf, rcount, rtype, (c)->comm)
+
+#define MPI_Allgatherv(sbuf, scount, stype, rbuf, rcounts, displs, rtype, c) \
+    MPI_Allgatherv(sbuf, scount, stype, rbuf, rcounts, displs, rtype, (c)->comm)
+
+#define MPI_Alltoall(sbuf, scount, stype, rbuf, rcount, rtype, c) \
+    MPI_Alltoall(sbuf, scount, stype, rbuf, rcount, rtype, (c)->comm)
+
+#define MPI_Alltoallv(sbuf, scnts, sdispls, stype, rbuf, rcnts, rdispls, rtype, c) \
+    MPI_Alltoallv(sbuf, scnts, sdispls, stype, rbuf, rcnts, rdispls, rtype, (c)->comm)
+
+#define MPI_Alltoallw(sbuf, scnts, sdispls, stypes, rbuf, rcnts, rdispls, rtypes, c) \
+    MPI_Alltoallw(sbuf, scnts, sdispls, stypes, rbuf, rcnts, rdispls, rtypes, (c)->comm)
 
 //These are HMPI specific routines, we define for consistency
-#define MPI_Alltoall_local HMPI_Alltoall_local
-#define MPI_Alltoall_local2 HMPI_Alltoall_local2
+//#define MPI_Alltoall_local HMPI_Alltoall_local
+//#define MPI_Alltoall_local2 HMPI_Alltoall_local2
 
 #define MPI_Abort HMPI_Abort
 #define MPI_Finalize HMPI_Finalize

@@ -148,10 +148,6 @@ static void __sm_init(void)
         //We created the file, we will destroy it.
         atexit(__sm_unlink);
 
-        if((void*)sm_region->limit != NULL || (void*)sm_region->brk != NULL) {
-            printf("WARNING SM region isn't zero'd\n");
-        }
-
         sm_region->limit = (intptr_t)sm_region + size;
 
         int pagesize = getpagesize();

@@ -456,6 +456,11 @@ static inline int match_probe(int source, int tag, HMPI_Comm comm, HMPI_Request*
 
 int HMPI_Init(int *argc, char ***argv)
 {
+    {
+        void* foo = malloc(1);
+        free(foo);
+    }
+
     MPI_Init(argc, argv);
     FULL_PROFILE_INIT();
 
@@ -570,24 +575,32 @@ int HMPI_Init(int *argc, char ***argv)
         //Allocate shared send request lists.
         g_send_reqs = MALLOC(HMPI_Request_list, g_node_size);
 
+#if 0
         //Allocate the COMM_WORLD local barrier.
         HMPI_COMM_WORLD->barr = MALLOC(barrier_t, 1);
         barrier_init(HMPI_COMM_WORLD->barr, g_node_size);
+#endif
 
+#if 0
         HMPI_COMM_WORLD->sbuf = MALLOC(volatile void*, g_node_size + 1);
         HMPI_COMM_WORLD->rbuf = MALLOC(volatile void*, g_node_size + 1);
         HMPI_COMM_WORLD->scount = MALLOC(int, g_node_size);
         HMPI_COMM_WORLD->rcount = MALLOC(int, g_node_size);
         HMPI_COMM_WORLD->stype = MALLOC(MPI_Datatype, g_node_size);
         HMPI_COMM_WORLD->rtype = MALLOC(MPI_Datatype, g_node_size);
+#endif
     }
 
     //Now let other ranks attach to the region.
     //At the same time, share the location of g_send_reqs.
     //MPI_Bcast(&g_sm_region, 1, MPI_LONG, 0, HMPI_COMM_WORLD->node_comm);
     MPI_Bcast(&g_send_reqs, 1, MPI_LONG, 0, HMPI_COMM_WORLD->node_comm);
+#if 0
     MPI_Bcast(&HMPI_COMM_WORLD->barr, 1, MPI_LONG,
             0, HMPI_COMM_WORLD->node_comm);
+#endif
+
+#if 0
     MPI_Bcast(&HMPI_COMM_WORLD->sbuf, 1, MPI_LONG,
             0, HMPI_COMM_WORLD->node_comm);
     MPI_Bcast(&HMPI_COMM_WORLD->rbuf, 1, MPI_LONG,
@@ -600,6 +613,7 @@ int HMPI_Init(int *argc, char ***argv)
             0, HMPI_COMM_WORLD->node_comm);
     MPI_Bcast(&HMPI_COMM_WORLD->rtype, 1, MPI_LONG,
             0, HMPI_COMM_WORLD->node_comm);
+#endif
 
     // Initialize request lists and lock
 
@@ -657,7 +671,6 @@ int HMPI_Finalize()
     FULL_PROFILE_SHOW(MPI_Other);
 
     //Seems to prevent a segfault in MPI_Finalize()
-    //barrier(&HMPI_COMM_WORLD->barr);
     MPI_Barrier(HMPI_COMM_WORLD->comm);
 
     MPI_Finalize();
@@ -708,20 +721,6 @@ inline void HMPI_Comm_node_rank(HMPI_Comm comm, int rank, int* node_rank)
     *node_rank = MPI_UNDEFINED;
 }
 #endif
-
-
-int HMPI_Alloc_mem(MPI_Aint size, HMPI_Info info, void *baseptr)
-{
-    *((void**)baseptr) = (void*)malloc(size);
-    return MPI_SUCCESS;
-}
-
-
-int HMPI_Free_mem(void *base)
-{
-    free(base);
-    return MPI_SUCCESS;
-}
 
 
 //We assume req->type == HMPI_SEND and req->stat == 0 (uncompleted send)
