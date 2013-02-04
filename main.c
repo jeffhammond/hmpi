@@ -8,12 +8,67 @@
 PROFILE_VAR(barrier);
 PROFILE_DECLARE();
 
+//void* sm_malloc(size_t bytes);
+//void sm_free(void* mem);
 
-int tmain(int argc, char** argv){
-
+int main(int argc, char** argv)
+{
   int p,r;
-  HMPI_Comm_rank (HMPI_COMM_WORLD, &r);
-  HMPI_Comm_size (HMPI_COMM_WORLD, &p);
+  MPI_Init(&argc, &argv);
+
+  MPI_Comm_rank (HMPI_COMM_WORLD, &r);
+  MPI_Comm_size (HMPI_COMM_WORLD, &p);
+
+  printf("r %d p %d\n", r, p);
+
+  int* foo;
+  MPI_Alloc_mem(sizeof(int), HMPI_INFO_NULL, &foo);
+  if(r == 0) {
+      *foo = 3474;
+      MPI_Send(foo, 1, MPI_INT, 1, 0, MPI_COMM_WORLD);
+  } else if(r == 1) {
+      MPI_Recv(foo, 1, MPI_INT, 0, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+      printf("got foo %d\n", *foo);
+  }
+  MPI_Free_mem(foo);
+
+  int* rbuf;
+  int* sbuf;
+  MPI_Request req;
+
+  //MPI_Alloc_mem(sizeof(int) * 1024, HMPI_INFO_NULL, &rbuf);
+  //MPI_Alloc_mem(sizeof(int) * 1024, HMPI_INFO_NULL, &sbuf);
+  rbuf = malloc(sizeof(int) * 1024);
+  sbuf = malloc(sizeof(int) * 1024);
+
+  for(int i = 0; i < 1024; i++) {
+      rbuf[i] = 0xCAFEBABE;
+      sbuf[i] = 0x42374237;
+  }
+
+  MPI_Irecv(rbuf, 1024, MPI_INT, r, r, MPI_COMM_WORLD, &req);
+  MPI_Send(sbuf, 1024, MPI_INT, r, r, MPI_COMM_WORLD);
+  MPI_Wait(&req, MPI_STATUS_IGNORE);
+
+  for(int i = 0; i < 1024; i++) {
+      if(rbuf[i] != 0x42374237) {
+          printf("ERROR rbuf[%d] = %x (should be 0x42374237)\n", i, rbuf[i]);
+      }
+      if(sbuf[i] != 0x42374237) {
+          printf("ERROR sbuf[%d] = %x (should be 0x42374237)\n", i, rbuf[i]);
+      }
+  }
+
+  //MPI_Free_mem(rbuf);
+  //MPI_Free_mem(sbuf);
+  free(rbuf);
+  free(sbuf);
+
+  sleep(1);
+  printf("%d finalize!\n", r);
+  MPI_Finalize();
+  return 0;
+
 
   PROFILE_INIT(r);
   
@@ -27,8 +82,6 @@ int tmain(int argc, char** argv){
 
   PROFILE_SHOW(barrier);
 
-
-#if 0
 //#define PINGPONG
 #ifdef PINGPONG
 #define MAXSIZE 1024 //*1024*5
@@ -90,6 +143,7 @@ int tmain(int argc, char** argv){
   }
 #endif
 
+#if 0
   //int x=1, y=0;
   for(int k = 0; k < 1000; k++)
   {
@@ -106,6 +160,8 @@ int tmain(int argc, char** argv){
           }
       }
   }
+
+#endif
 
 #if 0
   uint64_t x[4];
@@ -148,8 +204,13 @@ int tmain(int argc, char** argv){
 
 //#define TEST2
 #ifdef TEST2
-    int* sendbuf = (int*)malloc(sizeof(int) * 8192);
-    int* recvbuf = (int*)malloc(sizeof(int) * 8192);
+    //int* sendbuf = (int*)malloc(sizeof(int) * 8192);
+    //int* recvbuf = (int*)malloc(sizeof(int) * 8192);
+    int* sendbuf;
+    int* recvbuf;
+
+    MPI_Alloc_mem(sizeof(int) * 8192, MPI_INFO_NULL, &sendbuf);
+    MPI_Alloc_mem(sizeof(int) * 8192, MPI_INFO_NULL, &recvbuf);
 #if 0
     for(int i = 0; i < p; i++) {
         sendbuf[i] = i;
@@ -172,8 +233,8 @@ int tmain(int argc, char** argv){
       }
     }
 #endif
-    printf("%d sendbuf %p recvbuf %p\n", r, sendbuf, recvbuf);
-    fflush(stdout);
+    //printf("%d sendbuf %p recvbuf %p\n", r, sendbuf, recvbuf);
+    //fflush(stdout);
     HMPI_Barrier(HMPI_COMM_WORLD);
 
     for(int i = 0; i < p; i++) {
@@ -181,19 +242,19 @@ int tmain(int argc, char** argv){
         recvbuf[i] = -1;
     }
 
-    HMPI_Alltoall(sendbuf, 1, MPI_INT, recvbuf, 1, MPI_INT, HMPI_COMM_WORLD);
+    HMPI_Alltoall2(sendbuf, 1, MPI_INT, recvbuf, 1, MPI_INT, HMPI_COMM_WORLD);
 
     for(int i = 0; i < p; i++) {
         printf("[%i] alltoall %d: %d %s\n", r, i, recvbuf[i], i == recvbuf[i] ? "GOOD" : "BAD");
     }
     fflush(stdout);
 #endif
-#endif
   HMPI_Finalize();
   return 0;
 }
 
 
+#if 0
 int main(int argc, char** argv) {
 
 
@@ -205,4 +266,6 @@ int main(int argc, char** argv) {
     //TODO - may not be portable to other MPIs?
     HMPI_Init(&argc, &argv, &tmain, atoi(argv[1]), atoi(argv[2]), atoi(argv[3]));
 }
+
+#endif
 

@@ -1,14 +1,42 @@
 #ifndef _LOCK_H_
 #define _LOCK_H_
 #include <stdio.h>
+//#include <mm.h>
+
+#define printf(...) printf(__VA_ARGS__); fflush(stdout)
 
 //AWF - I made my own primitives for several reasons:
 // - Referencing the OPA atomic types requires a pointer dereference.  The
 //   compiler probably eliminates them, but still results in less clean code.
 // - OPA lacks a size_t (64bit) integer atomic type.
 
+//Shared memory region address macros
+#if 0
+#ifndef PTR_TO_OFFSET
+#define PTR_TO_OFFSET(ptr) ((uintptr_t)ptr - (uintptr_t)g_sm_region)
+#define OFFSET_TO_PTR(off) (void*)((uintptr_t)off + (uintptr_t)g_sm_region)
+#endif
 
-//Atomic Intel/GCC builtins used on all platforms.
+extern MM* g_sm_region;
+extern int g_rank;
+#endif
+
+
+#if (defined __IBMC__ || defined __IBMCPP__) && defined __64BIT__ && defined __bg__
+#warning "Using BlueGene/Q (64bit) primitives"
+
+//fetch-add for send-recv offset support:
+// Wrap the atomic alloc call for HMPI to call
+// Provide L2-atomic load-increment (fetch and add) operation
+
+#if defined __IBMCPP__
+#include <builtins.h>
+#endif
+
+#define STORE_FENCE() __lwsync()
+#define LOAD_FENCE() __sync()
+#define FENCE() __lwsync(); __fence()
+
 #define CAS_PTR_BOOL(ptr, oldval, newval) \
   __sync_bool_compare_and_swap((uintptr_t*)(ptr), \
           (uintptr_t)(oldval), (uintptr_t)(newval))
@@ -28,30 +56,12 @@
     __sync_fetch_and_add(ptr, val)
 
 
-// Platform-specific definitions
-
-#if (defined __IBMC__ || defined __IBMCPP__) && defined __64BIT__ && defined __bg__
-#warning "Using BlueGene/Q (64bit) primitives"
-
-//fetch-add for send-recv offset support:
-// Wrap the atomic alloc call for HMPI to call
-// Provide L2-atomic load-increment (fetch and add) operation
-
-#if defined __IBMCPP__
-#include <builtins.h>
-#endif
-
-#define STORE_FENCE() __lwsync()
-#define LOAD_FENCE() __sync()
-#define FENCE() __lwsync(); __fence()
-
-
-#if 0
-
 //The __compare_and_swap function is useful when a single word value must be
 //updated only if it has not been changed since it was last read. If you use
 //__compare_and_swap as a locking primitive, insert a call to the __isync
 //built-in function at the start of any critical sections.
+
+#if 0
 static inline int CAS_PTR_BOOL(void** restrict ptr, void* oldval, void* newval)
 {
     return __compare_and_swaplp((volatile long*)ptr, (long*)&oldval, (long)newval);
@@ -104,25 +114,23 @@ static void LOCK_INIT(lock_t* __restrict l) {
     L2_LockInit(l);
 }
 
-static void LOCK_INIT_NA(lock_t* __restrict l) {
-    L2_LockInit(l);
-}
-
 static inline void LOCK_ACQUIRE(lock_t* __restrict l) {
     L2_LockAcquire(l);
+}
+
+//Returns non-zero if lock was acquired, 0 if not.
+static inline long int LOCK_TRY(lock_t* __restrict l) {
+    return L2_LockTryAcquire(l);
 }
 
 static inline void LOCK_RELEASE(lock_t* __restrict l) {
     L2_LockRelease(l);
 }
 
-// L2 atomic routins
-#include <spi/include/l2/atomic.h>
-
-#define L2_LOAD(ptr) L2_AtomicLoad((volatile uint64_t*)ptr)
-#define L2_STORE(ptr, val) \
-    L2_AtomicStore((volatile uint64_t*)ptr, (uint64_t)val)
-#define L2_LOAD_INCR(ptr) L2_AtomicLoadIncrement((volatile uint64_t*)ptr)
+static inline long int LOCK_GET(lock_t* __restrict l) {
+    assert(0); //I want to see if/when this is used; below may be wrong.
+    return !L2_LockIsBusy(l);
+}
 
 
 //This code works on BGQ, but MCS offers no performance advantage due to Q's
@@ -207,7 +215,13 @@ static inline void MCS_LOCK_RELEASE(mcs_lock_t* __restrict l, mcs_qnode_t* q) {
 #warning "Using BlueGene/P (32bit) primitives"
 
 typedef struct lock_t {
+#if defined __powerpc64__
+    // POWER architectures (works on Q)
     volatile int32_t lock;
+#else
+    // Default GCC/ICC (x86)
+    volatile int lock;
+#endif
 } lock_t;
 
 
@@ -218,8 +232,13 @@ typedef struct lock_t {
 #define STORE_FENCE() __lwsync()
 #define LOAD_FENCE() __sync()
 
-//TODO - does BG/P have the GCC builtins?
+//if *ptr == oldval, then write *newval
 #if 0
+#define CAS_PTR_BOOL(ptr, oldval, newval) \
+  __compare_and_swap((volatile intptr_t*)(ptr), \
+          (intptr_t)(oldval), (intptr_t)(newval))
+#endif
+
 static inline int CAS_PTR_BOOL(volatile void** ptr, void* oldval, void* newval)
 {
     return __compare_and_swap((volatile int*)ptr, (int*)&oldval, (int)newval);
@@ -247,7 +266,6 @@ static inline int FETCH_ADD64(volatile long int* __restrict ptr, long int val)
 
     return ret;
 }
-#endif
 
 
 // Lock routines
@@ -256,19 +274,42 @@ static void LOCK_INIT(lock_t* __restrict l) __attribute__((unused));
 
 static inline void LOCK_INIT(lock_t* __restrict l) {
     l->lock = 0;
+    STORE_FENCE();
 }
 
 static inline void LOCK_ACQUIRE(lock_t* __restrict l) {
     while(__check_lock_mp((int*)(&l->lock), 0, 1));
 }
 
+//Returns non-zero if lock was acquired, 0 if not.
+static inline int LOCK_TRY(lock_t* __restrict l) {
+    return __check_lock_mp((int*)(&l->lock), 0, 1) == 0;
+}
+
 static inline void LOCK_RELEASE(lock_t* __restrict l) {
     __clear_lock_mp((int*)(&l->lock), 0);
 }
 
+static inline int LOCK_GET(lock_t* __restrict l) {
+    return (int)l->lock;
+}
+
+
 
 //This is generic locking support using GCC/ICC atomic builtins.
 #elif defined __GNUC__ //Should cover ICC too
+
+#if 0
+typedef struct lock_t {
+#if defined __powerpc64__
+    // POWER architectures (works on Q)
+    volatile int32_t lock;
+#else
+    // Default GCC/ICC (x86)
+    volatile int lock;
+#endif
+} lock_t;
+#endif
 
 
 #ifdef __x86_64__ //Better x86 versions
@@ -278,6 +319,25 @@ static inline void LOCK_RELEASE(lock_t* __restrict l) {
 #define STORE_FENCE() __sync_synchronize()
 #define LOAD_FENCE() __sync_synchronize()
 #endif
+
+//if *ptr == oldval, then write *newval
+#define CAS_PTR_BOOL(ptr, oldval, newval) \
+  __sync_bool_compare_and_swap((uintptr_t*)(ptr), \
+          (uintptr_t)(oldval), (uintptr_t)(newval))
+
+#define CAS_PTR_VAL(ptr, oldval, newval) \
+  (void*)__sync_val_compare_and_swap((uintptr_t*)(ptr), \
+          (uintptr_t)(oldval), (uintptr_t)(newval))
+
+#define CAS_T_BOOL(t, ptr, oldval, newval) \
+  __sync_bool_compare_and_swap((t*)(ptr), (t)(oldval), (t)(newval))
+
+
+#define FETCH_ADD32(ptr, val) \
+    __sync_fetch_and_add(ptr, val)
+
+#define FETCH_ADD64(ptr, val) \
+    __sync_fetch_and_add(ptr, val)
 
 
 static inline void* FETCH_STORE(void** ptr, void* val)
@@ -371,23 +431,85 @@ static inline void __LOCK_RELEASE(lock_t* __restrict l, mcs_qnode_t* q) {
     next->locked = 0;
 }
 
-#else
 
-typedef volatile int32_t lock_t;
+// Lock code for use in shared memory regions, ie where each rank has the
+// memory mapped at a different address.  We store offsets instead of pointers.
 
-static void LOCK_INIT(lock_t* __restrict l) __attribute__((unused));
+#if 0
+static void SM_LOCK_INIT(lock_t* __restrict l) __attribute__((unused));
 
-static inline void LOCK_INIT(lock_t* __restrict l) {
-    *l = 0;
+static void SM_LOCK_INIT(lock_t* __restrict l) {
+    *l = PTR_TO_OFFSET(NULL);
+    printf("%d init lock %p\n", g_rank, *l);
 }
 
-static inline void LOCK_ACQUIRE(lock_t* __restrict l) {
-    while(__sync_lock_test_and_set(l, 1));
+
+//TODO - don't malloc a q node every time!
+// If we ever only hold one lock (true in HMPI), we can just malloc one and
+// reuse it whenever we lock.
+static inline void SM_LOCK_ACQUIRE(lock_t* __restrict l, mcs_qnode_t* q) {
+    printf("%d 0\n", g_rank);
+    q->next = PTR_TO_OFFSET(NULL);
+    void* q_off = PTR_TO_OFFSET(q);
+
+    printf("%d 1 q_off %p\n", g_rank, q_off);
+    mcs_qnode_t* pred;
+    uintptr_t pred_off;
+
+    //Replace node at head of lock with our own, saving the previous node.
+    pred_off = FETCH_STORE((void**)l, q_off);
+    pred = OFFSET_TO_PTR(pred_off);
+
+    printf("%d 2 pred %p pred_off %llx\n", g_rank, pred, pred_off);
+    //Was there actually a previous node?  If not, we got the lock.
+    if(pred != NULL) {
+        //Otherwise we need to wait -- set our node locked, and wait for
+        //the thread that owns the lock to release it.
+        volatile int* locked = &q->locked;
+    printf("%d 3\n", g_rank);
+
+        *locked = 1;
+
+        STORE_FENCE();  //Prevent q->locked from being set afer pred->next
+    printf("%d 4\n", g_rank);
+
+        pred->next = q_off;
+    printf("%d 5 %p\n", g_rank, locked);
+        while(*locked == 1);
+    }
+    printf("%d 6\n", g_rank);
 }
 
-static inline void LOCK_RELEASE(lock_t* __restrict l) {
-    __sync_lock_release(l);
+
+static inline void SM_LOCK_RELEASE(lock_t* __restrict l, mcs_qnode_t* q) {
+    mcs_qnode_t* next = OFFSET_TO_PTR(q->next);
+    printf("%d 10\n", g_rank);
+
+    //Is another thread waiting on the lock?
+    if(next == NULL) {
+    printf("%d 11\n", g_rank);
+        //Doesn't look like it -- CAS NULL into the lock
+        if(CAS_PTR_BOOL(l, PTR_TO_OFFSET(q), PTR_TO_OFFSET(NULL))) {
+            return;
+        }
+    printf("%d 12\n", g_rank);
+
+        //A thread jumped in between the branch and the CAS --
+        //wait for them to set our next pointer.
+
+        //AWF - the way this type is declared is CRITICAL for correctness!!!
+        mcs_qnode_t* volatile * vol_next = (mcs_qnode_t* volatile *)&q->next;
+    printf("%d 13\n", g_rank);
+
+        while((next = OFFSET_TO_PTR(*vol_next)) == NULL);
+    printf("%d 14\n", g_rank);
+    }
+
+    //next is always a pointer here
+    next->locked = 0;
+    printf("%d 15\n", g_rank);
 }
+#endif
 
 #endif
 

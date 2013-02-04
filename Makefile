@@ -1,13 +1,17 @@
-CC=mpicc -std=gnu99
+CC=mpicc -std=gnu99 
 #CC=mpixlc
 
+PTMALLOC=../ptmalloc3
+
 WARN=-Wall -Wuninitialized #-Wno-unused-function
-CFLAGS=$(WARN) -O3 -march=native -fomit-frame-pointer
 #CFLAGS=$(WARN) -O3 -mcpu=power7 -fomit-frame-pointer
+#CFLAGS=$(WARN) $(INCLUDE) -O3 -march=native -fomit-frame-pointer
+#CFLAGS=$(WARN) -O0 -g
 
 LIBS=-lrt
-INCS=#-DENABLE_OPI=1 #-D_PROFILE=1 -D_PROFILE_HMPI=1 #-D_PROFILE_PAPI_EVENTS=1
-SRCS=hmpi.c hmpi_coll.c nbc_op.c hmpi_opi.c
+INCS=#-D_PROFILE=1 -D_PROFILE_MPI=1 -D_PROFILE_PAPI_EVENTS=1 #-DFULL_PROFILE #-D_PROFILE_PAPI_EVENTS=1 #-DENABLE_OPI=1
+SRCS=hmpi.c hmpi_coll.c nbc_op.c hmpi_opi.c sm_malloc.c
+USEQ_SRCS=hmpi.c hmpi_coll.c nbc_op.c
 MAIN=main.c
 HDRS=hmpi.h barrier.h lock.h profile2.h
 
@@ -23,54 +27,60 @@ PAMI_LIBS= -lpami
 
 
 all: $(SRCS:%.c=%.o) 
-	ar r hmpi.a $(SRCS:%.c=%.o)
-	ranlib hmpi.a
+	ar r libhmpi.a $(SRCS:%.c=%.o)
+	ranlib libhmpi.a
+#	make -C $(PTMALLOC)
+#	ar r libhmpi.a $(SRCS:%.c=%.o) #$(PTMALLOC)/ptmalloc3.o $(PTMALLOC)/malloc.o
 #	ar r opi.a $(OPI_SRCS:%.c=%.o)
 #	ranlib opi.a
 
 psm: $(SRCS:%.c=%.o) $(PSM_SRCS:%.c=%.o)
-	ar r hmpi.a $(SRCS:%.c=%.o) $(PSM_SRCS:%.c=%.o)
-	ranlib hmpi.a
+	ar r libhmpi.a $(SRCS:%.c=%.o) $(PSM_SRCS:%.c=%.o)
+	ranlib libhmpi.a
 
 udawn: LIBS =
 udawn: $(SRCS:%.c=%.o)
-	ar r hmpi.a hmpi.o hmpi_coll.o nbc_op.o
-	ranlib hmpi.a
+	ar r libhmpi.a hmpi.o hmpi_coll.o nbc_op.o
+	ranlib libhmpi.a
 
 useq: CC=mpixlc
-useq: CFLAGS=-O5 -qhot=novector -qsimd=auto -DENABLE_PAMI
-useq: $(PAMI_SRCS:%.c=%.o)
-	ar r hmpi.a $(PAMI_SRCS:%.c=%.o)
-	ranlib hmpi.a
+useq: CFLAGS=-O3 -qhot=novector -qsimd=auto $(INCLUDE)
+useq: $(USEQ_SRCS:%.c=%.o)
+	ar r libhmpi.a $(USEQ_SRCS:%.c=%.o)
+	ranlib libhmpi.a
 
 useq_debug: LIBS =
 useq_debug: CC=mpixlc
-useq_debug: CFLAGS=-O0 -g
-useq_debug: $(SRCS:%.c=%.o)
-	ar r hmpi.a hmpi.o hmpi_coll.o nbc_op.o
-	ranlib hmpi.a
+useq_debug: CFLAGS=-O0 -g -qhot=novector -qsimd=auto $(INCLUDE)
+useq_debug: $(USEQ_SRCS:%.c=%.o)
+	ar sr libhmpi.a $(USEQ_SRCS:%.c=%.o)
 
 #main: CFLAGS = -g -O -D_PROFILE=1 -D_PROFILE_HMPI=1
 #main: CFLAGS+=-D_PROFILE=1 -D_PROFILE_HMPI=1
-main: CFLAGS=-O5 -qhot=novector -qsimd=auto -D_PROFILE=1 -D_PROFILE_HMPI=1
+#main: CFLAGS=-O5 -qhot=novector -qsimd=auto -D_PROFILE=1 -D_PROFILE_HMPI=1
 main: all $(MAIN:%.c=%.o)
-	$(CC) $(CCFLAGS) $(LDFLAGS) -o main main.o hmpi.a $(LIBS)
+	$(CC) $(CFLAGS) $(LDFLAGS) -Wl,--allow-multiple-definition -o main main.o libhmpi.a $(LIBS)
 
-debug: CFLAGS = $(WARN) -g -O 
+main_useq: CC=mpixlc
+main_useq: CFLAGS=-O2 -g $(INCLUDE)
+main_useq: useq $(MAIN:%.c=%.o)
+	$(CC) $(CFLAGS) $(LDFLAGS) -Wl,--allow-multiple-definition -o main main.o libhmpi.a $(LIBS)
+
+debug: CFLAGS = $(WARN) -g -O0 -rdynamic $(INCLUDE)
 debug: $(SRCS:%.c=%.o) 
-	ar r hmpi.a hmpi.o hmpi_coll.o nbc_op.o
-	ranlib hmpi.a
+	ar r libhmpi.a $(SRCS:%.c=%.o)
+	ranlib libhmpi.a
 #	$(CC) $(INCS) $(CFLAGS) $(LDFLAGS) -o $(PROG) $(SRCS:%.c=%.o) $(LIBS)
 
 opi: all example_opi.c
-	$(CC) $(CCFLAGS) $(LDFLAGS) -o example_opi example_opi.o hmpi.a  $(LIBS)
+	$(CC) $(CCFLAGS) $(LDFLAGS) -o example_opi example_opi.o libhmpi.a  $(LIBS)
 
 opi_useq: LIBS =
 opi_useq: CC=mpixlc
-opi_useq: CFLAGS=-O5 -qhot=novector -qsimd=auto -qlist -qreport -qsource
+opi_useq: CFLAGS=-O3 -qhot=novector -qsimd=auto -qlist -qreport -qsource
 opi_useq: OPI_SRCS += example_opi.c
 opi_useq: all $(OPI_SRCS:%.c=%.o) opi.h
-	$(CC) $(CCFLAGS) $(LDFLAGS) -o example_opi $(OPI_SRCS:%.c=%.o) hmpi.a  $(LIBS)
+	$(CC) $(CCFLAGS) $(LDFLAGS) -o example_opi $(OPI_SRCS:%.c=%.o) libhmpi.a  $(LIBS)
 
 .c.o: $(HDRS)
 	$(CC) $(INCS) $(CFLAGS) $(CPPFLAGS) -c $<

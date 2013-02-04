@@ -4,13 +4,16 @@
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
-#include <malloc.h>
+//#include <malloc.h>
 
 #include "lock.h"
 
-#ifndef MALLOC
-#define MALLOC(t, s) (t*)memalign(64, sizeof(t) * s)
-#endif
+
+//TODO - use SM_MALLOC
+//#ifndef MALLOC
+//#define MALLOC(t, s) (t*)memalign(64, sizeof(t) * s)
+//#define MALLOC(t, s) (t*)malloc(sizeof(t) * s)
+//#endif
 
 //#define CACHE_LINE 64
 //#define CACHE_LINE 1
@@ -146,6 +149,7 @@ static inline void barrier_cb(barrier_t *barrier, void (*cbfn)(void)) {
 
 
 
+#if 0
 typedef struct treenode_t
 {
     int sense;
@@ -174,7 +178,9 @@ typedef struct treebarrier_t
 static int treebarrier_init(treebarrier_t *barrier, int nthreads) __attribute__((unused));
 static int treebarrier_init(treebarrier_t* barrier, int nthreads)
 {
-    barrier->nodes = MALLOC(treenode_t, nthreads);
+    //TODO - use SM_MALLOC
+    //barrier->nodes = MALLOC(treenode_t, nthreads);
+    barrier->nodes = (treenode_t*)memalign(64, sizeof(treenode_t) * nthreads);
 
     for(int i = 0; i < nthreads; i++) {
         treenode_t* n = &barrier->nodes[i];
@@ -239,6 +245,7 @@ static void treebarrier(treebarrier_t* barrier, int tid)
     *(n->c_ptrs[1]) = sense;
     n->sense = ~n->sense;
 }
+#endif
 //#endif //Default implementations (x86)
 
 #endif

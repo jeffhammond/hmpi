@@ -1,11 +1,7 @@
 #ifndef _AWF_PROFILE_HEADER
 #define _AWF_PROFILE_HEADER
 
-#ifdef _USING_HMPI_
-#define THREAD __thread
-#else
-#define THREAD
-#endif
+//Note: assumes that either mpi.h or hmpi.h is included before this header.
 
 #ifndef _PROFILE
 #define _PROFILE 0
@@ -19,14 +15,6 @@
 #define _PROFILE_PAPI_FILE 0
 #endif
 
-#ifndef _PROFILE_MPI
-#define _PROFILE_MPI 0
-#endif
-
-#ifndef _PROFILE_HMPI
-#define _PROFILE_HMPI 0
-#endif
-
 #define _PROFILE_MAX_MIN 1
 
 #if _PROFILE == 1
@@ -37,16 +25,6 @@
 #include <string.h>
 #include <pthread.h>
 #include <time.h>
-
-
-#if _PROFILE_MPI == 1
-#include <mpi.h>
-#endif
-
-#if _PROFILE_HMPI == 1
-#include "hmpi.h"
-#endif
-
 
 
 #ifdef __cplusplus
@@ -65,27 +43,27 @@ static int _profile_events[NUM_EVENTS] =
           //{ PAPI_L2_ICM, PAPI_L3_TCM, PAPI_BR_MSP, PAPI_BR_PRC};
           { PAPI_L2_DCM, PAPI_TLB_IM, PAPI_L2_ICM, PAPI_TOT_INS};
 
-//__thread int _profile_eventset = PAPI_NULL;
+//int _profile_eventset = PAPI_NULL;
 #endif
 #include "papi_ctrs.h"
 
 static char _profile_event_names[NUM_EVENTS][128] = {{0}};
 
-extern THREAD int _profile_eventset;
+extern int _profile_eventset;
 
 #if _PROFILE_PAPI_FILE == 1
 
-extern THREAD FILE* _profile_fd;
+extern FILE* _profile_fd;
 
 #define PROFILE_DECLARE() \
   uint64_t _profile_overhead = 0; \
-  THREAD FILE* _profile_fd; \
-  THREAD int _profile_eventset = PAPI_NULL;
+  FILE* _profile_fd; \
+  int _profile_eventset = PAPI_NULL;
 
 #else
 #define PROFILE_DECLARE() \
   uint64_t _profile_overhead = 0; \
-  THREAD int _profile_eventset = PAPI_NULL;
+  int _profile_eventset = PAPI_NULL;
 #endif
 
 #else //_PROFILE_PAPI_EVENTS != 1
@@ -111,6 +89,7 @@ typedef struct profile_vars_t {
     uint64_t max;
 #endif
 #if _PROFILE_PAPI_EVENTS == 1
+    uint64_t tmp_ctrs[NUM_EVENTS];  //Used during timing regions
     uint64_t ctrs[NUM_EVENTS];
     uint64_t ctr_min[NUM_EVENTS];
     uint64_t ctr_max[NUM_EVENTS];
@@ -141,10 +120,10 @@ typedef struct profile_results_t
 
 
 #define PROFILE_VAR(v) \
-    THREAD profile_vars_t _profile_ ## v = {0}
+    profile_vars_t _profile_ ## v = {0}
 
 #define PROFILE_EXTERN(v) \
-    extern THREAD profile_vars_t _profile_ ## v
+    extern profile_vars_t _profile_ ## v
 
 #define PROFILE_RESET(v) \
     memset(&_profile_ ## v, 0, sizeof(profile_vars_t))
@@ -158,36 +137,27 @@ static inline void __PROFILE_STOP(const char* name, struct profile_vars_t* v);
 static void PROFILE_CALIBRATE()
 {
     int i;
-    int rank;
-    uint64_t min;
+    //int rank;
+    //uint64_t min;
     struct profile_vars_t v = {0};
-    profile_results_t r;
 
     for(i = 0; i < 100000; i++) {
         __PROFILE_START(&v);
         __PROFILE_STOP("calibrate", &v);
     }
 
-#if _PROFILE_HMPI == 1
-    HMPI_Comm_rank(HMPI_COMM_WORLD, &rank);
-    HMPI_Allreduce(&v.min, &min, 1,
-            MPI_UNSIGNED_LONG_LONG, MPI_MIN, HMPI_COMM_WORLD);
-#else
-    MPI_Comm_rank(MPI_COMM_WORLD, &rank);
-    MPI_Allreduce(&v.min, &min, 1,
-            MPI_UNSIGNED_LONG_LONG, MPI_MIN, MPI_COMM_WORLD);
-#endif
+    //MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+    //MPI_Allreduce(&v.min, &min, 1,
+    //        MPI_UNSIGNED_LONG_LONG, MPI_MIN, MPI_COMM_WORLD);
 
-#if _PROFILE_HMPI == 1
-    if(rank == 0)
-#endif
-    _profile_overhead = min;
+    _profile_overhead = v.min;
 }
 
-static void PROFILE_INIT(int tid)
+static void PROFILE_INIT() __attribute__((unused));
+
+static void PROFILE_INIT()
 {
 #if _PROFILE_PAPI_EVENTS == 1
-  if(tid == 0) {
     int ret = PAPI_library_init(PAPI_VER_CURRENT);
     if(ret < 0) {
         printf("PAPI init failure %s\n", PAPI_strerror(ret));
@@ -199,25 +169,14 @@ static void PROFILE_INIT(int tid)
 
     int num_hwcntrs = 0;
 
-    if ((num_hwcntrs = PAPI_num_counters()) <= PAPI_OK) {
-        printf("ERROR PAPI_num_counters\n");
+    num_hwcntrs = PAPI_num_counters();
+    if(num_hwcntrs < NUM_EVENTS) {
+        printf("ERROR PAPI reported < %d events available\n", NUM_EVENTS);
         exit(-1);
     }
 
-    if(num_hwcntrs < NUM_EVENTS) {
-        printf("ERROR PAPI reported < %d events available\n", NUM_EVENTS);
-    }
-  }
-#endif
-
-#if _PROFILE_HMPI == 1
-    //Need to make sure PAPI is initialized before creating events
-    barrier(&HMPI_COMM_WORLD->barr);
-#endif
-
-#if _PROFILE_PAPI_EVENTS == 1
     _profile_eventset = PAPI_NULL;
-    int ret = PAPI_create_eventset(&_profile_eventset);
+    ret = PAPI_create_eventset(&_profile_eventset);
     if(ret != PAPI_OK) {
         printf("PAPI create eventset error %s\n", PAPI_strerror(ret));
         fflush(stdout);
@@ -226,15 +185,13 @@ static void PROFILE_INIT(int tid)
 
     int i;
     for(i = 0; i < NUM_EVENTS; i++) {
-        if(tid == 0) {
-            PAPI_event_info_t info;
-            if(PAPI_get_event_info(_profile_events[i], &info) != PAPI_OK) {
-                printf("ERROR PAPI_get_event_info %d\n", i);
-                //continue;
-            } else {
-                printf("PAPI event %16s %s\n", info.symbol, info.long_descr);
-                strcpy(_profile_event_names[i], info.symbol);
-            }
+        PAPI_event_info_t info;
+        if(PAPI_get_event_info(_profile_events[i], &info) != PAPI_OK) {
+            printf("ERROR PAPI_get_event_info %d\n", i);
+            //continue;
+        } else {
+            //printf("PAPI event %16s %s\n", info.symbol, info.long_descr);
+            strcpy(_profile_event_names[i], info.symbol);
         }
 
         ret = PAPI_add_event(_profile_eventset, _profile_events[i]);
@@ -248,17 +205,10 @@ static void PROFILE_INIT(int tid)
 #if _PROFILE_PAPI_FILE == 1
     char filename[128];
 
-#if _PROFILE_HMPI == 1
-    int rank;
-    HMPI_Comm_rank(HMPI_COMM_WORLD, &rank);
-    sprintf(filename, "profile-%d-%d.out", tid, rank);
-#elif _PROFILE_MPI == 1
     int rank;
     MPI_Comm_rank(MPI_COMM_WORLD, &rank);
     sprintf(filename, "profile-%d-%d.out", tid, rank);
-#else
-    sprintf(filename, "profile-%d.out", tid);
-#endif
+
     _profile_fd = fopen(filename, "w+");
     if(_profile_fd == NULL) {
         printf("ERROR opening profile data file\n");
@@ -280,6 +230,15 @@ static void PROFILE_INIT(int tid)
     }
     fprintf(_profile_fd, "\n");
 #endif //_PROFILE_PAPI_FILE == 1
+
+    //Start the events now.  We leave them counting all the time, and use
+    //PAPI_Read() to get the values.
+    int rc = PAPI_start(_profile_eventset);
+    if(rc != PAPI_OK) {
+        printf("papi start error %s\n", PAPI_strerror(rc)); fflush(stdout);
+        exit(-1);
+    }
+
 #endif //_PROFILE_PAPI_EVENTS == 1
 
     PROFILE_CALIBRATE();
@@ -320,9 +279,16 @@ static inline uint64_t get_bgq_cycles()
 static void __PROFILE_START(struct profile_vars_t* v)
 {
 #if _PROFILE_PAPI_EVENTS == 1
+#if 0
     int rc = PAPI_start(_profile_eventset);
     if(rc != PAPI_OK) {
         printf("papi start error %s\n", PAPI_strerror(rc)); fflush(stdout);
+        exit(-1);
+    }
+#endif
+    int rc = PAPI_read(_profile_eventset, (long long*)v->tmp_ctrs);
+    if(rc != PAPI_OK) {
+        printf("papi start read error %s\n", PAPI_strerror(rc)); fflush(stdout);
         exit(-1);
     }
 #endif
@@ -349,8 +315,10 @@ static void __PROFILE_STOP(const char* name, struct profile_vars_t* v)
     //Grab the time right away
     //Do as little as possible until time and PAPI counters are grabbed.
 #ifdef __bg__
+    //Time is stored in cycles
     uint64_t cycles = get_bgq_cycles();
 #else
+    //Time is stored in nanoseconds
     struct timespec ts;
     clock_gettime(CLOCK_MONOTONIC, &ts);
 #endif
@@ -359,10 +327,18 @@ static void __PROFILE_STOP(const char* name, struct profile_vars_t* v)
     //Grab counter values
     uint64_t ctrs[NUM_EVENTS];
 
+#if 0
     //int rc = PAPI_read_counters((long long*)ctrs, NUM_EVENTS);
     int rc = PAPI_stop(_profile_eventset, (long long*)ctrs);
     if(rc != PAPI_OK) {
         printf("papi read error %s %s\n", PAPI_strerror(rc), name); fflush(stdout);
+        exit(-1);
+    }
+#endif
+
+    int rc = PAPI_read(_profile_eventset, (long long*)ctrs);
+    if(rc != PAPI_OK) {
+        printf("papi start read error %s\n", PAPI_strerror(rc)); fflush(stdout);
         exit(-1);
     }
 #endif
@@ -400,6 +376,8 @@ static void __PROFILE_STOP(const char* name, struct profile_vars_t* v)
 
     //Accumulate the counter values
     for(i = 0; i < NUM_EVENTS; i++) {
+        ctrs[i] -= v->tmp_ctrs[i];
+
         v->ctrs[i] += ctrs[i];
         if(v->ctr_max[i] < ctrs[i]) {
             v->ctr_max[i] = ctrs[i];
@@ -422,9 +400,7 @@ static void __PROFILE_STOP(const char* name, struct profile_vars_t* v)
 }
 
 
-#if _PROFILE_MPI == 1 || _PROFILE_HMPI == 1
-
-#define PROFILE_RESULTS(v, result) __PROFILE_STRUCT_REDUCE(#v, &_profile_ ## v, result)
+#define PROFILE_RESULTS(v, result) __PROFILE_RESULTS(#v, &_profile_ ## v, result)
 
 static void __PROFILE_RESULTS(const char* name, struct profile_vars_t* v, profile_results_t* r) __attribute__((unused));
 
@@ -436,21 +412,6 @@ static void __PROFILE_RESULTS(const char* name, struct profile_vars_t* v, profil
     uint64_t r_min;
 #endif
 
-    //This has to be separate for use inside HMPI.
-#if _PROFILE_HMPI == 1
-    HMPI_Allreduce(&v->count, &r->count, 1,
-            MPI_UNSIGNED_LONG_LONG, MPI_SUM, HMPI_COMM_WORLD);
-    HMPI_Allreduce(&v->time, &r_total, 1,
-            MPI_UNSIGNED_LONG_LONG, MPI_SUM, HMPI_COMM_WORLD);
-
-#if _PROFILE_MAX_MIN
-    HMPI_Allreduce(&v->max, &r_max, 1,
-            MPI_UNSIGNED_LONG_LONG, MPI_MAX, HMPI_COMM_WORLD);
-    HMPI_Allreduce(&v->min, &r_min, 1,
-            MPI_UNSIGNED_LONG_LONG, MPI_MIN, HMPI_COMM_WORLD);
-#endif //_PROFILE_MAX_MIN
-
-#else //_PROFILE_MPI == 1
     MPI_Allreduce(&v->count, &r->count, 1,
             MPI_UNSIGNED_LONG_LONG, MPI_SUM, MPI_COMM_WORLD);
     MPI_Allreduce(&v->time, &r_total, 1,
@@ -462,24 +423,11 @@ static void __PROFILE_RESULTS(const char* name, struct profile_vars_t* v, profil
     MPI_Allreduce(&v->min, &r_min, 1,
             MPI_UNSIGNED_LONG_LONG, MPI_MIN, MPI_COMM_WORLD);
 #endif //_PROFILE_MAX_MIN
-#endif //_PROFILE_MPI == 1
 
 #if _PROFILE_PAPI_EVENTS == 1
     int i;
 
-#if _PROFILE_HMPI == 1
-    HMPI_Allreduce(v->ctrs, r->total_ctrs, NUM_EVENTS,
-            MPI_UNSIGNED_LONG_LONG, MPI_SUM, HMPI_COMM_WORLD);
-
-#if _PROFILE_MAX_MIN
-    HMPI_Allreduce(v->ctr_max, r->max_ctrs, NUM_EVENTS,
-            MPI_UNSIGNED_LONG_LONG, MPI_MAX, HMPI_COMM_WORLD);
-    HMPI_Allreduce(v->ctr_min, r->min_ctrs, NUM_EVENTS,
-            MPI_UNSIGNED_LONG_LONG, MPI_MIN, HMPI_COMM_WORLD);
-#endif //_PROFILE_MAX_MIN
-
-#else 
-    MPI_Alleduce(v->ctrs, r->total_ctrs, NUM_EVENTS,
+    MPI_Allreduce(v->ctrs, r->total_ctrs, NUM_EVENTS,
             MPI_UNSIGNED_LONG_LONG, MPI_SUM, MPI_COMM_WORLD);
 
 #if _PROFILE_MAX_MIN
@@ -488,7 +436,6 @@ static void __PROFILE_RESULTS(const char* name, struct profile_vars_t* v, profil
     MPI_Allreduce(v->ctr_min, r->min_ctrs, NUM_EVENTS,
             MPI_UNSIGNED_LONG_LONG, MPI_MIN, MPI_COMM_WORLD);
 #endif //_PROFILE_MAX_MIN
-#endif
 
     for(i = 0; i < NUM_EVENTS; i++) {
         r->avg_ctrs[i] = (double)r->total_ctrs[i] / r->count;
@@ -518,11 +465,7 @@ static void __PROFILE_SHOW(const char* name, struct profile_vars_t* v)
 
     __PROFILE_RESULTS(name, v, &r);
 
-#if _PROFILE_HMPI == 1
-    HMPI_Comm_rank(HMPI_COMM_WORLD, &rank);
-#else
     MPI_Comm_rank(MPI_COMM_WORLD, &rank);
-#endif
 
     if(rank == 0 && r.count > 0) {
 #if _PROFILE_MAX_MIN
@@ -554,17 +497,11 @@ static void __PROFILE_SHOW(const char* name, struct profile_vars_t* v)
 
 
 
-#else
-#define PROFILE_RESULTS(v, result)
-#define PROFILE_SHOW(var)
-#endif
-
-
 #warning "PROFILING ON"
 
 #else
 #define PROFILE_DECLARE()
-static inline void PROFILE_INIT(int tid) {}
+static inline void PROFILE_INIT(void) {}
 static inline void PROFILE_FINALIZE(void) {}
 #define PROFILE_VAR(var)
 #define PROFILE_EXTERN(var)

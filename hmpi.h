@@ -1,6 +1,7 @@
 #ifndef _HMPI_H_
 #define _HMPI_H_
 #include <stdint.h>
+#include <unistd.h>
 #include <mpi.h>
 #include <assert.h>
 #include "barrier.h"
@@ -17,10 +18,46 @@ extern "C" {
 #define _USING_HMPI_ 1
 
 
-extern int g_nthreads;              //Threads per node
-extern int g_rank;                  //Underlying MPI rank for this node
-extern int g_size;                  //Underlying MPI world size
-extern __thread int g_hmpi_rank;    //HMPI rank for this thread
+//HMPI internal stuff
+
+#define EAGER_LIMIT 256
+
+#ifdef HMPI_INTERNAL
+//#include <mm.h>
+
+#define printf(...) printf(__VA_ARGS__); fflush(stdout)
+
+//#define MALLOC(t, s) (t*)__builtin_assume_aligned(memalign(64, sizeof(t) * s), 64)
+#define MALLOC(t, s) (t*)memalign(64, sizeof(t) * s)
+
+
+//Conditional to check if a pointer points to a SM buffer.
+#ifdef __bg__
+//Everything is shared on BG/Q
+#define IS_SM_BUF(p) (1)
+#else
+extern void* sm_lower;
+extern void* sm_upper;
+
+#define IS_SM_BUF(p) ((p) >= sm_lower && (p) < sm_upper)
+#endif
+
+
+
+//Wrappers to GCC/ICC extensions
+
+#define likely(x)       __builtin_expect((x),1)
+#define unlikely(x)     __builtin_expect((x),0)
+
+
+extern int g_rank;                      //HMPI world rank
+extern int g_size;                      //HMPI world size
+extern int g_node_rank;                 //HMPI node rank
+extern int g_node_size;                 //HMPI node size
+extern int g_net_rank;                  //HMPI net rank
+extern int g_net_size;                  //HMPI net size
+
+#endif
 
 
 typedef struct hmpi_coll_t {
@@ -34,27 +71,33 @@ typedef struct hmpi_coll_t {
 typedef void* HMPI_Group;
 
 typedef struct {
+  MPI_Comm comm;        //Underyling MPI communicator
+  MPI_Comm node_comm;   //Contains only ranks in this comm on the same node
+  MPI_Comm net_comm;    //Contains one rank from each node
+  //MPI_Group g_comm;     //Shortcut groups for Comm_node_rank()
+  //MPI_Group g_node;
+  int node_base;   //Rank of first rank on this node
+  int node_size;   //Number of ranks on this node
+
+  barrier_t* barr;       //Barrier for local ranks in this comm
+  //treebarrier_t tbarr;
+
   //Used for intra-node sharing in various collectives
+  //TODO - many will need to be in shared mem
+  // Make a secondary shared comm struct?
   volatile void** sbuf;
   volatile int* scount;
   volatile MPI_Datatype* stype;
   volatile void** rbuf;
   volatile int* rcount;
   volatile MPI_Datatype* rtype;
-  volatile void* mpi_sbuf; //Used by alltoall
-  volatile void* mpi_rbuf; //Used by alltoall, gatherv
   hmpi_coll_t* coll;        //Used by allreduce
-
-  barrier_t barr;       //Barrier for local ranks in this comm
-  //treebarrier_t tbarr;
-  MPI_Comm mpicomm;     //Underyling MPI comm
-  //MPI_Comm* tcomms;
 } HMPI_Comm_info;
 
 typedef HMPI_Comm_info* HMPI_Comm;
 
 extern HMPI_Comm HMPI_COMM_WORLD;
-
+extern HMPI_Comm HMPI_COMM_NODE;
 
 #define HMPI_STATUS_IGNORE NULL
 #define HMPI_STATUSES_IGNORE NULL
@@ -86,7 +129,6 @@ typedef struct HMPI_Status {
 
 typedef struct HMPI_Item {
     struct HMPI_Item* next;
-//    struct HMPI_Item* prev;
 } HMPI_Item;
 
 
@@ -96,18 +138,25 @@ typedef struct HMPI_Request_info {
 
     volatile uint32_t stat;    //Request state
     uint8_t type;       //Request type
-    int proc;       //Always the source's rank regardless of type.
-    int tag;        //MPI tag
-    size_t size;    //Message size in bytes
-    void* buf;      //User buffer
+    uint8_t do_free;    //Used for internally-allocated SM regions on send side.
+    int proc;           //Always the source's rank regardless of type.
+    int tag;            //MPI tag
+    size_t size;        //Message size in bytes
+    void* buf;          //User buffer
 
-    MPI_Datatype datatype;  //MPI datatype
-    //volatile uint32_t match;//Synchronization for sender/recver copying
+    MPI_Datatype datatype;      //MPI datatype
+    volatile uint32_t match;    //Synchronization for sender/recver copying
 
+        //volatile ssize_t limit;
     union {
+        struct HMPI_Request_info* match_req; //Use on local send req
+        volatile ssize_t offset;             //Copy offset, used on recv req
+        MPI_Request req;                     //Off-node send/recv
+#if 0
         struct {
             //Set only sends; matching recv req
-            volatile struct HMPI_Request_info* match_req;
+            //TODO - make this be the size, not a ptr to the req.
+            struct HMPI_Request_info* match_req;
             //Copy offset for shared sender/recver copying
             volatile ssize_t offset;
         } local /*__attribute__ ((packed))*/;
@@ -124,7 +173,12 @@ typedef struct HMPI_Request_info {
             MPI_Request req;
 #endif
         } remote /*__attribute__ ((packed))*/;
+#endif
     } u;
+
+#ifndef __bg__
+    char eager[EAGER_LIMIT];
+#endif
 } HMPI_Request_info;
 
 typedef HMPI_Request_info* HMPI_Request;
@@ -132,9 +186,15 @@ typedef HMPI_Request_info* HMPI_Request;
 #define HMPI_REQUEST_NULL NULL
 
 
+typedef struct HMPI_Info_info {
+} HMPI_Info_info;
 
-int HMPI_Init(int *argc, char ***argv, int (*start_routine)(int argc, char** argv), int nthreads, int ncores, int nsockets);
-//int HMPI_Init(int *argc, char ***argv, int nthreads, int (*start_routine)(int argc, char** argv));
+typedef HMPI_Info_info* HMPI_Info;
+
+#define HMPI_INFO_NULL NULL
+
+
+int HMPI_Init(int *argc, char ***argv);
 
 int HMPI_Finalize();
 
@@ -143,37 +203,21 @@ static int HMPI_Abort(HMPI_Comm comm, int errorcode) __attribute__((unused));
 
 static int HMPI_Abort(HMPI_Comm comm, int errorcode) {
   printf("HMPI: user code called MPI_Abort!\n");
-  return MPI_Abort(comm->mpicomm, errorcode);
+  return MPI_Abort(comm->comm, errorcode);
 }
 
 
-static int HMPI_Comm_rank(HMPI_Comm comm, int *rank) __attribute__((unused));
+static inline int HMPI_Comm_rank(HMPI_Comm comm, int *rank) __attribute__((unused));
 
-static int HMPI_Comm_rank(HMPI_Comm comm, int *rank) {
-#ifdef HMPI_SAFE 
-  if(comm->mpicomm != MPI_COMM_WORLD) {
-    printf("only MPI_COMM_WORLD is supported so far\n");
-    MPI_Abort(comm->mpicomm, 0);
-  }
-#endif
-
-  *rank = g_hmpi_rank;
-  return 0;
+static inline int HMPI_Comm_rank(HMPI_Comm comm, int *rank) {
+  return MPI_Comm_rank(comm->comm, rank);
 }
 
 
-static int HMPI_Comm_size(HMPI_Comm comm, int *size) __attribute__((unused));
+static inline int HMPI_Comm_size(HMPI_Comm comm, int *size) __attribute__((unused));
 
-static int HMPI_Comm_size(HMPI_Comm comm, int *size) {
-#ifdef HMPI_SAFE 
-  if(comm->mpicomm != MPI_COMM_WORLD) {
-    printf("only MPI_COMM_WORLD is supported so far\n");
-    MPI_Abort(comm->mpicomm, 0);
-  }
-#endif
-    
-  *size = g_size*g_nthreads;
-  return 0;
+static inline int HMPI_Comm_size(HMPI_Comm comm, int *size) {
+  return MPI_Comm_size(comm->comm, size);
 }
 
 
@@ -183,30 +227,45 @@ static int HMPI_Comm_size(HMPI_Comm comm, int *size) {
 //TODO - replace with use of MPI3 shared-mem communicator?
 static inline int HMPI_Comm_local(HMPI_Comm comm, int rank)
 {
+#if 0
 #ifdef HMPI_SAFE
-  if(comm->mpicomm != MPI_COMM_WORLD) {
+  if(comm->comm != MPI_COMM_WORLD) {
     printf("only MPI_COMM_WORLD is supported so far\n");
-    MPI_Abort(comm->mpicomm, 0);
+    MPI_Abort(comm->comm, 0);
   }
 #endif
  
     return (g_rank == (rank / g_nthreads));  
+#endif
+    printf("Comm_local broken\n");
+    MPI_Abort(MPI_COMM_WORLD, 0);
+    return 0;
 }
 
 
 //AWF new function -- return the thread ID of the specified rank.
 static inline void HMPI_Comm_thread(HMPI_Comm comm, int rank, int* tid)
 {
+#if 0
 #ifdef HMPI_SAFE
-  if(comm->mpicomm != MPI_COMM_WORLD) {
+  if(comm->comm != MPI_COMM_WORLD) {
     printf("only MPI_COMM_WORLD is supported so far\n");
-    MPI_Abort(comm->mpicomm, 0);
+    MPI_Abort(comm->comm, 0);
   }
 #endif
 
   *tid = rank % g_nthreads;
+#endif
+    printf("Comm_thread broken\n");
+    MPI_Abort(MPI_COMM_WORLD, 0);
 }
 
+//AWF new function -- return the node rank of some rank.
+void HMPI_Comm_node_rank(HMPI_Comm comm, int rank, int* node_rank);
+
+int HMPI_Alloc_mem(MPI_Aint size, HMPI_Info info, void *baseptr);
+int HMPI_Realloc_mem(MPI_Aint size, HMPI_Info info, void *baseptr);
+int HMPI_Free_mem(void *base);
 
 int HMPI_Send(void *buf, int count, MPI_Datatype datatype, int dest, int tag, HMPI_Comm comm );
 int HMPI_Recv(void *buf, int count, MPI_Datatype datatype, int source, int tag, HMPI_Comm comm, HMPI_Status *status );
@@ -303,6 +362,10 @@ int OPI_Take(void** ptr, int count, MPI_Datatype datatype, int rank, int tag, HM
 
 #define MPI_COMM_WORLD HMPI_COMM_WORLD
 
+#ifdef MPI_INFO_NULL
+#undef MPI_INFO_NULL
+#endif
+
 #ifdef MPI_REQUEST_NULL
 #undef MPI_REQUEST_NULL
 #endif
@@ -314,6 +377,8 @@ int OPI_Take(void** ptr, int count, MPI_Datatype datatype, int rank, int tag, HM
 #ifdef MPI_STATUSES_IGNORE
 #undef MPI_STATUSES_IGNORE
 #endif
+
+#define MPI_INFO_NULL HMPI_INFO_NULL
 
 #define MPI_REQUEST_NULL HMPI_REQUEST_NULL
 
@@ -329,6 +394,10 @@ int OPI_Take(void** ptr, int count, MPI_Datatype datatype, int rank, int tag, HM
 
 #define MPI_Comm_rank HMPI_Comm_rank
 #define MPI_Comm_size HMPI_Comm_size
+
+#define MPI_Alloc_mem HMPI_Alloc_mem
+#define MPI_Realloc_mem HMPI_Realloc_mem
+#define MPI_Free_mem HMPI_Free_mem
 
 //These are HMPI specific routines, we define for consistency
 #define MPI_Comm_local HMPI_Comm_local

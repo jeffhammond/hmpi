@@ -2,7 +2,7 @@
 #include <mpi.h>
 #include "profile2.h"
 
-PROFILE_DECLARE();
+//PROFILE_DECLARE();
 PROFILE_VAR(MPI_Other);
 PROFILE_VAR(MPI_Isend);
 PROFILE_VAR(MPI_Irecv);
@@ -27,7 +27,7 @@ PROFILE_VAR(MPI_Alltoall);
 
 int MPI_Init(int *argc, char ***argv)
 {
-    PROFILE_INIT(0);
+    //PROFILE_INIT(0);
     PMPI_Init(argc, argv);
     PROFILE_START(MPI_Other);
     return MPI_SUCCESS;
@@ -35,7 +35,7 @@ int MPI_Init(int *argc, char ***argv)
 
 int MPI_Init_thread(int *argc, char ***argv, int required, int* provided)
 {
-    PROFILE_INIT(0);
+    //PROFILE_INIT(0);
     int ret = PMPI_Init_thread(argc, argv, required, provided);
     PROFILE_START(MPI_Other);
     return ret;
@@ -43,32 +43,31 @@ int MPI_Init_thread(int *argc, char ***argv, int required, int* provided)
 
 int MPI_Finalize()
 {
-
     PROFILE_STOP(MPI_Other);
     PROFILE_START(MPI_Other);
 
-    PROFILE_SHOW_REDUCE(MPI_Isend);
-    PROFILE_SHOW_REDUCE(MPI_Irecv);
-    PROFILE_SHOW_REDUCE(MPI_Test);
-    PROFILE_SHOW_REDUCE(MPI_Testall);
-    PROFILE_SHOW_REDUCE(MPI_Wait);
-    PROFILE_SHOW_REDUCE(MPI_Waitall);
-    PROFILE_SHOW_REDUCE(MPI_Waitany);
-    PROFILE_SHOW_REDUCE(MPI_Iprobe);
+    PROFILE_SHOW(MPI_Isend);
+    PROFILE_SHOW(MPI_Irecv);
+    PROFILE_SHOW(MPI_Test);
+    PROFILE_SHOW(MPI_Testall);
+    PROFILE_SHOW(MPI_Wait);
+    PROFILE_SHOW(MPI_Waitall);
+    PROFILE_SHOW(MPI_Waitany);
+    PROFILE_SHOW(MPI_Iprobe);
 
-    PROFILE_SHOW_REDUCE(MPI_Barrier);
-    PROFILE_SHOW_REDUCE(MPI_Reduce);
-    PROFILE_SHOW_REDUCE(MPI_Allreduce);
-    PROFILE_SHOW_REDUCE(MPI_Scan);
-    PROFILE_SHOW_REDUCE(MPI_Bcast);
-    PROFILE_SHOW_REDUCE(MPI_Scatter);
-    PROFILE_SHOW_REDUCE(MPI_Gather);
-    PROFILE_SHOW_REDUCE(MPI_Gatherv);
-    PROFILE_SHOW_REDUCE(MPI_Allgather);
-    PROFILE_SHOW_REDUCE(MPI_Allgatherv);
-    PROFILE_SHOW_REDUCE(MPI_Alltoall);
+    PROFILE_SHOW(MPI_Barrier);
+    PROFILE_SHOW(MPI_Reduce);
+    PROFILE_SHOW(MPI_Allreduce);
+    PROFILE_SHOW(MPI_Scan);
+    PROFILE_SHOW(MPI_Bcast);
+    PROFILE_SHOW(MPI_Scatter);
+    PROFILE_SHOW(MPI_Gather);
+    PROFILE_SHOW(MPI_Gatherv);
+    PROFILE_SHOW(MPI_Allgather);
+    PROFILE_SHOW(MPI_Allgatherv);
+    PROFILE_SHOW(MPI_Alltoall);
 
-    PROFILE_SHOW_REDUCE(MPI_Other);
+    PROFILE_SHOW(MPI_Other);
 
     PMPI_Finalize();
     return MPI_SUCCESS;
