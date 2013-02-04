@@ -82,6 +82,10 @@ typedef struct {
   //barrier_t* barr;       //Barrier for local ranks in this comm
   //treebarrier_t tbarr;
 
+  //This mysteriously improves latency for netpipe.
+  //I used to have more variables here; removing them slowed netpipe down.
+  char pad[60];
+
 #if 0
   //Used for intra-node sharing in various collectives
   //TODO - many will need to be in shared mem
@@ -154,28 +158,6 @@ typedef struct HMPI_Request_info {
         struct HMPI_Request_info* match_req; //Use on local send req
         volatile ssize_t offset;             //Copy offset, used on recv req
         MPI_Request req;                     //Off-node send/recv
-#if 0
-        struct {
-            //Set only sends; matching recv req
-            //TODO - make this be the size, not a ptr to the req.
-            struct HMPI_Request_info* match_req;
-            //Copy offset for shared sender/recver copying
-            volatile ssize_t offset;
-        } local /*__attribute__ ((packed))*/;
-        struct {
-            //Used only for off-node messages via underlying MPI
-#ifdef ENABLE_PSM
-            //volatile struct HMPI_Request_info* next;
-            //void (*cb)(struct HMPI_Request_info*);
-            //uint32_t rank;  //Destination PSM rank used for sends
-            //uint64_t tag;
-            //uint64_t tagsel;    //Used only for recv
-            libpsm_req_t req;
-#else
-            MPI_Request req;
-#endif
-        } remote /*__attribute__ ((packed))*/;
-#endif
     } u;
 
 #ifndef __bg__

@@ -1442,10 +1442,6 @@ int HMPI_Isend(void* buf, int count, MPI_Datatype datatype, int dest, int tag, H
                 dest, tag, comm->comm, &req->u.req);
 
         req->type = MPI_SEND;
-        //req->proc = g_rank; // always sender's world-level rank
-        //req->tag = tag;
-        //req->size = size;
-        //req->buf = buf;
         req->datatype = datatype;
     }
 
@@ -1551,10 +1547,6 @@ int HMPI_Irecv(void* buf, int count, MPI_Datatype datatype, int source, int tag,
                 source, tag, comm->comm, &req->u.req);
 
         req->type = MPI_RECV;
-        //req->proc = source; //Always sender's world-level rank
-        //req->tag = tag;
-        //req->size = count * type_size;
-        //req->buf = buf;
         req->datatype = datatype;
 
     }
