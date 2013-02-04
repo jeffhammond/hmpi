@@ -1366,24 +1366,23 @@ int HMPI_Isend(void* buf, int count, MPI_Datatype datatype, int dest, int tag, H
     HMPI_Request req = *request = acquire_req();
 
 #if 0
-  int size;
-  MPI_Type_size(datatype, &size);
+    int size;
+    MPI_Type_size(datatype, &size);
 #ifdef HMPI_SAFE
-  MPI_Aint extent, lb;
-  MPI_Type_get_extent(datatype, &lb, &extent);
-  if(extent != size) {
-    printf("non-contiguous derived datatypes are not supported yet!\n");
-    MPI_Abort(comm->comm, 0);
-  }
+    MPI_Aint extent, lb;
+    MPI_Type_get_extent(datatype, &lb, &extent);
+    if(extent != size) {
+        printf("non-contiguous derived datatypes are not supported yet!\n");
+        MPI_Abort(comm->comm, 0);
+    }
 
-  if(comm->comm != MPI_COMM_WORLD) {
-    printf("only MPI_COMM_WORLD is supported so far\n");
-    MPI_Abort(comm->comm, 0);
-  }
+    if(comm->comm != MPI_COMM_WORLD) {
+        printf("only MPI_COMM_WORLD is supported so far\n");
+        MPI_Abort(comm->comm, 0);
+    }
 #endif
 #endif
 
-#if 0
     if(unlikely(dest == MPI_PROC_NULL)) { 
         req->type = HMPI_SEND;
         update_reqstat(req, HMPI_REQ_COMPLETE);
@@ -1391,7 +1390,6 @@ int HMPI_Isend(void* buf, int count, MPI_Datatype datatype, int dest, int tag, H
         FULL_PROFILE_START(MPI_Other);
         return MPI_SUCCESS;
     }
-#endif
 
     int dest_node_rank;
     HMPI_Comm_node_rank(comm, dest, &dest_node_rank);
@@ -1465,12 +1463,13 @@ int HMPI_Send(void* buf, int count, MPI_Datatype datatype, int dest, int tag, HM
 }
 
 
-int HMPI_Irecv(void* buf, int count, MPI_Datatype datatype, int source, int tag, HMPI_Comm comm, HMPI_Request *request) {
+int HMPI_Irecv(void* buf, int count, MPI_Datatype datatype, int source, int tag, HMPI_Comm comm, HMPI_Request *request)
+{
     FULL_PROFILE_STOP(MPI_Other);
     FULL_PROFILE_START(MPI_Irecv);
 
 #ifdef DEBUG
-  printf("[%i] HMPI_Irecv(%p, %i, %p, %i, %i, %p, %p) (proc null: %i)\n", g_rank, buf, count, (void*)datatype, source, tag, comm, req, MPI_PROC_NULL);
+    printf("[%i] HMPI_Irecv(%p, %i, %p, %i, %i, %p, %p) (proc null: %i)\n", g_rank, buf, count, (void*)datatype, source, tag, comm, req, MPI_PROC_NULL);
 #endif
 
     //Freed when req completion is signaled back to the user.
@@ -1478,38 +1477,37 @@ int HMPI_Irecv(void* buf, int count, MPI_Datatype datatype, int source, int tag,
 
 #if 0
 #ifdef HMPI_SAFE
-  MPI_Aint extent, lb;
-  MPI_Type_get_extent(datatype, &lb, &extent);
-  if(extent != size) {
-    printf("non-contiguous derived datatypes are not supported yet!\n");
-    MPI_Abort(comm->comm, 0);
-  }
+    MPI_Aint extent, lb;
+    MPI_Type_get_extent(datatype, &lb, &extent);
+    if(extent != size) {
+        printf("non-contiguous derived datatypes are not supported yet!\n");
+        MPI_Abort(comm->comm, 0);
+    }
 
-  if(comm->comm != MPI_COMM_WORLD) {
-    printf("only MPI_COMM_WORLD is supported so far\n");
-    MPI_Abort(comm->comm, 0);
-  }
+    if(comm->comm != MPI_COMM_WORLD) {
+        printf("only MPI_COMM_WORLD is supported so far\n");
+        MPI_Abort(comm->comm, 0);
+    }
 #endif 
 #endif
 
-  int src_node_rank;
-  HMPI_Comm_node_rank(comm, source, &src_node_rank);
+    int src_node_rank;
+    HMPI_Comm_node_rank(comm, source, &src_node_rank);
 
-  int type_size;
-  MPI_Type_size(datatype, &type_size);
+    int type_size;
+    MPI_Type_size(datatype, &type_size);
 
-  //update_reqstat() has a memory fence on BGQ, avoid it here.
-  req->stat = HMPI_REQ_ACTIVE;
+    //update_reqstat() has a memory fence on BGQ, avoid it here.
+    req->stat = HMPI_REQ_ACTIVE;
 
 #if 0
-  req->proc = source; //Always sender's world-level rank
-  req->tag = tag;
-  req->size = count * type_size;
-  req->buf = buf;
-  req->datatype = datatype;
+    req->proc = source; //Always sender's world-level rank
+    req->tag = tag;
+    req->size = count * type_size;
+    req->buf = buf;
+    req->datatype = datatype;
 #endif
 
-#if 0
     if(unlikely(source == MPI_PROC_NULL)) { 
         req->type = HMPI_RECV;
         update_reqstat(req, HMPI_REQ_COMPLETE);
@@ -1517,63 +1515,63 @@ int HMPI_Irecv(void* buf, int count, MPI_Datatype datatype, int source, int tag,
         FULL_PROFILE_START(MPI_Other);
         return MPI_SUCCESS;
     }
-#endif
 
 
-  if(unlikely(source == MPI_ANY_SOURCE)) {
+    if(unlikely(source == MPI_ANY_SOURCE)) {
 #if 0
-    if(buf != NULL && !IS_SM_BUF(buf)) {
-        printf("%d warning, non-SM buf %p size %ld\n", g_rank, buf, req->size);
-    }
+        if(buf != NULL && !IS_SM_BUF(buf)) {
+            printf("%d warning, non-SM buf %p size %ld\n", g_rank, buf, req->size);
+        }
 #endif
 
-    MPI_Irecv(buf, count, datatype,
-            source, tag, comm->comm, &req->u.req);
+        MPI_Irecv(buf, count, datatype,
+                source, tag, comm->comm, &req->u.req);
 
-    req->type = HMPI_RECV_ANY_SOURCE;
+        req->type = HMPI_RECV_ANY_SOURCE;
 
-    req->proc = source; //Always sender's world-level rank
-    req->tag = tag;
-    req->size = count * type_size;
-    req->buf = buf;
-    req->datatype = datatype;
+        req->proc = source; //Always sender's world-level rank
+        req->tag = tag;
+        req->size = count * type_size;
+        req->buf = buf;
+        req->datatype = datatype;
 
-    add_recv_req(req);
-  } else if(src_node_rank != MPI_UNDEFINED) {
-    req->type = HMPI_RECV;
+        add_recv_req(req);
+    } else if(src_node_rank != MPI_UNDEFINED) {
+        req->type = HMPI_RECV;
 
-    req->proc = source; //Always sender's world-level rank
-    req->tag = tag;
-    req->size = count * type_size;
-    req->buf = buf;
-    req->datatype = datatype;
+        req->proc = source; //Always sender's world-level rank
+        req->tag = tag;
+        req->size = count * type_size;
+        req->buf = buf;
+        req->datatype = datatype;
 
-    add_recv_req(req);
-  } else { //Recv off-node, but not ANY_SOURCE
-    MPI_Irecv(buf, count, datatype,
-            source, tag, comm->comm, &req->u.req);
+        add_recv_req(req);
+    } else { //Recv off-node, but not ANY_SOURCE
+        MPI_Irecv(buf, count, datatype,
+                source, tag, comm->comm, &req->u.req);
 
-    req->type = MPI_RECV;
-    //req->proc = source; //Always sender's world-level rank
-    //req->tag = tag;
-    //req->size = count * type_size;
-    //req->buf = buf;
-    req->datatype = datatype;
+        req->type = MPI_RECV;
+        //req->proc = source; //Always sender's world-level rank
+        //req->tag = tag;
+        //req->size = count * type_size;
+        //req->buf = buf;
+        req->datatype = datatype;
 
-  }
+    }
 
     FULL_PROFILE_STOP(MPI_Irecv);
     FULL_PROFILE_START(MPI_Other);
-  return MPI_SUCCESS;
+    return MPI_SUCCESS;
 }
 
 
-int HMPI_Recv(void* buf, int count, MPI_Datatype datatype, int source, int tag, HMPI_Comm comm, HMPI_Status *status) {
-  HMPI_Request req;
+int HMPI_Recv(void* buf, int count, MPI_Datatype datatype, int source, int tag, HMPI_Comm comm, HMPI_Status *status)
+{
+    HMPI_Request req;
 
-  HMPI_Irecv(buf, count, datatype, source, tag, comm, &req);
-  HMPI_Wait(&req, status);
-  return MPI_SUCCESS;
+    HMPI_Irecv(buf, count, datatype, source, tag, comm, &req);
+    HMPI_Wait(&req, status);
+    return MPI_SUCCESS;
 }
 
 

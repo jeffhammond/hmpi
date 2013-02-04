@@ -11,7 +11,7 @@ WARN=-Wall -Wuninitialized #-Wno-unused-function
 LIBS=-lrt
 INCS=#-D_PROFILE=1 -D_PROFILE_MPI=1 -D_PROFILE_PAPI_EVENTS=1 #-DFULL_PROFILE #-D_PROFILE_PAPI_EVENTS=1 #-DENABLE_OPI=1
 SRCS=hmpi.c hmpi_opi.c sm_malloc.c #hmpi_coll.c nbc_op.c
-USEQ_SRCS=hmpi.c hmpi_coll.c nbc_op.c
+USEQ_SRCS=hmpi.c #hmpi_coll.c nbc_op.c
 MAIN=main.c
 HDRS=hmpi.h barrier.h lock.h profile2.h
 
