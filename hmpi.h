@@ -74,8 +74,6 @@ typedef struct {
   MPI_Comm comm;        //Underyling MPI communicator: MUST BE FIRST
   MPI_Comm node_comm;   //Contains only ranks in this comm on the same node
   MPI_Comm net_comm;    //Contains one rank from each node
-  //MPI_Group g_comm;     //Shortcut groups for Comm_node_rank()
-  //MPI_Group g_node;
   int node_base;   //Rank of first rank on this node
   int node_size;   //Number of ranks on this node
 

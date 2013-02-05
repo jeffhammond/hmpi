@@ -220,15 +220,6 @@ static inline void add_send_req(HMPI_Request_list* req_list,
 static inline void remove_send_req(HMPI_Request_list* req_list,
                                    HMPI_Item* prev, const HMPI_Item* cur)
 {
-#if 0
-#ifdef __bg__
-    LOCK_ACQUIRE(&req_list->lock);
-#else
-    mcs_qnode_t* q = g_lock_q;  //Could fold this back into macros..
-    __LOCK_ACQUIRE(&req_list->lock, q);
-#endif
-#endif
-
     //Since we only remove from the receiver-local send Q, there is no need for
     //locking.
     if(cur->next == NULL) {
@@ -237,13 +228,6 @@ static inline void remove_send_req(HMPI_Request_list* req_list,
     } else {
         prev->next = cur->next;
     }
-#if 0
-#ifdef __bg__
-    LOCK_RELEASE(&req_list->lock);
-#else
-    __LOCK_RELEASE(&req_list->lock, q);
-#endif
-#endif
 }
 
 
@@ -472,11 +456,6 @@ static inline int match_probe(int source, int tag, HMPI_Comm comm, HMPI_Request*
 
 int HMPI_Init(int *argc, char ***argv)
 {
-    {
-        void* foo = malloc(1);
-        free(foo);
-    }
-
     MPI_Init(argc, argv);
     FULL_PROFILE_INIT();
 
@@ -506,8 +485,6 @@ int HMPI_Init(int *argc, char ***argv)
     int color = 0;
     for(int i = 0; i < hw.torus_dimension; i++) {
         color = (color * hw.Size[i]) + hw.Coords[i];
-        //printf("%d dim %d size %d coord %d torus %d\n",
-        //        g_rank, i, hw.Size[i], hw.Coords[i], hw.isTorus[i]);
     }
 
     //printf("%d color %d\n", g_rank, color);
@@ -527,9 +504,6 @@ int HMPI_Init(int *argc, char ***argv)
 #endif
 
     MPI_Comm_split(MPI_COMM_WORLD, color, g_rank, &HMPI_COMM_WORLD->node_comm);
-
-    //MPI_Comm_group(HMPI_COMM_WORLD->comm, &HMPI_COMM_WORLD->g_comm);
-    //MPI_Comm_group(HMPI_COMM_WORLD->node_comm, &HMPI_COMM_WORLD->g_node);
 
     //Store the node size in ranks, and the base rank.
     //Used in HMPI_Comm_node_rank().
@@ -562,9 +536,6 @@ int HMPI_Init(int *argc, char ***argv)
 
     MPI_Comm_rank(HMPI_COMM_WORLD->net_comm, &g_net_rank);
     MPI_Comm_size(HMPI_COMM_WORLD->net_comm, &g_net_size);
-
-    //printf("%d NODE size %d rank %d\n",
-    //        g_rank, g_node_size, g_node_rank);
 
 
     //Let's check if we all got the same region address.
@@ -607,10 +578,9 @@ int HMPI_Init(int *argc, char ***argv)
 #endif
     }
 
-    //Now let other ranks attach to the region.
-    //At the same time, share the location of g_send_reqs.
-    //MPI_Bcast(&g_sm_region, 1, MPI_LONG, 0, HMPI_COMM_WORLD->node_comm);
+    //Share the location of g_send_reqs.
     MPI_Bcast(&g_send_reqs, 1, MPI_LONG, 0, HMPI_COMM_WORLD->node_comm);
+
 #if 0
     MPI_Bcast(&HMPI_COMM_WORLD->barr, 1, MPI_LONG,
             0, HMPI_COMM_WORLD->node_comm);
@@ -639,11 +609,6 @@ int HMPI_Init(int *argc, char ***argv)
     g_lock_q = MALLOC(mcs_qnode_t, 1);
     memset(g_lock_q, 0, sizeof(mcs_qnode_t));
 #endif
-
-    //g_tl_my_send_reqs = g_send_reqs[g_node_rank] = MALLOC(HMPI_Request_list, 1);
-    //g_tl_my_send_reqs->head.next = NULL;
-    //g_tl_my_send_reqs->tail = &g_tl_my_send_reqs->head;
-    //LOCK_INIT(&g_tl_my_send_reqs->lock);
 
     g_send_reqs[g_node_rank].head.next = NULL;
     g_send_reqs[g_node_rank].tail = &g_send_reqs[g_node_rank].head;
@@ -810,11 +775,15 @@ static inline void HMPI_Complete_recv(HMPI_Request recv_req, HMPI_Request send_r
     }
 #endif
 
-    if(size < BLOCK_SIZE_ONE << 1 || !IS_SM_BUF(recv_req->buf)) {
+    uintptr_t rbuf = (uintptr_t)recv_req->buf;
+    uintptr_t sbuf = (uintptr_t)send_req->buf;
+
+    //if(size < BLOCK_SIZE_ONE << 1 || !IS_SM_BUF(recv_req->buf)) {
+    if(size < BLOCK_SIZE_ONE << 1 || !IS_SM_BUF((void*)rbuf)) {
         //Use memcpy for small messages, and when the user's receive buf isn't
         // in the SM region.  On the recv path, buf is always the user's recv
         // buf, whether it's an SM region or not.
-        memcpy((void*)recv_req->buf, send_req->buf, size);
+        memcpy((void*)rbuf, (void*)sbuf, size);
     } else {
         //The setting of send_req->match_req signals to sender that they can
         // start doing copying as well, if they are testing the req.
@@ -829,8 +798,6 @@ static inline void HMPI_Complete_recv(HMPI_Request recv_req, HMPI_Request send_r
             block_size = BLOCK_SIZE_TWO;
         }
 
-        uintptr_t rbuf = (uintptr_t)recv_req->buf;
-        uintptr_t sbuf = (uintptr_t)send_req->buf;
         volatile ssize_t* offsetptr = &recv_req->u.offset;
         ssize_t offset = 0;
 
@@ -948,7 +915,6 @@ static void HMPI_Progress(HMPI_Item* recv_reqs_head, HMPI_Request_list* local_li
 
         if(likely(req->type == HMPI_RECV)) {
             HMPI_Request send_req = match_recv(local_list, req);
-            //HMPI_Request send_req = match_recv(shared_list, req);
             if(send_req != HMPI_REQUEST_NULL) {
                 HMPI_Complete_recv(req, send_req);
 
@@ -971,7 +937,6 @@ static void HMPI_Progress(HMPI_Item* recv_reqs_head, HMPI_Request_list* local_li
             // In that case, it returns REQUEST_NULL indicating no match,
             // but the request will be in completed state.
             HMPI_Request send_req = match_recv_any(local_list, req);
-            //HMPI_Request send_req = match_recv_any(shared_list, req);
             if(send_req != HMPI_REQUEST_NULL) {
                 HMPI_Complete_recv(req, send_req);
 
@@ -1012,8 +977,7 @@ int HMPI_Test(HMPI_Request *request, int *flag, HMPI_Status *status)
     } else if(get_reqstat(req) != HMPI_REQ_COMPLETE) {
         int f;
 
-        //HMPI_Progress(&g_recv_reqs_head, &g_tl_send_reqs, g_tl_my_send_reqs);
-        HMPI_Progress(&g_recv_reqs_head, NULL, g_tl_my_send_reqs);
+        HMPI_Progress(&g_recv_reqs_head, &g_tl_send_reqs, g_tl_my_send_reqs);
 
         if(req->type == HMPI_SEND) {
             f = HMPI_Progress_send(req);
@@ -1107,7 +1071,6 @@ int HMPI_Wait(HMPI_Request *request, HMPI_Status *status) {
     }
 
     HMPI_Item* recv_reqs_head = &g_recv_reqs_head;
-    //HMPI_Request_list* local_list = NULL;
     HMPI_Request_list* local_list = &g_tl_send_reqs;
     HMPI_Request_list* shared_list = g_tl_my_send_reqs;
 
@@ -1420,6 +1383,7 @@ int HMPI_Isend(void* buf, int count, MPI_Datatype datatype, int dest, int tag, H
 
     //update_reqstat() has a memory fence on BGQ, avoid it here.
     req->stat = HMPI_REQ_ACTIVE;
+    req->datatype = datatype;
 
     if(dest_node_rank != MPI_UNDEFINED) {
         req->type = HMPI_SEND;
@@ -1428,7 +1392,6 @@ int HMPI_Isend(void* buf, int count, MPI_Datatype datatype, int dest, int tag, H
         req->tag = tag;
         req->size = size;
         req->buf = buf;
-        req->datatype = datatype;
 
         //For small messages, copy into the eager buffer.
         //If the user's send buffer is not in the SM region, allocate an SM buf
@@ -1454,7 +1417,6 @@ int HMPI_Isend(void* buf, int count, MPI_Datatype datatype, int dest, int tag, H
                 dest, tag, comm->comm, &req->u.req);
 
         req->type = MPI_SEND;
-        req->datatype = datatype;
     }
 
     FULL_PROFILE_STOP(MPI_Isend);
@@ -1499,6 +1461,14 @@ int HMPI_Irecv(void* buf, int count, MPI_Datatype datatype, int source, int tag,
 #endif 
 #endif
 
+    if(unlikely(source == MPI_PROC_NULL)) { 
+        req->type = HMPI_RECV;
+        update_reqstat(req, HMPI_REQ_COMPLETE);
+        FULL_PROFILE_STOP(MPI_Irecv);
+        FULL_PROFILE_START(MPI_Other);
+        return MPI_SUCCESS;
+    }
+
     int src_node_rank;
     HMPI_Comm_node_rank(comm, source, &src_node_rank);
 
@@ -1507,14 +1477,7 @@ int HMPI_Irecv(void* buf, int count, MPI_Datatype datatype, int source, int tag,
 
     //update_reqstat() has a memory fence on BGQ, avoid it here.
     req->stat = HMPI_REQ_ACTIVE;
-
-    if(unlikely(source == MPI_PROC_NULL)) { 
-        req->type = HMPI_RECV;
-        update_reqstat(req, HMPI_REQ_COMPLETE);
-        FULL_PROFILE_STOP(MPI_Irecv);
-        FULL_PROFILE_START(MPI_Other);
-        return MPI_SUCCESS;
-    }
+    req->datatype = datatype;
 
 #if 0
         if(buf != NULL && !IS_SM_BUF(buf)) {
@@ -1532,7 +1495,6 @@ int HMPI_Irecv(void* buf, int count, MPI_Datatype datatype, int source, int tag,
         req->tag = tag;
         req->size = count * type_size;
         req->buf = buf;
-        req->datatype = datatype;
 
         add_recv_req(req);
     } else if(src_node_rank != MPI_UNDEFINED) {
@@ -1542,7 +1504,6 @@ int HMPI_Irecv(void* buf, int count, MPI_Datatype datatype, int source, int tag,
         req->tag = tag;
         req->size = count * type_size;
         req->buf = buf;
-        req->datatype = datatype;
 
         add_recv_req(req);
     } else { //Recv off-node, but not ANY_SOURCE
@@ -1550,8 +1511,6 @@ int HMPI_Irecv(void* buf, int count, MPI_Datatype datatype, int source, int tag,
                 source, tag, comm->comm, &req->u.req);
 
         req->type = MPI_RECV;
-        req->datatype = datatype;
-
     }
 
     FULL_PROFILE_STOP(MPI_Irecv);
