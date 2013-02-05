@@ -220,6 +220,15 @@ static inline void add_send_req(HMPI_Request_list* req_list,
 static inline void remove_send_req(HMPI_Request_list* req_list,
                                    HMPI_Item* prev, const HMPI_Item* cur)
 {
+#if 0
+#ifdef __bg__
+    LOCK_ACQUIRE(&req_list->lock);
+#else
+    mcs_qnode_t* q = g_lock_q;  //Could fold this back into macros..
+    __LOCK_ACQUIRE(&req_list->lock, q);
+#endif
+#endif
+
     //Since we only remove from the receiver-local send Q, there is no need for
     //locking.
     if(cur->next == NULL) {
@@ -228,6 +237,13 @@ static inline void remove_send_req(HMPI_Request_list* req_list,
     } else {
         prev->next = cur->next;
     }
+#if 0
+#ifdef __bg__
+    LOCK_RELEASE(&req_list->lock);
+#else
+    __LOCK_RELEASE(&req_list->lock, q);
+#endif
+#endif
 }
 
 
@@ -932,6 +948,7 @@ static void HMPI_Progress(HMPI_Item* recv_reqs_head, HMPI_Request_list* local_li
 
         if(likely(req->type == HMPI_RECV)) {
             HMPI_Request send_req = match_recv(local_list, req);
+            //HMPI_Request send_req = match_recv(shared_list, req);
             if(send_req != HMPI_REQUEST_NULL) {
                 HMPI_Complete_recv(req, send_req);
 
@@ -954,6 +971,7 @@ static void HMPI_Progress(HMPI_Item* recv_reqs_head, HMPI_Request_list* local_li
             // In that case, it returns REQUEST_NULL indicating no match,
             // but the request will be in completed state.
             HMPI_Request send_req = match_recv_any(local_list, req);
+            //HMPI_Request send_req = match_recv_any(shared_list, req);
             if(send_req != HMPI_REQUEST_NULL) {
                 HMPI_Complete_recv(req, send_req);
 
@@ -994,7 +1012,8 @@ int HMPI_Test(HMPI_Request *request, int *flag, HMPI_Status *status)
     } else if(get_reqstat(req) != HMPI_REQ_COMPLETE) {
         int f;
 
-        HMPI_Progress(&g_recv_reqs_head, &g_tl_send_reqs, g_tl_my_send_reqs);
+        //HMPI_Progress(&g_recv_reqs_head, &g_tl_send_reqs, g_tl_my_send_reqs);
+        HMPI_Progress(&g_recv_reqs_head, NULL, g_tl_my_send_reqs);
 
         if(req->type == HMPI_SEND) {
             f = HMPI_Progress_send(req);
@@ -1088,6 +1107,7 @@ int HMPI_Wait(HMPI_Request *request, HMPI_Status *status) {
     }
 
     HMPI_Item* recv_reqs_head = &g_recv_reqs_head;
+    //HMPI_Request_list* local_list = NULL;
     HMPI_Request_list* local_list = &g_tl_send_reqs;
     HMPI_Request_list* shared_list = g_tl_my_send_reqs;
 
@@ -1401,14 +1421,6 @@ int HMPI_Isend(void* buf, int count, MPI_Datatype datatype, int dest, int tag, H
     //update_reqstat() has a memory fence on BGQ, avoid it here.
     req->stat = HMPI_REQ_ACTIVE;
 
-#if 0
-    req->proc = g_rank; // always sender's world-level rank
-    req->tag = tag;
-    req->size = size;
-    req->buf = buf;
-    req->datatype = datatype;
-#endif
-
     if(dest_node_rank != MPI_UNDEFINED) {
         req->type = HMPI_SEND;
 
@@ -1496,14 +1508,6 @@ int HMPI_Irecv(void* buf, int count, MPI_Datatype datatype, int source, int tag,
     //update_reqstat() has a memory fence on BGQ, avoid it here.
     req->stat = HMPI_REQ_ACTIVE;
 
-#if 0
-    req->proc = source; //Always sender's world-level rank
-    req->tag = tag;
-    req->size = count * type_size;
-    req->buf = buf;
-    req->datatype = datatype;
-#endif
-
     if(unlikely(source == MPI_PROC_NULL)) { 
         req->type = HMPI_RECV;
         update_reqstat(req, HMPI_REQ_COMPLETE);
@@ -1512,14 +1516,13 @@ int HMPI_Irecv(void* buf, int count, MPI_Datatype datatype, int source, int tag,
         return MPI_SUCCESS;
     }
 
-
-    if(unlikely(source == MPI_ANY_SOURCE)) {
 #if 0
         if(buf != NULL && !IS_SM_BUF(buf)) {
             printf("%d warning, non-SM buf %p size %ld\n", g_rank, buf, req->size);
         }
 #endif
 
+    if(unlikely(source == MPI_ANY_SOURCE)) {
         MPI_Irecv(buf, count, datatype,
                 source, tag, comm->comm, &req->u.req);
 
