@@ -148,6 +148,10 @@ typedef struct HMPI_Request_info {
     size_t size;        //Message size in bytes
     void* buf;          //User buffer
 
+#ifdef HMPI_CHECKSUM
+    uint32_t csum;
+#endif
+
     MPI_Datatype datatype;      //MPI datatype
     volatile uint32_t match;    //Synchronization for sender/recver copying
 
@@ -237,12 +241,12 @@ int HMPI_Barrier(HMPI_Comm comm);
 //#define HMPI_Barrier(c) PMPI_Barrier((c)->comm)
 
 int HMPI_Reduce(void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype, MPI_Op op, int root, HMPI_Comm comm);
-//#define HMPI_Reduce(sendbuf, recvbuf, count, datatype, op, root, c) \
-//    PMPI_Reduce(sendbuf, recvbuf, count, datatype, op, root, (c)->comm)
+/*#define HMPI_Reduce(sendbuf, recvbuf, count, datatype, op, root, c) \
+    PMPI_Reduce(sendbuf, recvbuf, count, datatype, op, root, (c)->comm)*/
 
 int HMPI_Allreduce(void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype, MPI_Op op, HMPI_Comm comm);
-//#define HMPI_Allreduce(sendbuf, recvbuf, count, datatype, op, c) \
-//    PMPI_Allreduce(sendbuf, recvbuf, count, datatype, op, (c)->comm)
+/*#define HMPI_Allreduce(sendbuf, recvbuf, count, datatype, op, c) \
+    PMPI_Allreduce(sendbuf, recvbuf, count, datatype, op, (c)->comm)*/
 
 int HMPI_Scan(void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype, MPI_Op op, HMPI_Comm comm);
 

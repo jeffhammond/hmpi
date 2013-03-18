@@ -40,8 +40,9 @@ void sm_profile_show(void)
 //#define MSPACE_SIZE (1024L * 1024L * 1024L) //Initial mspace capacity
 //#define DEFAULT_SIZE (1024L * 1024L * 1024L * 24L) //Default shared heap size
 //#define MSPACE_SIZE (1024L * 1024L * 1792) //Initial mspace capacity (28gb)
-#define MSPACE_SIZE (1024L * 1024L * 1536L) //Initial mspace capacity (20gb)
-#define DEFAULT_SIZE (MSPACE_SIZE * 16 + getpagesize()) //Default shared heap size
+//#define MSPACE_SIZE (1024L * 1024L * 1536L) //Initial mspace capacity (20gb)
+#define MSPACE_SIZE (1024 * 1024 * 1024L)
+#define DEFAULT_SIZE (MSPACE_SIZE * 16L + (long)getpagesize()) //Default shared heap size
 
 #define unlikely(x)     __builtin_expect((x),0)
 
@@ -58,10 +59,16 @@ void* sm_upper = NULL;
 
 static struct sm_region* sm_region = NULL;
 static mspace sm_mspace = NULL;
-static char sm_filename[256] = {0};
+//static char sm_filename[256] = {0};
+static char* sm_filename = "/tmp/friedley/sm_file";
+
+static void* sm_my_base;
+static void* sm_my_limit;
+
+#define IS_MY_PTR(p) (sm_my_base <= p && p < sm_my_limit)
 
 
-//static char sm_temp[MSPACE_SIZE] = {0};
+static char sm_temp[TEMP_SIZE] = {0};
 
 static void __sm_unlink(void)
 {
@@ -77,14 +84,14 @@ static void __sm_init(void)
 
     //Set up a temporary area on the stack for malloc() calls during our
     // initialization process.
-    void* temp_space = alloca(TEMP_SIZE);
-    sm_region = create_mspace_with_base(temp_space, TEMP_SIZE, 0);
-    //sm_region = create_mspace_with_base(sm_temp, TEMP_SIZE, 0);
+    //void* temp_space = alloca(TEMP_SIZE);
+    //sm_region = create_mspace_with_base(temp_space, TEMP_SIZE, 0);
+    sm_region = create_mspace_with_base(sm_temp, TEMP_SIZE, 0);
     sm_region->brk = (intptr_t)sm_region + sizeof(struct sm_region);
     sm_region->limit = TEMP_SIZE;
 
-
     //Find a filename.
+#if 0
     char* tmp = getenv("SM_FILE");
     if(tmp == NULL) {
         tmp = getenv("TMP");
@@ -97,17 +104,21 @@ static void __sm_init(void)
     } else {
         strncpy(sm_filename, tmp, 255);
     }
+#endif
 
     //printf("SM filename %s\n", sm_filename);
     //fflush(stdout);
 
     //Find the SM region size.
+#if 0
     tmp = getenv("SM_SIZE");
     if(tmp == NULL) {
         size = DEFAULT_SIZE;
     } else {
         size = atol(tmp) * 1024L * 1024L;
     }
+#endif
+    size = DEFAULT_SIZE;
 
     //printf("SM size %lx\n", size);
     //fflush(stdout);
@@ -123,21 +134,24 @@ static void __sm_init(void)
         } 
         
         if(fd == -1) {
-            perror("ERROR open");
-            exit(-1);
+            abort();
+            //perror("ERROR open");
+            //exit(-1);
         }
     }
 
     if(ftruncate(fd, size) == -1) {
-        perror("ERROR ftruncate");
-        exit(-1);
+        abort();
+        //perror("ERROR ftruncate");
+        //exit(-1);
     }
 
     //Map the SM region.
     sm_region = mmap(NULL, size, PROT_READ|PROT_WRITE, MAP_SHARED, fd, 0);
     if(sm_region == (void*)MAP_FAILED) {
-        perror("ERROR mmap");
-        exit(-1);
+        abort();
+        //perror("ERROR sm mmap");
+        //exit(-1);
     }
 
     close(fd);
@@ -170,8 +184,26 @@ static void __sm_init(void)
     //printf("got sm_mspace %p\n", sm_mspace);
     //fflush(stdout);
 
+    sm_my_base = base;
+    sm_my_limit = (void*)((uintptr_t)base + MSPACE_SIZE);
+
     sm_lower = sm_region;
     sm_upper = (void*)sm_region->limit;
+
+#if 0
+    void* base = sbrk(MSPACE_SIZE);
+//    printf("%d base %p\n", getpid(), base); fflush(stdout);
+    sm_mspace = create_mspace_with_base(base, MSPACE_SIZE, 0);
+    if(sm_mspace == NULL) {
+        exit(17);
+    }
+
+    sm_lower = base;
+    sm_upper = (void*)((uintptr_t)base + MSPACE_SIZE);
+
+    sm_my_base = base;
+    sm_my_limit = (void*)((uintptr_t)base + MSPACE_SIZE);
+#endif
 
     //This should go last so it can use proper malloc and friends.
     //PROFILE_INIT();
@@ -182,12 +214,14 @@ void* sm_morecore(intptr_t increment)
 {
     void* oldbrk = (void*)__sync_fetch_and_add(&sm_region->brk, increment);
 
-    //printf("sm_morecore incr %ld brk %p limit %p\n",
-    //        increment, oldbrk, sm_region->limit);
-    //fflush(stdout);
+#if 0
+    printf("%d sm_morecore incr %ld brk %p limit %p\n",
+            getpid(), increment, oldbrk, sm_region->limit);
+    fflush(stdout);
+#endif
 
     if((uintptr_t)oldbrk + increment > (uintptr_t)sm_region->limit) {
-        printf("ERROR no mem in sm_morecore!\n"); fflush(stdout);
+        //printf("ERROR no mem in sm_morecore!\n"); fflush(stdout);
         errno = ENOMEM;
         return (void*)-1;
     }
@@ -235,6 +269,8 @@ int is_sm_buf(void* mem) {
         (intptr_t)mem < sm_region->limit;
 }
 
+#include <numa.h>
+
 void* malloc(size_t bytes) {
     if(unlikely(sm_region == NULL)) __sm_init();
     //PROFILE_START(malloc);
@@ -242,6 +278,18 @@ void* malloc(size_t bytes) {
     //show_backtrace();
 
     void* ptr = mspace_malloc(sm_mspace, bytes);
+
+    if(ptr == NULL) {
+        abort();
+    } else if(!IS_MY_PTR(ptr)) {
+        abort();
+    }
+
+#if 0
+    int status;
+    numa_move_pages(0, 1, &ptr, NULL, &status, 0);
+    printf("%d page %p status %d\n", getpid(), ptr, status);
+#endif
 
     //PROFILE_STOP(malloc);
     return ptr;
@@ -256,6 +304,10 @@ void free(void* mem) {
         return;
     }
 
+    if(!IS_MY_PTR(mem)) {
+        abort();
+    }
+
     mspace_free(sm_mspace, mem);
     //PROFILE_STOP(free);
 }
@@ -266,6 +318,13 @@ void* realloc(void* mem, size_t newsize) {
     //PROFILE_START(realloc);
     void* ptr = mspace_realloc(sm_mspace, mem, newsize);
     //PROFILE_STOP(realloc);
+
+    if(ptr == NULL) {
+        abort();
+    } else if(!IS_MY_PTR(ptr)) {
+        abort();
+    }
+
     return ptr;
 }
 
@@ -275,6 +334,13 @@ void* calloc(size_t n_elements, size_t elem_size) {
     //PROFILE_START(calloc);
     void* ptr = mspace_calloc(sm_mspace, n_elements, elem_size);
     //PROFILE_STOP(calloc);
+
+    if(ptr == NULL) {
+        abort();
+    } else if(!IS_MY_PTR(ptr)) {
+        abort();
+    }
+
     return ptr;
 }
 
@@ -284,6 +350,13 @@ void* memalign(size_t alignment, size_t bytes) {
     //PROFILE_START(memalign);
     void* ptr = mspace_memalign(sm_mspace, alignment, bytes);
     //PROFILE_STOP(memalign);
+
+    if(ptr == NULL) {
+        abort();
+    } else if(!IS_MY_PTR(ptr)) {
+        abort();
+    }
+
     return ptr;
 }
 

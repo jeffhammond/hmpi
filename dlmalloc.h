@@ -538,15 +538,16 @@ int sm_munmap(void* addr, size_t len);
 
 //#define MALLOC_ALIGNMENT ((size_t)64U)
 
-#define INSECURE 1
+#define INSECURE 0
 #define MSPACES 1
 #define ONLY_MSPACES 1
-//#define FOOTERS 1
+#define FOOTERS 1
 #define MORECORE sm_morecore
+//#define MORECORE sbrk
 #define MORECORE_CONTIGUOUS 0
 #define NO_SEGMENT_TRAVERSAL 1
-#define HAVE_MORECORE 1
-#define HAVE_MMAP 1
+#define HAVE_MORECORE 0
+#define HAVE_MMAP 0
 #define HAVE_MREMAP 0
 #define MMAP_CLEARS 1
 #define DEFAULT_TRIM_THRESHOLD MAX_SIZE_T
