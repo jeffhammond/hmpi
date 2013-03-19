@@ -234,6 +234,12 @@ static inline void release_req(HMPI_Request req)
         free(req->buf);
         req->do_free = 0;
     }
+#ifdef ENABLE_OPI
+    else if(req->do_free == 2) {
+        OPI_Free(&req->buf);
+        req->do_free = 0;
+    }
+#endif
 
     item->next = g_free_reqs;
     g_free_reqs = item;
@@ -1709,11 +1715,13 @@ int OPI_Give(void** ptr, int count, MPI_Datatype datatype, int dest, int tag, HM
 
         add_send_req(&g_send_reqs[dest_node_rank], req);
     } else {
-        //Off-node not supported right now
         //This is easy, just convert to a send.
-        //Remember to OPI_Free when finished..
+        MPI_Isend(*ptr, count, datatype,
+                dest, tag, comm->comm, &req->u.req);
         req->type = MPI_SEND;
-        abort();
+
+        //OPI_Free will be called when the req is released.
+        req->do_free = 2;
     }
 
     //*ptr = NULL;
@@ -1756,22 +1764,27 @@ int OPI_Take(void** ptr, int count, MPI_Datatype datatype, int source, int tag, 
     req->buf = ptr;
     req->datatype = datatype;
 
-/*    if(unlikely(source == MPI_ANY_SOURCE)) {
+    if(unlikely(source == MPI_ANY_SOURCE)) {
         //Take ANY_SOURCE not supported right now
+        //TODO - what would i have to do for this?
+        // We could match a local give, or a remote send.
         abort();
 
         // test both layers and pick first 
         req->type = OPI_TAKE_ANY_SOURCE;
 
         add_recv_req(req);
-    } else*/ if(src_node_rank != MPI_UNDEFINED) {
+    } else if(src_node_rank != MPI_UNDEFINED) {
         //Recv on-node, but not ANY_SOURCE
         req->type = OPI_TAKE;
 
         add_recv_req(req);
     } else { //Recv off-node, but not ANY_SOURCE
-        //Need to OPI_Alloc a buffer
-        abort();
+        OPI_Alloc(ptr, req->size);
+        MPI_Irecv(*ptr, count, datatype,
+                source, tag, comm->comm, &req->u.req);
+        req->buf = *ptr;
+        req->type = MPI_RECV;
     }
 
     FULL_PROFILE_STOP(OPI_Take);

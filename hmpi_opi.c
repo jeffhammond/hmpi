@@ -38,11 +38,16 @@ FULL_PROFILE_EXTERN(OPI_Take);
 #define MAX_BUF_COUNT 128 //This threshold triggers buffer frees
 #define MIN_BUF_COUNT (MAX_BUF_COUNT - 16) //Keep this many buffers
 
-//#define MPOOL_CHECK 1
+#define MAGIC_VAL 0x13579BDF02468ACELLU
+
+#define MPOOL_CHECK 1
 
 typedef struct opi_hdr_t {
+#ifdef MPOOL_CHECK
+    size_t magic;
+#endif
     struct opi_hdr_t* next;
-    size_t length;          //Does not include footer structure!
+    size_t length;
     struct mpool_t* mpool;
 #ifdef MPOOL_CHECK
     int in_pool;
@@ -131,6 +136,7 @@ int OPI_Alloc(void** ptr, size_t length)
     hdr->mpool = mp;
 
 #ifdef MPOOL_CHECK
+    hdr->magic = MAGIC_VAL;
     hdr->in_pool = 0;
 #endif
 
@@ -155,12 +161,17 @@ int OPI_Free(void** ptr)
     //fflush(stdout);
 
 #ifdef MPOOL_CHECK
-    if(hdr->in_pool == 1) {
-        printf("ERROR double free?\n");
-        fflush(stdout);
-        assert(0);
+#if 0
+    if(unlikely(hdr->magic != MAGIC_VAL)) {
+        free(*ptr);
+        return MPI_SUCCESS;
     }
+#endif
 
+    //assert(hdr->in_pool == 0);
+    if(hdr->in_pool != 0) {
+        abort();
+    }
     hdr->in_pool = 1;
 #endif
 
