@@ -511,6 +511,7 @@ static inline int match_probe(int source, int tag, HMPI_Comm comm, HMPI_Request*
 }
 
 
+#ifndef __bg__
 #include <numa.h>
 #include <syscall.h>
 
@@ -557,6 +558,7 @@ void print_numa(void)
         printf("%d page %p status %d %s\n", g_rank, pages[i], status[i], strerror(-status[i]));
     }
 }
+#endif
 
 int HMPI_Init(int *argc, char ***argv)
 {
@@ -725,6 +727,9 @@ int HMPI_Init(int *argc, char ***argv)
     //printf("%d pid %d\n", g_rank, getpid());
     //print_numa();
 
+#ifdef ENABLE_OPI
+    OPI_Init();
+#endif
 
     //Set up debugging stuff
 #ifdef HMPI_LOGCALLS
@@ -767,6 +772,10 @@ int HMPI_Finalize()
     FULL_PROFILE_SHOW(MPI_Alltoall);
 
     FULL_PROFILE_SHOW(MPI_Other);
+
+#ifdef ENABLE_OPI
+    OPI_Finalize();
+#endif
 
     //Seems to prevent a segfault in MPI_Finalize()
     MPI_Barrier(HMPI_COMM_WORLD->comm);
