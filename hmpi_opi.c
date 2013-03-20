@@ -62,16 +62,18 @@ typedef struct mpool_t {
     lock_t lock;
 } mpool_t;
 
-static __thread mpool_t g_mpool;
+static mpool_t* g_mpool = NULL;
 
 
 void OPI_Init(void)
 {
     //Initialize the local memory pool.
-    g_mpool.head = NULL;
+    g_mpool = memalign(128, sizeof(mpool_t));
+
+    g_mpool->head = NULL;
     //g_mpool.buf_count = 0;
 
-    LOCK_INIT(&g_mpool.lock);
+    LOCK_INIT(&g_mpool->lock);
 }
 
 
@@ -79,11 +81,14 @@ void OPI_Finalize(void)
 {
     opi_hdr_t* cur;
 
-    while(g_mpool.head != NULL) {
-        cur = g_mpool.head;
-        g_mpool.head = cur->next;
+    while(g_mpool->head != NULL) {
+        cur = g_mpool->head;
+        g_mpool->head = cur->next;
         free(cur);
     }
+
+    free(g_mpool);
+    g_mpool = NULL;
 }
 
 
@@ -91,7 +96,7 @@ int OPI_Alloc(void** ptr, size_t length)
 {
     FULL_PROFILE_STOP(MPI_Other);
     FULL_PROFILE_START(OPI_Alloc);
-    mpool_t* mp = &g_mpool;
+    mpool_t* mp = g_mpool;
 
     //Round length up to a page.
     if(length % ALIGNMENT) {
@@ -157,8 +162,8 @@ int OPI_Free(void** ptr)
     opi_hdr_t* hdr = PTR_TO_HDR((*ptr));
     mpool_t* mp = hdr->mpool;
 
-    //printf("%p free ptr %p hdr %p length %llu\n", mp, ptr, HDR_TO_PTR(hdr), (uint64_t)hdr->length);
-    //fflush(stdout);
+    printf("%p free ptr %p hdr %p length %llu\n", mp, ptr, HDR_TO_PTR(hdr), (uint64_t)hdr->length);
+    fflush(stdout);
 
 #ifdef MPOOL_CHECK
 #if 0
