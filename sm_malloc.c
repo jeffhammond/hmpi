@@ -6,11 +6,16 @@
 #include <errno.h>
 #include <unistd.h>
 #include <sys/mman.h>
+#include <sys/shm.h>
+#include <sys/ipc.h>
 #include <sys/stat.h>
 #include <fcntl.h>
 //#include "dlmalloc.h"
 //#include "hmpi.h"
 //#include "profile2.h"
+
+#define USE_MMAP 1
+//#define USE_SYSV 1
 
 
 #if 0
@@ -37,11 +42,8 @@ void sm_profile_show(void)
 
 
 #define TEMP_SIZE (1024 * 1024 * 2L) //Temporary mspace capacity
-//#define MSPACE_SIZE (1024L * 1024L * 1024L) //Initial mspace capacity
-//#define DEFAULT_SIZE (1024L * 1024L * 1024L * 24L) //Default shared heap size
-//#define MSPACE_SIZE (1024L * 1024L * 1792) //Initial mspace capacity (28gb)
 //#define MSPACE_SIZE (1024L * 1024L * 1536L) //Initial mspace capacity (20gb)
-#define MSPACE_SIZE (1024 * 1024 * 1024L)
+#define MSPACE_SIZE (1024L * 1024L * 896)
 #define DEFAULT_SIZE (MSPACE_SIZE * 16L + (long)getpagesize()) //Default shared heap size
 
 #define unlikely(x)     __builtin_expect((x),0)
@@ -59,8 +61,14 @@ void* sm_upper = NULL;
 
 static struct sm_region* sm_region = NULL;
 static mspace sm_mspace = NULL;
+
+#ifdef USE_MMAP
 //static char sm_filename[256] = {0};
 static char* sm_filename = "/tmp/friedley/sm_file";
+#endif
+#ifdef USE_SYSV
+static int sm_shmid = -1;
+#endif
 
 static void* sm_my_base;
 static void* sm_my_limit;
@@ -70,7 +78,8 @@ static void* sm_my_limit;
 
 static char sm_temp[TEMP_SIZE] = {0};
 
-static void __sm_unlink(void)
+#ifdef USE_MMAP
+static void __sm_destroy(void)
 {
     unlink(sm_filename);
 }
@@ -160,12 +169,128 @@ static void __sm_init(void)
     //Only the process creating the file should initialize.
     if(do_init) {
         //We created the file, we will destroy it.
-        atexit(__sm_unlink);
+        atexit(__sm_destroy);
+
+#if 0
+        for(uintptr_t i = 0; i < size; i += 4096) {
+            memset((void*)((uintptr_t)sm_region + i), 0, 4096);
+        }
+#endif
+        //memset(sm_region, 0, size);
 
         sm_region->limit = (intptr_t)sm_region + size;
 
         int pagesize = getpagesize();
         int offset = ((sizeof(struct sm_region) / pagesize) + 1) * pagesize;
+
+
+        sm_region->brk = (intptr_t)sm_region + offset;
+        //printf("SM region %p size 0x%lx limit 0x%lx brk 0x%lx\n",
+        //        sm_region, size, sm_region->limit, sm_region->brk);
+        //fflush(stdout);
+    } else {
+        //Wait for another process to finish initialization.
+        void* volatile * brk_ptr = (void**)&sm_region->brk;
+
+        while(*brk_ptr == NULL);
+    }
+
+    //Create my own mspace.
+    void* base = sm_morecore(MSPACE_SIZE / 2);
+    if(base == (void*)-1) {
+        abort();
+    }
+
+    //memset(base, 0, MSPACE_SIZE);
+
+    sm_mspace = create_mspace_with_base(base, MSPACE_SIZE >> 1, 0);
+
+
+    sm_my_base = base;
+    sm_my_limit = (void*)((uintptr_t)base + MSPACE_SIZE);
+
+    sm_lower = sm_region;
+    sm_upper = (void*)sm_region->limit;
+
+    if(sm_my_limit > sm_upper) {
+        abort();
+    }
+
+    //This should go last so it can use proper malloc and friends.
+    //PROFILE_INIT();
+}
+#endif // USE_MMAP
+
+
+#ifdef USE_SYSV
+static void __sm_destroy(void)
+{
+    shmctl(sm_shmid, IPC_RMID, NULL);
+}
+
+
+static void __sm_init(void)
+{
+    int do_init = 1; //Whether to do initialization
+
+    //Set up a temporary area on the stack for malloc() calls during our
+    // initialization process.
+    //void* temp_space = alloca(TEMP_SIZE);
+    //sm_region = create_mspace_with_base(temp_space, TEMP_SIZE, 0);
+    sm_region = create_mspace_with_base(sm_temp, TEMP_SIZE, 0);
+    sm_region->brk = (intptr_t)sm_region + sizeof(struct sm_region);
+    sm_region->limit = TEMP_SIZE;
+
+
+    //Use the PWD for an ftok file -- we don't have argv[0] here,
+    // and "_" points to srun under slurm.
+    char* pwd = getenv("PWD");
+    if(pwd == NULL) {
+        abort();
+    }
+
+    key_t key = ftok(pwd, 'S' << 1);
+
+
+    sm_shmid = shmget(key, DEFAULT_SIZE, 0600 | IPC_CREAT | IPC_EXCL);
+    if(sm_shmid == -1) {
+
+        if(errno == EEXIST) {
+            //SM region exists, try again -- we won't initialize.
+            sm_shmid = shmget(key, DEFAULT_SIZE, 0600 | IPC_CREAT);
+            do_init = 0;
+        }
+
+
+        //Abort if both tries failed.
+        if(sm_shmid == -1) {
+            abort();
+        }
+    }
+
+
+    sm_region = shmat(sm_shmid, NULL, 0);
+    if(sm_region == (void*)-1) {
+        abort();
+    }
+
+    //Only the process creating the file should initialize.
+    if(do_init) {
+        //We created the file, we will destroy it.
+        atexit(__sm_destroy);
+
+#if 0
+        for(uintptr_t i = 0; i < size; i += 4096) {
+            memset((void*)((uintptr_t)sm_region + i), 0, 4096);
+        }
+#endif
+        memset(sm_region, 0, DEFAULT_SIZE);
+
+        sm_region->limit = (intptr_t)sm_region + DEFAULT_SIZE;
+
+        int pagesize = getpagesize();
+        int offset = ((sizeof(struct sm_region) / pagesize) + 1) * pagesize;
+
 
         sm_region->brk = (intptr_t)sm_region + offset;
         //printf("SM region %p size 0x%lx limit 0x%lx brk 0x%lx\n",
@@ -180,9 +305,14 @@ static void __sm_init(void)
 
     //Create my own mspace.
     void* base = sm_morecore(MSPACE_SIZE);
+    if(base == (void*)-1) {
+        abort();
+    }
+
+    //memset(base, 0, MSPACE_SIZE);
+
     sm_mspace = create_mspace_with_base(base, MSPACE_SIZE, 0);
-    //printf("got sm_mspace %p\n", sm_mspace);
-    //fflush(stdout);
+
 
     sm_my_base = base;
     sm_my_limit = (void*)((uintptr_t)base + MSPACE_SIZE);
@@ -190,24 +320,15 @@ static void __sm_init(void)
     sm_lower = sm_region;
     sm_upper = (void*)sm_region->limit;
 
-#if 0
-    void* base = sbrk(MSPACE_SIZE);
-//    printf("%d base %p\n", getpid(), base); fflush(stdout);
-    sm_mspace = create_mspace_with_base(base, MSPACE_SIZE, 0);
-    if(sm_mspace == NULL) {
-        exit(17);
+    if(sm_my_limit > sm_upper) {
+        abort();
     }
-
-    sm_lower = base;
-    sm_upper = (void*)((uintptr_t)base + MSPACE_SIZE);
-
-    sm_my_base = base;
-    sm_my_limit = (void*)((uintptr_t)base + MSPACE_SIZE);
-#endif
 
     //This should go last so it can use proper malloc and friends.
     //PROFILE_INIT();
 }
+
+#endif
 
 
 void* sm_morecore(intptr_t increment)
@@ -221,11 +342,11 @@ void* sm_morecore(intptr_t increment)
 #endif
 
     if((uintptr_t)oldbrk + increment > (uintptr_t)sm_region->limit) {
-        //printf("ERROR no mem in sm_morecore!\n"); fflush(stdout);
         errno = ENOMEM;
         return (void*)-1;
     }
 
+    memset(oldbrk, 0, increment);
     return oldbrk;
 }
 
@@ -236,7 +357,6 @@ void* sm_mmap(void* addr, size_t len, int prot, int flags, int fildes, off_t off
     void* ptr = sm_morecore(len);
     //PROFILE_STOP(mmap);
     return ptr;
-    //return sm_morecore(len);
 }
 
 
@@ -296,11 +416,12 @@ void* malloc(size_t bytes) {
 }
 
 void free(void* mem) {
-    if(unlikely(sm_region == NULL)) __sm_init();
+    //if(unlikely(sm_region == NULL)) __sm_init();
+
     //PROFILE_START(free);
 
+//    if(mem == NULL) {
     if(mem < sm_lower || mem >= sm_upper) {
-        //PROFILE_STOP(free);
         return;
     }
 
@@ -308,6 +429,7 @@ void free(void* mem) {
         abort();
     }
 
+    if(unlikely(sm_region == NULL)) abort();
     mspace_free(sm_mspace, mem);
     //PROFILE_STOP(free);
 }

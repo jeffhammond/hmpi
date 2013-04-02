@@ -25,8 +25,6 @@
 #endif
 
 
-#include <pthread.h>
-#include <sched.h>
 #include <malloc.h>
 #include <stdlib.h>
 #include <stdio.h>
@@ -209,11 +207,6 @@ static inline HMPI_Request acquire_req(void)
     //Malloc a new req only if none are in the pool.
     if(item == NULL) {
         HMPI_Request req = (HMPI_Request)MALLOC(HMPI_Request_info, 1);
-        //TODO - why is this here?
-        //match needs to be cleared.
-        //do_free needs to be cleared.
-        //memset(req, 0, sizeof(HMPI_Request_info));
-        //req->item.next = NULL;
         req->match = 0;
         req->do_free = 0;
         return req;
@@ -435,6 +428,15 @@ static inline HMPI_Request match_take(HMPI_Request_list* req_list, HMPI_Request 
 
 
 //Match for receives with ANY_SOURCE.
+//Three things can happen here:
+// No matching send is found:
+//  return HMPI_REQUEST_NULL, req->u.req != MPI_REQUEST_NULL
+// Matching MPI (inter-node) send is found:
+//  req->u.req == MPI_REQUEST_NULL and return HMPI_REQUEST_NULL
+// Matching local send is found:
+//  req->u.req == MPI_REQUEST_NULL and return send_req
+//Callers should check return value for local matches, and req->u.req for
+// inter-node matches.
 static inline HMPI_Request match_recv_any(HMPI_Request_list* req_list, HMPI_Request recv_req)
 {
     HMPI_Item* cur;
@@ -451,12 +453,15 @@ static inline HMPI_Request match_recv_any(HMPI_Request_list* req_list, HMPI_Requ
             MPI_Status status;
             int flag;
 
-            //TODO - possible to call Progress_mpi here and reduce code?
+            //Matched a local message -- try to cancel the MPI-level receive.
+            //If not successful, we throw out the local match and use what MPI
+            // gave us.  If cancel succeeds, we use the local match.
             MPI_Cancel(&recv_req->u.req);
             MPI_Wait(&recv_req->u.req, &status);
             MPI_Test_cancelled(&status, &flag);
             if(!flag) {
-                //Not cancelled - message arrived! Update status
+                //Not cancelled - use the inter-node message from MPI.
+                printf("%d match_any_src cancel fail\n", g_rank);
                 int count;
                 MPI_Get_count(&status, recv_req->datatype, &count);
 
@@ -468,19 +473,17 @@ static inline HMPI_Request match_recv_any(HMPI_Request_list* req_list, HMPI_Requ
                 recv_req->size = count * type_size;
                 update_reqstat(recv_req, HMPI_REQ_COMPLETE);
 
-
-
                 //Indicate no local req was matched.
                 return HMPI_REQUEST_NULL;
             }
 
+            //Cancel succeeded, use the local send match.
             remove_send_req(req_list, prev, cur);
 
             recv_req->proc = req->proc;
             recv_req->tag = req->tag;
             return req;
         }
-
     }
 
     return HMPI_REQUEST_NULL;
@@ -512,6 +515,7 @@ static inline int match_probe(int source, int tag, HMPI_Comm comm, HMPI_Request*
 
 
 #ifndef __bg__
+#if 0
 #include <numa.h>
 #include <syscall.h>
 
@@ -558,6 +562,7 @@ void print_numa(void)
         printf("%d page %p status %d %s\n", g_rank, pages[i], status[i], strerror(-status[i]));
     }
 }
+#endif
 #endif
 
 int HMPI_Init(int *argc, char ***argv)
@@ -606,6 +611,9 @@ int HMPI_Init(int *argc, char ***argv)
         color = *s + 31 * color;
     }
 
+    //MPI says color must be non-negative.
+    color &= 0x7FFFFFFF;
+
     //printf("%d name %s color %d\n", g_rank, proc_name, color);
 #endif
 
@@ -644,80 +652,43 @@ int HMPI_Init(int *argc, char ***argv)
     MPI_Comm_size(HMPI_COMM_WORLD->net_comm, &g_net_size);
 
 
-    //Let's check if we all got the same region address.
-#if 0
+    //Check if every rank on the node got the same region address.
     void** ptrs = alloca(sizeof(void*) * g_node_size);
-    MPI_Gather(&g_sm_region, 1, MPI_LONG,
+    MPI_Gather(&sm_lower, 1, MPI_LONG,
             ptrs, 1, MPI_LONG, 0, HMPI_COMM_WORLD->node_comm);
-#endif
 
-
-    //Now, if my node-rank is 0, create the shared region.
     if(g_node_rank == 0) {
-#if 0
         //Check that all the pointers are the same.
         for(int i = 0; i < g_node_size; i++) {
-            if(ptrs[i] != g_sm_region) {
-                printf("%d ERROR rank %d's region is at %p, rank 0 is at %p\n",
-                        g_rank, i, ptrs[i], g_sm_region);
+            if(ptrs[i] != sm_lower) {
+                printf("%d ERROR rank %d's sm_lower is at %p, rank 0 is at %p\n",
+                        g_rank, i, ptrs[i], sm_lower);
                 MPI_Abort(MPI_COMM_WORLD, 0);
             }
         }
-#endif
 
-        //Allocate shared send request lists.
+        //One rank per node allocates shared send request lists.
         g_send_reqs = MALLOC(HMPI_Request_list, g_node_size);
-
-#if 0
-        //Allocate the COMM_WORLD local barrier.
-        HMPI_COMM_WORLD->barr = MALLOC(barrier_t, 1);
-        barrier_init(HMPI_COMM_WORLD->barr, g_node_size);
-#endif
-
-#if 0
-        HMPI_COMM_WORLD->sbuf = MALLOC(volatile void*, g_node_size + 1);
-        HMPI_COMM_WORLD->rbuf = MALLOC(volatile void*, g_node_size + 1);
-        HMPI_COMM_WORLD->scount = MALLOC(int, g_node_size);
-        HMPI_COMM_WORLD->rcount = MALLOC(int, g_node_size);
-        HMPI_COMM_WORLD->stype = MALLOC(MPI_Datatype, g_node_size);
-        HMPI_COMM_WORLD->rtype = MALLOC(MPI_Datatype, g_node_size);
-#endif
     }
 
-    //Share the location of g_send_reqs.
+    //Share the location of g_send_reqs with other ranks on this node.
     MPI_Bcast(&g_send_reqs, 1, MPI_LONG, 0, HMPI_COMM_WORLD->node_comm);
 
-#if 0
-    MPI_Bcast(&HMPI_COMM_WORLD->barr, 1, MPI_LONG,
-            0, HMPI_COMM_WORLD->node_comm);
-#endif
-
-#if 0
-    MPI_Bcast(&HMPI_COMM_WORLD->sbuf, 1, MPI_LONG,
-            0, HMPI_COMM_WORLD->node_comm);
-    MPI_Bcast(&HMPI_COMM_WORLD->rbuf, 1, MPI_LONG,
-            0, HMPI_COMM_WORLD->node_comm);
-    MPI_Bcast(&HMPI_COMM_WORLD->scount, 1, MPI_LONG,
-            0, HMPI_COMM_WORLD->node_comm);
-    MPI_Bcast(&HMPI_COMM_WORLD->rcount, 1, MPI_LONG,
-            0, HMPI_COMM_WORLD->node_comm);
-    MPI_Bcast(&HMPI_COMM_WORLD->stype, 1, MPI_LONG,
-            0, HMPI_COMM_WORLD->node_comm);
-    MPI_Bcast(&HMPI_COMM_WORLD->rtype, 1, MPI_LONG,
-            0, HMPI_COMM_WORLD->node_comm);
-#endif
 
     // Initialize request lists and lock
-
     g_recv_reqs_tail = &g_recv_reqs_head;
 
 #ifndef __bg__
+    //Except on BGQ, we need to allocate a lock Q structure for MCS lock.
+    //Used in Qing sends on the receiver and clearing that Q.
+    //Needs to be located in shared memory!
     g_lock_q = MALLOC(mcs_qnode_t, 1);
     memset(g_lock_q, 0, sizeof(mcs_qnode_t));
 #endif
 
     g_send_reqs[g_node_rank].head.next = NULL;
     g_send_reqs[g_node_rank].tail = &g_send_reqs[g_node_rank].head;
+
     g_tl_my_send_reqs = &g_send_reqs[g_node_rank];
     LOCK_INIT(&g_send_reqs[g_node_rank].lock);
 
@@ -726,6 +697,7 @@ int HMPI_Init(int *argc, char ***argv)
 
     //printf("%d pid %d\n", g_rank, getpid());
     //print_numa();
+
 
 #ifdef ENABLE_OPI
     OPI_Init();
@@ -786,14 +758,14 @@ int HMPI_Finalize()
 
 
 #ifdef __bg__
+//BGQ speed hack assumes 64 ranks/node
 #define RANKS_NODE 64
 #define RANKS_NODE_SHIFT 6
 #define RANKS_NODE_MASK ((1 << RANKS_NODE_SHIFT) - 1)
 inline void HMPI_Comm_node_rank(HMPI_Comm comm, int rank, int* node_rank)
 {
     //First determine if rank is on the same node.
-    //if(rank >> 6 == g_rank >> 6) {
-    if(rank >> 6 == g_rank >> 6) {
+    if(rank >> RANKS_NODE_SHIFT == g_rank >> RANKS_NODE_SHIFT) {
         *node_rank = rank & RANKS_NODE_MASK; 
     } else {
         *node_rank = MPI_UNDEFINED;
@@ -801,26 +773,19 @@ inline void HMPI_Comm_node_rank(HMPI_Comm comm, int rank, int* node_rank)
 }
 
 #else
+//Covers MPI_ANY_SOURCE, but no other special values like MPI_PROC_NULL.
 inline void HMPI_Comm_node_rank(HMPI_Comm comm, int rank, int* node_rank)
 {
-#if 0
-#ifdef __bg__
-    //Funky IBM MPI won't take ANY_SRC in translate_ranks.
     if(rank == MPI_ANY_SOURCE) {
         *node_rank = MPI_ANY_SOURCE;
         return;
-    }
-#endif
-
-    MPI_Group_translate_ranks(comm->g_comm, 1, &rank, comm->g_node, node_rank);
-#endif
-
-    int diff;
-    if(rank == MPI_ANY_SOURCE) {
-        *node_rank = MPI_ANY_SOURCE;
-        return;
-    } else if(rank >= comm->node_base &&
-            (diff = rank - comm->node_base) < comm->node_size) {
+    } 
+    
+    int diff = rank - comm->node_base;
+    
+    //if(rank >= comm->node_base &&
+    //        (diff = rank - comm->node_base) < comm->node_size) {
+    if(diff >= 0 && diff < comm->node_size) {
         *node_rank = diff;
         return;
     }
@@ -830,7 +795,7 @@ inline void HMPI_Comm_node_rank(HMPI_Comm comm, int rank, int* node_rank)
 #endif
 
 
-//We assume req->type == HMPI_SEND and req->stat == 0 (uncompleted send)
+//We assume req->type == HMPI_SEND
 static inline int HMPI_Progress_send(const HMPI_Request send_req)
 {
     if(get_reqstat(send_req) == HMPI_REQ_COMPLETE) {
@@ -845,9 +810,7 @@ static inline int HMPI_Progress_send(const HMPI_Request send_req)
         HMPI_Request recv_req = (HMPI_Request)send_req->u.match_req;
         uintptr_t rbuf = (uintptr_t)recv_req->buf;
 
-        //size_t send_size = send_req->size;
-        //size_t recv_size = recv_req->size;
-        //size_t size = (send_size < recv_size ? send_size : recv_size);
+        //Receiver does any size sanity checking.
         size_t size = send_req->size;
         size_t block_size = BLOCK_SIZE_ONE;
         if(size >= BLOCK_SIZE_TWO << 1) {
@@ -888,23 +851,24 @@ static inline void HMPI_Complete_recv(HMPI_Request recv_req, HMPI_Request send_r
     size_t send_size = send_req->size;
     size_t size = recv_req->size;
 
-    if(send_size < size) {
-        //Adjust receive count
-        recv_req->size = send_size;
-        size = send_size;
-    }
-
 #ifdef DEBUG
     if(unlikely(send_size > size)) {
-        printf("%d ERROR recv message from %d of size %ld truncated to %ld\n", g_hmpi_rank, send_req->proc, send_size, size);
+        printf("%d ERROR recv message from %d of size %ld truncated to %ld\n", g_rank, send_req->proc, send_size, size);
         MPI_Abort(MPI_COMM_WORLD, 5);
     }
 #endif
 
+    if(send_size < size) {
+        //Adjust receive count
+        //printf("%d WARNING recv from %d is %d bytes, recv is %d bytes\n",
+        //        g_rank, send_req->proc, send_size, size);
+        recv_req->size = send_size;
+        size = send_size;
+    }
+
     uintptr_t rbuf = (uintptr_t)recv_req->buf;
     uintptr_t sbuf = (uintptr_t)send_req->buf;
 
-    //if(size < BLOCK_SIZE_ONE << 1 || !IS_SM_BUF(recv_req->buf)) {
     if(size < BLOCK_SIZE_ONE << 1 || !IS_SM_BUF((void*)rbuf)) {
         //Use memcpy for small messages, and when the user's receive buf isn't
         // in the SM region.  On the recv path, buf is always the user's recv
@@ -914,8 +878,8 @@ static inline void HMPI_Complete_recv(HMPI_Request recv_req, HMPI_Request send_r
         //The setting of send_req->match_req signals to sender that they can
         // start doing copying as well, if they are testing the req.
 
-        send_req->u.match_req = recv_req;
         recv_req->u.offset = 0;
+        send_req->u.match_req = recv_req;
         STORE_FENCE();
         send_req->match = 1;
 
@@ -954,6 +918,7 @@ static inline void HMPI_Complete_recv(HMPI_Request recv_req, HMPI_Request send_r
     printf("%d completed local-level SEND buf %p size %lu dest %d tag %d\n",
             send_req->proc, send_req->buf, send_req->size, g_rank, send_req->tag);
 #endif
+
     //Mark send and receive requests done
     update_reqstat(send_req, HMPI_REQ_COMPLETE);
     update_reqstat(recv_req, HMPI_REQ_COMPLETE);
@@ -980,7 +945,6 @@ static inline void HMPI_Complete_take(HMPI_Request recv_req, HMPI_Request send_r
     }
 #endif
 
-#warning "TODO deal with this by using immediate protocol; turn the give into a send"
 #if 0
     if(size < 256) {
         //Size is too small - just memcpy the buffer instead of doing OP.
@@ -1007,6 +971,12 @@ static int HMPI_Progress_mpi(HMPI_Request req)
     int flag = 0;
     MPI_Status status = {0};
 
+#if DEBUG
+    if(req->u.req == MPI_REQUEST_NULL) {
+        printf("%d Progress_mpi on null request!\n", g_rank);
+    }
+#endif
+
     MPI_Test(&req->u.req, &flag, &status);
 
     if(flag) {
@@ -1018,6 +988,7 @@ static int HMPI_Progress_mpi(HMPI_Request req)
         MPI_Type_size(req->datatype, &type_size);
 
         req->proc = status.MPI_SOURCE;
+
         req->tag = status.MPI_TAG;
         req->size = count * type_size;
         update_reqstat(req, HMPI_REQ_COMPLETE);
@@ -1077,6 +1048,11 @@ static void HMPI_Progress(HMPI_Item* recv_reqs_head, HMPI_Request_list* local_li
 
                 remove_recv_req(prev, cur);
                 continue; //Whenever we remove a req, dont update prev
+            } else if(req->u.req == MPI_REQUEST_NULL) {
+                //This means match_recv_any tried to cancel the MPI recv and
+                // failed, so we completed the MPI request.
+                remove_recv_req(prev, cur);
+                continue;
             } else /*if(g_net_size > 1)*/ {
                 if(HMPI_Progress_mpi(req)) {
                     remove_recv_req(prev, cur);
@@ -1088,7 +1064,6 @@ static void HMPI_Progress(HMPI_Item* recv_reqs_head, HMPI_Request_list* local_li
         //Update prev -- we only do this if cur wasn't matched.
         prev = cur;
     }
-
 
     //TODO - probe/progress MPI here if nothing was completed?
 }
@@ -1235,7 +1210,6 @@ int HMPI_Wait(HMPI_Request *request, HMPI_Status *status) {
     } else { //HMPI_RECV_ANY_SOURCE
         do {
             HMPI_Progress(recv_reqs_head, local_list, shared_list);
-            //sched_yield();
         } while(get_reqstat(req) != HMPI_REQ_COMPLETE);
     }
 
@@ -1450,7 +1424,6 @@ int HMPI_Iprobe(int source, int tag, HMPI_Comm comm, int* flag, HMPI_Status* sta
         }
     } else if(g_net_size > 1) {
         //Probe MPI (off-node) layer only if more than one MPI rank
-        //TODO - PSM support
         MPI_Status st;
         MPI_Iprobe(source, tag, comm->comm, flag, &st);
 
@@ -1513,11 +1486,13 @@ int HMPI_Isend(void* buf, int count, MPI_Datatype datatype, int dest, int tag, H
 #endif
 #endif
 
-    if(dest == -2) {
+#if DEBUG
+    if(dest == < 0) {
         printf("%d dest %d MPI_PROC_NULL %d MPI_ANY_SOURCE %d\n",
                 g_rank, dest, MPI_PROC_NULL, MPI_ANY_SOURCE);
         abort();
     }
+#endif
 
     if(unlikely(dest == MPI_PROC_NULL)) { 
         req->type = HMPI_SEND;

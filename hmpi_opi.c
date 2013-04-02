@@ -40,7 +40,7 @@ FULL_PROFILE_EXTERN(OPI_Take);
 
 #define MAGIC_VAL 0x13579BDF02468ACELLU
 
-#define MPOOL_CHECK 1
+//#define MPOOL_CHECK 1
 
 typedef struct opi_hdr_t {
 #ifdef MPOOL_CHECK
@@ -57,9 +57,9 @@ typedef struct opi_hdr_t {
 
 typedef struct mpool_t {
     opi_hdr_t* head;
-    //int buf_count;
+    int buf_count;
 
-    lock_t lock;
+    //lock_t lock;
 } mpool_t;
 
 static mpool_t* g_mpool = NULL;
@@ -73,7 +73,7 @@ void OPI_Init(void)
     g_mpool->head = NULL;
     //g_mpool.buf_count = 0;
 
-    LOCK_INIT(&g_mpool->lock);
+    //LOCK_INIT(&g_mpool->lock);
 }
 
 
@@ -107,7 +107,7 @@ int OPI_Alloc(void** ptr, size_t length)
     opi_hdr_t* cur;
     opi_hdr_t* prev;
 
-    LOCK_ACQUIRE(&mp->lock);
+    //LOCK_ACQUIRE(&mp->lock);
 
     for(prev = NULL, cur = mp->head; cur != NULL;
             prev = cur, cur = cur->next) {
@@ -120,7 +120,7 @@ int OPI_Alloc(void** ptr, size_t length)
                 prev->next = cur->next;
             }
 
-            LOCK_RELEASE(&mp->lock);
+            //LOCK_RELEASE(&mp->lock);
 
             //printf("%p reuse addr %p length %llu\n", mp, cur, (uint64_t)length); fflush(stdout);
 #ifdef MPOOL_CHECK
@@ -132,7 +132,7 @@ int OPI_Alloc(void** ptr, size_t length)
         }
     }
 
-        LOCK_RELEASE(&mp->lock);
+        //LOCK_RELEASE(&mp->lock);
 
     //If no existing allocation is found, allocate a new one.
     opi_hdr_t* hdr = (opi_hdr_t*)memalign(ALIGNMENT, length + ALIGNMENT);
@@ -158,30 +158,24 @@ int OPI_Free(void** ptr)
 {
     FULL_PROFILE_STOP(MPI_Other);
     FULL_PROFILE_START(OPI_Free);
-    //mpool_t* mp = &g_mpool;
+    mpool_t* mp = g_mpool;
     opi_hdr_t* hdr = PTR_TO_HDR((*ptr));
-    mpool_t* mp = hdr->mpool;
+    //mpool_t* mp = hdr->mpool;
 
-    printf("%p free ptr %p hdr %p length %llu\n", mp, ptr, HDR_TO_PTR(hdr), (uint64_t)hdr->length);
-    fflush(stdout);
+//    printf("%p free ptr %p hdr %p length %llu\n", mp, ptr, HDR_TO_PTR(hdr), (uint64_t)hdr->length);
+//    fflush(stdout);
 
 #ifdef MPOOL_CHECK
-#if 0
     if(unlikely(hdr->magic != MAGIC_VAL)) {
         free(*ptr);
         return MPI_SUCCESS;
     }
-#endif
 
-    //assert(hdr->in_pool == 0);
-    if(hdr->in_pool != 0) {
-        abort();
-    }
+    assert(hdr->in_pool == 0);
     hdr->in_pool = 1;
 #endif
 
 
-    LOCK_ACQUIRE(&mp->lock);
 
 #if 0
     if(unlikely(mp->buf_count >= MAX_BUF_COUNT)) {
@@ -206,10 +200,12 @@ int OPI_Free(void** ptr)
     }
 #endif
 
+    //LOCK_ACQUIRE(&mp->lock);
+
     hdr->next = mp->head;
     mp->head = hdr;
 
-    LOCK_RELEASE(&mp->lock);
+    //LOCK_RELEASE(&mp->lock);
 
     *ptr = NULL;
     FULL_PROFILE_STOP(OPI_Free);
