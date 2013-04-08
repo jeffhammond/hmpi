@@ -461,7 +461,6 @@ static inline HMPI_Request match_recv_any(HMPI_Request_list* req_list, HMPI_Requ
             MPI_Test_cancelled(&status, &flag);
             if(!flag) {
                 //Not cancelled - use the inter-node message from MPI.
-                printf("%d match_any_src cancel fail\n", g_rank);
                 int count;
                 MPI_Get_count(&status, recv_req->datatype, &count);
 
@@ -1422,7 +1421,7 @@ int HMPI_Iprobe(int source, int tag, HMPI_Comm comm, int* flag, HMPI_Status* sta
             status->MPI_TAG = send_req->tag;
             status->MPI_ERROR = MPI_SUCCESS;
         }
-    } else if(g_net_size > 1) {
+    } else /*if(g_net_size > 1)*/ {
         //Probe MPI (off-node) layer only if more than one MPI rank
         MPI_Status st;
         MPI_Iprobe(source, tag, comm->comm, flag, &st);

@@ -14,7 +14,9 @@
 //#include "hmpi.h"
 //#include "profile2.h"
 
-#define USE_MMAP 1
+
+//#define USE_MMAP 1
+#define USE_PSHM 1
 //#define USE_SYSV 1
 
 
@@ -41,10 +43,6 @@ void sm_profile_show(void)
 #endif
 
 
-#define TEMP_SIZE (1024 * 1024 * 2L) //Temporary mspace capacity
-//#define MSPACE_SIZE (1024L * 1024L * 1536L) //Initial mspace capacity (20gb)
-#define MSPACE_SIZE (1024L * 1024L * 896)
-#define DEFAULT_SIZE (MSPACE_SIZE * 16L + (long)getpagesize()) //Default shared heap size
 
 #define unlikely(x)     __builtin_expect((x),0)
 
@@ -62,42 +60,40 @@ void* sm_upper = NULL;
 static struct sm_region* sm_region = NULL;
 static mspace sm_mspace = NULL;
 
-#ifdef USE_MMAP
-//static char sm_filename[256] = {0};
-static char* sm_filename = "/tmp/friedley/sm_file";
-#endif
-#ifdef USE_SYSV
-static int sm_shmid = -1;
-#endif
-
 static void* sm_my_base;
 static void* sm_my_limit;
 
 #define IS_MY_PTR(p) (sm_my_base <= p && p < sm_my_limit)
 
 
-static char sm_temp[TEMP_SIZE] = {0};
+//Keep this around for use with valgrind.
+//static char sm_temp[TEMP_SIZE] = {0};
+
 
 #ifdef USE_MMAP
+//MMAP and SYSV have different space capabilities.
+#define TEMP_SIZE (1024 * 1024 * 2L) //Temporary mspace capacity
+
+#define MSPACE_SIZE (1024L * 1024L * 896) //Use with file in /tmp
+//#define MSPACE_SIZE (1024L * 1024L * 1536) //Use with file in /p/lscratchX
+#define DEFAULT_SIZE (MSPACE_SIZE * 16L + (long)getpagesize()) //Default shared heap size
+
+//On the LC machines, /tmp is a tmpfs, limiting us to half of the free memory.
+static char* sm_filename = "/tmp/friedley/sm_file";
+//static char sm_filename[256] = {0};
+
+
 static void __sm_destroy(void)
 {
     unlink(sm_filename);
 }
 
 
-static void __sm_init(void)
+static int __sm_init_region(void)
 {
     int fd;
     int do_init = 1; //Whether to do initialization
-    size_t size;
-
-    //Set up a temporary area on the stack for malloc() calls during our
-    // initialization process.
-    //void* temp_space = alloca(TEMP_SIZE);
-    //sm_region = create_mspace_with_base(temp_space, TEMP_SIZE, 0);
-    sm_region = create_mspace_with_base(sm_temp, TEMP_SIZE, 0);
-    sm_region->brk = (intptr_t)sm_region + sizeof(struct sm_region);
-    sm_region->limit = TEMP_SIZE;
+    //size_t size;
 
     //Find a filename.
 #if 0
@@ -127,7 +123,15 @@ static void __sm_init(void)
         size = atol(tmp) * 1024L * 1024L;
     }
 #endif
-    size = DEFAULT_SIZE;
+
+#if 0
+    char host[128] = {0};
+    if(gethostname(host, 127) != 0) {
+        abort();
+    }
+
+    sprintf(sm_filename, "/p/lscratchd/friedley/sm.%s\n", host);
+#endif
 
     //printf("SM size %lx\n", size);
     //fflush(stdout);
@@ -144,103 +148,105 @@ static void __sm_init(void)
         
         if(fd == -1) {
             abort();
-            //perror("ERROR open");
-            //exit(-1);
         }
     }
 
-    if(ftruncate(fd, size) == -1) {
+    if(ftruncate(fd, DEFAULT_SIZE) == -1) {
         abort();
-        //perror("ERROR ftruncate");
-        //exit(-1);
     }
 
     //Map the SM region.
-    sm_region = mmap(NULL, size, PROT_READ|PROT_WRITE, MAP_SHARED, fd, 0);
+    sm_region = mmap(NULL, DEFAULT_SIZE, PROT_READ|PROT_WRITE, MAP_SHARED, fd, 0);
     if(sm_region == (void*)MAP_FAILED) {
         abort();
-        //perror("ERROR sm mmap");
-        //exit(-1);
     }
 
     close(fd);
 
-
-    //Only the process creating the file should initialize.
-    if(do_init) {
-        //We created the file, we will destroy it.
-        atexit(__sm_destroy);
-
-#if 0
-        for(uintptr_t i = 0; i < size; i += 4096) {
-            memset((void*)((uintptr_t)sm_region + i), 0, 4096);
-        }
-#endif
-        //memset(sm_region, 0, size);
-
-        sm_region->limit = (intptr_t)sm_region + size;
-
-        int pagesize = getpagesize();
-        int offset = ((sizeof(struct sm_region) / pagesize) + 1) * pagesize;
-
-
-        sm_region->brk = (intptr_t)sm_region + offset;
-        //printf("SM region %p size 0x%lx limit 0x%lx brk 0x%lx\n",
-        //        sm_region, size, sm_region->limit, sm_region->brk);
-        //fflush(stdout);
-    } else {
-        //Wait for another process to finish initialization.
-        void* volatile * brk_ptr = (void**)&sm_region->brk;
-
-        while(*brk_ptr == NULL);
-    }
-
-    //Create my own mspace.
-    void* base = sm_morecore(MSPACE_SIZE / 2);
-    if(base == (void*)-1) {
-        abort();
-    }
-
-    //memset(base, 0, MSPACE_SIZE);
-
-    sm_mspace = create_mspace_with_base(base, MSPACE_SIZE >> 1, 0);
-
-
-    sm_my_base = base;
-    sm_my_limit = (void*)((uintptr_t)base + MSPACE_SIZE);
-
-    sm_lower = sm_region;
-    sm_upper = (void*)sm_region->limit;
-
-    if(sm_my_limit > sm_upper) {
-        abort();
-    }
-
-    //This should go last so it can use proper malloc and friends.
-    //PROFILE_INIT();
+    return do_init;
 }
-#endif // USE_MMAP
 
+#endif
+
+#ifdef USE_PSHM
+
+#define TEMP_SIZE (1024 * 1024 * 2L) //Temporary mspace capacity
+
+#define MSPACE_SIZE (1024L * 1024L * 900L) //Use with file in /tmp
+//#define MSPACE_SIZE (1024L * 1024L * 1536) //Use with file in /p/lscratchX
+#define DEFAULT_SIZE (MSPACE_SIZE * 16L + (long)getpagesize()) //Default shared heap size
+
+//On the LC machines, /tmp is a tmpfs, limiting us to half of the free memory.
+static char* sm_filename = "hmpismfile";
+//static char sm_filename[256] = {0};
+
+
+static void __sm_destroy(void)
+{
+    shm_unlink(sm_filename);
+}
+
+
+static int __sm_init_region(void)
+{
+    int do_init = 1; //Whether to do initialization
+
+    //Open the SM region file.
+    int fd = shm_open(sm_filename, O_RDWR|O_CREAT|O_EXCL|O_TRUNC, S_IRUSR|S_IWUSR); 
+    if(fd == -1) {
+        do_init = 0;
+
+        if(errno == EEXIST) {
+            //Another process has already created the file.
+            fd = shm_open(sm_filename, O_RDWR, S_IRUSR|S_IWUSR);
+        } 
+        
+        if(fd == -1) {
+            perror("shm_open");
+            abort();
+        }
+    }
+
+    if(ftruncate(fd, DEFAULT_SIZE) == -1) {
+        abort();
+    }
+
+    //Map the SM region.
+    sm_region = mmap(NULL, DEFAULT_SIZE, PROT_READ|PROT_WRITE, MAP_SHARED, fd, 0);
+    if(sm_region == (void*)MAP_FAILED) {
+        abort();
+    }
+
+    close(fd);
+
+    return do_init;
+}
+
+#endif
 
 #ifdef USE_SYSV
+//MMAP and SYSV have different space capabilities.
+#define TEMP_SIZE (1024 * 1024 * 2L) //Temporary mspace capacity
+
+//20971520000 bytes is what the LC machines are configured for -- 20,000mb.
+//Let's use 18gb + 4k, or 1162mb per proc.
+#define MSPACE_SIZE (1024L * 1024L * 128L)
+//#define DEFAULT_SIZE (MSPACE_SIZE * 16L + (long)getpagesize()) //Default shared heap size
+#define DEFAULT_SIZE (1024L * 1024L * 12200L)
+
+
+static int sm_shmid = -1;
+
+
 static void __sm_destroy(void)
 {
     shmctl(sm_shmid, IPC_RMID, NULL);
 }
 
 
-static void __sm_init(void)
+static int __sm_init_region(void)
 {
     int do_init = 1; //Whether to do initialization
-
-    //Set up a temporary area on the stack for malloc() calls during our
-    // initialization process.
-    //void* temp_space = alloca(TEMP_SIZE);
-    //sm_region = create_mspace_with_base(temp_space, TEMP_SIZE, 0);
-    sm_region = create_mspace_with_base(sm_temp, TEMP_SIZE, 0);
-    sm_region->brk = (intptr_t)sm_region + sizeof(struct sm_region);
-    sm_region->limit = TEMP_SIZE;
-
 
     //Use the PWD for an ftok file -- we don't have argv[0] here,
     // and "_" points to srun under slurm.
@@ -262,6 +268,8 @@ static void __sm_init(void)
         }
 
 
+            printf("DEFAULT_SIZE %ld %d\n", DEFAULT_SIZE, errno);
+            fflush(stdout);
         //Abort if both tries failed.
         if(sm_shmid == -1) {
             abort();
@@ -274,16 +282,36 @@ static void __sm_init(void)
         abort();
     }
 
+    return do_init;
+}
+
+#endif
+
+
+static void __sm_init(void)
+{
+    int do_init; //Whether to do initialization
+
+    //Set up a temporary area on the stack for malloc() calls during our
+    // initialization process.
+    void* temp_space = alloca(TEMP_SIZE);
+    sm_region = create_mspace_with_base(temp_space, TEMP_SIZE, 0);
+
+    //Keep this for use with valgrind.
+    //sm_region = create_mspace_with_base(sm_temp, TEMP_SIZE, 0);
+    //sm_region->brk = (intptr_t)sm_region + sizeof(struct sm_region);
+
+    sm_region->limit = TEMP_SIZE;
+
+
+    //Set up the SM region using one of mmap/sysv/pshm
+    do_init = __sm_init_region();
+
     //Only the process creating the file should initialize.
     if(do_init) {
-        //We created the file, we will destroy it.
+        //Only the initializing process registers the shutdown handler.
         atexit(__sm_destroy);
 
-#if 0
-        for(uintptr_t i = 0; i < size; i += 4096) {
-            memset((void*)((uintptr_t)sm_region + i), 0, 4096);
-        }
-#endif
         memset(sm_region, 0, DEFAULT_SIZE);
 
         sm_region->limit = (intptr_t)sm_region + DEFAULT_SIZE;
@@ -293,9 +321,9 @@ static void __sm_init(void)
 
 
         sm_region->brk = (intptr_t)sm_region + offset;
-        //printf("SM region %p size 0x%lx limit 0x%lx brk 0x%lx\n",
-        //        sm_region, size, sm_region->limit, sm_region->brk);
-        //fflush(stdout);
+        printf("SM region %p default size 0x%lx mspace size 0x%lx limit 0x%lx brk 0x%lx\n",
+                sm_region, DEFAULT_SIZE, MSPACE_SIZE, sm_region->limit, sm_region->brk);
+        fflush(stdout);
     } else {
         //Wait for another process to finish initialization.
         void* volatile * brk_ptr = (void**)&sm_region->brk;
@@ -309,7 +337,10 @@ static void __sm_init(void)
         abort();
     }
 
-    //memset(base, 0, MSPACE_SIZE);
+    //Clearing the memory seems to avoid some bugs and
+    // forces out subtle OOM issues here instead of later.
+    printf("MSPACE_SIZE %ld mb\n", MSPACE_SIZE / (1024 * 1024));
+    memset(base, 0, MSPACE_SIZE);
 
     sm_mspace = create_mspace_with_base(base, MSPACE_SIZE, 0);
 
@@ -327,8 +358,6 @@ static void __sm_init(void)
     //This should go last so it can use proper malloc and friends.
     //PROFILE_INIT();
 }
-
-#endif
 
 
 void* sm_morecore(intptr_t increment)

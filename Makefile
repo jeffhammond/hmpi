@@ -9,8 +9,8 @@ WARN=-Wall -Wuninitialized #-Wno-unused-function
 #CFLAGS=$(WARN) -O0 -g
 
 LIBS=-lrt
-INCS=-DENABLE_OPI=1#-DHMPI_CHECKSUM=1 -DHMPI_LOGCALLS=1 #-D_PROFILE=1 -D_PROFILE_MPI=1 -D_PROFILE_PAPI_EVENTS=1 #-DFULL_PROFILE #-D_PROFILE_PAPI_EVENTS=1
-SRCS=hmpi.c hmpi_opi.c sm_malloc.c #hmpi_coll.c nbc_op.c
+INCS=#-DENABLE_OPI=1 #-DHMPI_LOGCALLS=1 #-DHMPI_CHECKSUM=1 -DHMPI_LOGCALLS=1 #-D_PROFILE=1 -D_PROFILE_MPI=1 -D_PROFILE_PAPI_EVENTS=1 #-DFULL_PROFILE #-D_PROFILE_PAPI_EVENTS=1
+SRCS=hmpi.c #hmpi_opi.c #sm_malloc.c #hmpi_coll.c nbc_op.c
 USEQ_SRCS=hmpi.c #hmpi_coll.c nbc_op.c
 MAIN=main.c
 HDRS=hmpi.h barrier.h lock.h profile2.h
