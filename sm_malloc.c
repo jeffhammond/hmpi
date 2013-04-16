@@ -16,8 +16,8 @@
 
 
 //#define USE_MMAP 1
-#define USE_PSHM 1
-//#define USE_SYSV 1
+//#define USE_PSHM 1
+#define USE_SYSV 1
 
 
 #if 0
@@ -230,7 +230,7 @@ static int __sm_init_region(void)
 
 //20971520000 bytes is what the LC machines are configured for -- 20,000mb.
 //Let's use 18gb + 4k, or 1162mb per proc.
-#define MSPACE_SIZE (1024L * 1024L * 128L)
+#define MSPACE_SIZE (1024L * 1024L * 700L)
 //#define DEFAULT_SIZE (MSPACE_SIZE * 16L + (long)getpagesize()) //Default shared heap size
 #define DEFAULT_SIZE (1024L * 1024L * 12200L)
 
@@ -312,7 +312,7 @@ static void __sm_init(void)
         //Only the initializing process registers the shutdown handler.
         atexit(__sm_destroy);
 
-        memset(sm_region, 0, DEFAULT_SIZE);
+        //memset(sm_region, 0, DEFAULT_SIZE);
 
         sm_region->limit = (intptr_t)sm_region + DEFAULT_SIZE;
 
@@ -339,8 +339,7 @@ static void __sm_init(void)
 
     //Clearing the memory seems to avoid some bugs and
     // forces out subtle OOM issues here instead of later.
-    printf("MSPACE_SIZE %ld mb\n", MSPACE_SIZE / (1024 * 1024));
-    memset(base, 0, MSPACE_SIZE);
+    //memset(base, 0, MSPACE_SIZE);
 
     sm_mspace = create_mspace_with_base(base, MSPACE_SIZE, 0);
 
@@ -375,7 +374,7 @@ void* sm_morecore(intptr_t increment)
         return (void*)-1;
     }
 
-    memset(oldbrk, 0, increment);
+    //memset(oldbrk, 0, increment);
     return oldbrk;
 }
 

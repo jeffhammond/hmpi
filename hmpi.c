@@ -1,5 +1,3 @@
-#define _GNU_SOURCE
-
 #ifdef MPI
 #define MPI_FOO
 #undef MPI
@@ -244,6 +242,10 @@ static inline void add_send_req(HMPI_Request_list* req_list,
     //Insert req at tail.
     HMPI_Item* item = (HMPI_Item*)req;
 
+#ifdef DEBUG
+    item->next = NULL;
+#endif
+
 #ifdef __bg__
     LOCK_ACQUIRE(&req_list->lock);
 #else
@@ -270,9 +272,10 @@ static inline void remove_send_req(HMPI_Request_list* req_list,
 {
     //Since we only remove from the receiver-local send Q, there is no need for
     //locking.
+
     if(cur->next == NULL) {
-        req_list->tail = prev;
         prev->next = NULL;
+        req_list->tail = prev;
     } else {
         prev->next = cur->next;
     }
@@ -380,11 +383,10 @@ static inline HMPI_Request match_recv(HMPI_Request_list* req_list, HMPI_Request 
 
             //recv_req->proc = req->proc; //Not necessary, no ANY_SRC
             recv_req->tag = req->tag;
-            //printf("%d matched recv req %d proc %d tag %d to send req %p\n",
+            //printf("%d matched recv req %p proc %d tag %d to send req %p\n",
             //        g_rank, recv_req, proc, tag, req);
             return req;
         }
-
     }
 
     return HMPI_REQUEST_NULL;
@@ -419,7 +421,6 @@ static inline HMPI_Request match_take(HMPI_Request_list* req_list, HMPI_Request 
             //        g_hmpi_rank, recv_req, proc, tag, req);
             return req;
         }
-
     }
 
     return HMPI_REQUEST_NULL;
@@ -514,7 +515,6 @@ static inline int match_probe(int source, int tag, HMPI_Comm comm, HMPI_Request*
 
 
 #ifndef __bg__
-#if 0
 #include <numa.h>
 #include <syscall.h>
 
@@ -562,7 +562,7 @@ void print_numa(void)
     }
 }
 #endif
-#endif
+
 
 int HMPI_Init(int *argc, char ***argv)
 {
@@ -998,7 +998,8 @@ static int HMPI_Progress_mpi(HMPI_Request req)
 
 
 //Progress local receive requests.
-static void HMPI_Progress(HMPI_Item* recv_reqs_head, HMPI_Request_list* local_list, HMPI_Request_list* shared_list) {
+static void HMPI_Progress(HMPI_Item* recv_reqs_head,
+        HMPI_Request_list* local_list, HMPI_Request_list* shared_list) {
     HMPI_Item* cur;
     HMPI_Item* prev;
     HMPI_Request req;
