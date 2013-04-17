@@ -86,7 +86,7 @@ typedef struct {
 
   //This mysteriously improves latency for netpipe.
   //I used to have more variables here; removing them slowed netpipe down.
-  char pad[60];
+  char pad[40];
 
 #if 0
   //Used for intra-node sharing in various collectives

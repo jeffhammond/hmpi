@@ -1,17 +1,21 @@
 CC=mpicc -std=gnu99 
 #CC=mpixlc
 
-PTMALLOC=../ptmalloc3
 
 WARN=-Wall -Wuninitialized -Winline #-Wno-unused-function
-CFLAGS+=-O3 $(WARN)
+CFLAGS+=$(WARN)
 #CFLAGS=$(WARN) -O3 -mcpu=power7 -fomit-frame-pointer
 #CFLAGS=$(WARN) $(INCLUDE) -O3 -march=native -fomit-frame-pointer
 #CFLAGS=$(WARN) -O0 -g
 
-LIBS=-lrt
-INCS=#-DENABLE_OPI=1 #-DHMPI_LOGCALLS=1 #-DHMPI_CHECKSUM=1 -DHMPI_LOGCALLS=1 #-D_PROFILE=1 -D_PROFILE_MPI=1 -D_PROFILE_PAPI_EVENTS=1 #-DFULL_PROFILE #-D_PROFILE_PAPI_EVENTS=1
-SRCS=hmpi.c #hmpi_opi.c #hmpi_coll.c nbc_op.c
+LIBS=-lrt -lnuma
+
+INCS=-DUSE_NUMA=1 #-DENABLE_OPI=1 #-DHMPI_LOGCALLS=1 #-DHMPI_CHECKSUM=1 -DHMPI_LOGCALLS=1 #-D_PROFILE=1 -D_PROFILE_MPI=1 -D_PROFILE_PAPI_EVENTS=1 #-DFULL_PROFILE
+#INCS+=-DENABLE_OPI=1
+#INCS+=-DHMPI_LOGCALLS=1 #-DHMPI_CHECKSUM=1
+#INCS+=-D_PROFILE=1 -D_PROFILE_MPI=1 -D_PROFILE_PAPI_EVENTS=1 #-DFULL_PROFILE
+
+SRCS=hmpi.c hmpi_coll.c nbc_op.c #hmpi_opi.c
 SRCS+=sm_malloc.c
 USEQ_SRCS=#hmpi.c #hmpi_coll.c nbc_op.c
 MAIN=main.c
@@ -27,10 +31,6 @@ PSM_LIBS=$(LIBS) -lpsm_infinipath
 all: $(SRCS:%.c=%.o) 
 	ar r libhmpi.a $(SRCS:%.c=%.o)
 	ranlib libhmpi.a
-#	make -C $(PTMALLOC)
-#	ar r libhmpi.a $(SRCS:%.c=%.o) #$(PTMALLOC)/ptmalloc3.o $(PTMALLOC)/malloc.o
-#	ar r opi.a $(OPI_SRCS:%.c=%.o)
-#	ranlib opi.a
 
 psm: $(SRCS:%.c=%.o) $(PSM_SRCS:%.c=%.o)
 	ar r libhmpi.a $(SRCS:%.c=%.o) $(PSM_SRCS:%.c=%.o)

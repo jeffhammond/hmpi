@@ -33,6 +33,10 @@
 #include "mpix.h"
 #endif
 
+#ifdef USE_NUMA
+#include <numa.h>
+#endif
+
 
 #ifdef FULL_PROFILE
 //PROFILE_DECLARE();
@@ -302,7 +306,7 @@ static inline void update_send_reqs(HMPI_Request_list* local_list, HMPI_Request_
 #ifdef __x86_64__
         //For x86, this statement is safe outside the lock.
         // See comments above and non-x86 statement below.
-        // The branch ensures at least one node.  Senders only ad at the tail,
+        // The branch ensures at least one node.  Senders only add at the tail,
         // so head.next won't change out from under us.
         local_list->tail->next = shared_list->head.next;
 #endif
@@ -518,6 +522,7 @@ static inline int match_probe(int source, int tag, HMPI_Comm comm, HMPI_Request*
 
 
 #ifndef __bg__
+#if 0
 #include <numa.h>
 #include <syscall.h>
 
@@ -581,6 +586,7 @@ void print_numa(void)
     free(data);
 }
 #endif
+#endif
 
 
 int HMPI_Init(int *argc, char ***argv)
@@ -600,47 +606,47 @@ int HMPI_Init(int *argc, char ***argv)
 
     //Set up communicators
     //TODO - this needs to be pulled out into its own routine.
-    // A lot of the g_* variables should go away when multiple comms are added.
+    // A lot of the g_* variables should be moved into the comm struct.
     MPI_Comm_rank(MPI_COMM_WORLD, &g_rank);
     MPI_Comm_size(MPI_COMM_WORLD, &g_size);
     
     HMPI_COMM_WORLD = (HMPI_Comm_info*)MALLOC(HMPI_Comm_info, 1);
     HMPI_COMM_WORLD->comm = MPI_COMM_WORLD;
 
+    //Split into comms containing ranks on the same nodes.
+    {
 #ifdef __bg__
-    MPIX_Hardware_t hw;
+        MPIX_Hardware_t hw;
 
-    MPIX_Hardware(&hw);
+        MPIX_Hardware(&hw);
 
-    //printf("%d prank %d psize %d ppn %d coreID %d MHz %d memSize %d\n",
-    //        g_rank, hw.prank, hw.psize, hw.ppn, hw.coreID, hw.clockMHz, hw.memSize);
-    int color = 0;
-    for(int i = 0; i < hw.torus_dimension; i++) {
-        color = (color * hw.Size[i]) + hw.Coords[i];
-    }
-
-    //printf("%d color %d\n", g_rank, color);
+        //printf("%d prank %d psize %d ppn %d coreID %d MHz %d memSize %d\n",
+        //        g_rank, hw.prank, hw.psize, hw.ppn, hw.coreID, hw.clockMHz,
+        //        hw.memSize);
+        int color = 0;
+        for(int i = 0; i < hw.torus_dimension; i++) {
+            color = (color * hw.Size[i]) + hw.Coords[i];
+        }
 
 #else
-    //Hash our processor name into a color for Comm_split()
-    char proc_name[MPI_MAX_PROCESSOR_NAME];
-    int proc_name_len;
-    MPI_Get_processor_name(proc_name, &proc_name_len);
+        //Hash our processor name into a color for Comm_split()
+        char proc_name[MPI_MAX_PROCESSOR_NAME];
+        int proc_name_len;
+        MPI_Get_processor_name(proc_name, &proc_name_len);
 
-    int color = 0;
-    for(char* s = proc_name; *s != '\0'; s++) {
-        color = *s + 31 * color;
-    }
-
-    //MPI says color must be non-negative.
-    color &= 0x7FFFFFFF;
-
-    //printf("%d name %s color %d\n", g_rank, proc_name, color);
+        int color = 0;
+        for(char* s = proc_name; *s != '\0'; s++) {
+            color = *s + 31 * color;
+        }
 #endif
 
-    MPI_Comm_split(MPI_COMM_WORLD, color, g_rank, &HMPI_COMM_WORLD->node_comm);
+        //MPI says color must be non-negative.
+        color &= 0x7FFFFFFF;
 
-    //Store the node size in ranks, and the base rank.
+        MPI_Comm_split(MPI_COMM_WORLD, color, g_rank,
+                &HMPI_COMM_WORLD->node_comm);
+    }
+
     //Used in HMPI_Comm_node_rank().
     MPI_Comm_size(HMPI_COMM_WORLD->node_comm, &HMPI_COMM_WORLD->node_size);
 
@@ -670,15 +676,21 @@ int HMPI_Init(int *argc, char ***argv)
     MPI_Comm_size(HMPI_COMM_WORLD->net_comm, &g_net_size);
 
 
+#ifdef USE_NUMA
     //Split the node comm into per-NUMA-domain (ie socket) comms.
     //Look up the NUMA node of a stack page -- this should be local.
     int ret = 0;
     void* page = &ret;
+
     ret = numa_move_pages(0, 1, &page, NULL, &g_numa_node, 0);
     if(ret != 0) {
         printf("ERROR numa_move_pages %s\n", strerror(ret));
         MPI_Abort(MPI_COMM_WORLD, 0);
     }
+#else
+    //Without a way to find the local NUMA node, assume one NUMA node.
+    g_numa_node = 0;
+#endif //USE_NUMA
 
     MPI_Comm_split(HMPI_COMM_WORLD->node_comm, g_numa_node, g_node_rank,
             &HMPI_COMM_WORLD->numa_comm);
@@ -696,14 +708,17 @@ int HMPI_Init(int *argc, char ***argv)
                 &base_rank, world_group, &g_numa_root);
     }
 
-    printf("%d rank=%3d size=%3d node_rank=%2d node_size=%2d node_root=%4d "
-            "net_rank=%2d net_size=%2d numa_node=%d numa_root=%2d "
+#if 0
+    printf("%5d rank=%3d size=%3d node_rank=%2d node_size=%2d node_root=%4d "
+            "net_rank=%2d net_size=%2d numa_node=%d numa_root=%3d "
             "numa_rank=%2d\n",
             getpid(), g_rank, g_size, g_node_rank, g_node_size,
             HMPI_COMM_WORLD->node_root, g_net_rank, g_net_size, g_numa_node,
             g_numa_root, g_numa_rank);
+#endif
 
-    //Ensure every rank on the node has the same shared region address.
+
+    //Ensure every rank on a node has the same shared region address.
     {
         void* result = NULL;
 
@@ -725,25 +740,7 @@ int HMPI_Init(int *argc, char ***argv)
     }
 
 
-
-#if 0
-    void** ptrs = alloca(sizeof(void*) * g_node_size);
-    MPI_Gather(&sm_lower, 1, MPI_LONG,
-            ptrs, 1, MPI_LONG, 0, HMPI_COMM_WORLD->node_comm);
-
-    if(g_node_rank == 0) {
-        //Check that all the pointers are the same.
-        for(int i = 0; i < g_node_size; i++) {
-            if(ptrs[i] != sm_lower) {
-                printf("%d ERROR rank %d's sm_lower is at %p, rank 0 is at %p\n",
-                        g_rank, i, ptrs[i], sm_lower);
-                MPI_Abort(MPI_COMM_WORLD, 0);
-            }
-        }
-    }
-#endif
-
-
+    //Set up intra-node shared memory structures.
     if(g_node_rank == 0) {
         //One rank per node allocates shared send request lists.
         g_send_reqs = MALLOC(HMPI_Request_list, g_node_size);
@@ -771,7 +768,7 @@ int HMPI_Init(int *argc, char ***argv)
     g_tl_send_reqs.head.next = NULL;
     g_tl_send_reqs.tail = &g_tl_send_reqs.head;
 
-    print_numa();
+    //print_numa();
 
 
 #ifdef ENABLE_OPI
