@@ -91,6 +91,9 @@ int g_node_rank=-1;                 //HMPI node rank
 int g_node_size=-1;                 //HMPI node size
 int g_net_rank=-1;                  //HMPI net rank
 int g_net_size=-1;                  //HMPI net size
+int g_numa_node=-1;                 //HMPI numa node (compute-node scope)
+int g_numa_root=-1;                 //HMPI root rank on same numa node
+int g_numa_rank=-1;                 //HMPI rank within numa node
 
 HMPI_Comm HMPI_COMM_WORLD;
 
@@ -526,8 +529,8 @@ void print_numa(void)
         return;
     }
 
-    printf("%d numa_max_node %d\n", g_rank, numa_max_node());
-    printf("%d numa_num_configured_nodes %d\n", g_rank, numa_num_configured_nodes());
+    //printf("%d numa_max_node %d\n", g_rank, numa_max_node());
+    //printf("%d numa_num_configured_nodes %d\n", g_rank, numa_num_configured_nodes());
     //unsigned long size, unsigned long maskp
 #if 0
     struct bitmask* bm = numa_get_mems_allowed();
@@ -535,8 +538,18 @@ void print_numa(void)
     for(int i = 0; i < bm->size / sizeof(unsigned long); i++) {
         printf("%d numa_get_mems_allowed 0x%x\n", g_rank, bm->maskp[i]);
     }
-    printf("%d numa_preferred %d\n", g_rank, numa_preferred());
 #endif
+#if 0
+    numa_set_localalloc();
+    int preferred = numa_preferred();
+    long long freesize;
+    long long totalsize = numa_node_size64(preferred, &freesize);
+
+    printf("%d numa_preferred %d total %lld free %lld\n",
+            g_rank, preferred, totalsize, freesize);
+#endif
+
+
 
     //check some pages using move_pages and sm_lower.
     int pagesize = numa_pagesize();
@@ -549,6 +562,8 @@ void print_numa(void)
         pages[i] = (void*)((uintptr_t)data + (i * pagesize));
     }
 
+    pages[0] = &pagesize;
+
     int ret = numa_move_pages(0, 4, pages, NULL, status, 0);
     if(ret > 0) {
         printf("%d uh, move pages couldn't move some pages %d\n", g_rank, ret);
@@ -557,9 +572,13 @@ void print_numa(void)
         printf("%d ERROR move pages %d\n", g_rank, ret);
     }
 
-    for(int i = 0; i < 4; i++) {
-        printf("%d page %p status %d %s\n", g_rank, pages[i], status[i], strerror(-status[i]));
-    }
+    //for(int i = 0; i < 4; i++) {
+    //    printf("%d page %p status %d %s\n", g_rank, pages[i], status[i], strerror(-status[i]));
+    //}
+
+    numa_set_preferred(status[0]);
+    //printf("%d now preferred %d\n", g_rank, numa_preferred());
+    free(data);
 }
 #endif
 
@@ -578,10 +597,13 @@ int HMPI_Init(int *argc, char ***argv)
         MPI_Abort(MPI_COMM_WORLD, 0);
     }
 #endif
+
+    //Set up communicators
+    //TODO - this needs to be pulled out into its own routine.
+    // A lot of the g_* variables should go away when multiple comms are added.
     MPI_Comm_rank(MPI_COMM_WORLD, &g_rank);
     MPI_Comm_size(MPI_COMM_WORLD, &g_size);
     
-    //Set up communicators
     HMPI_COMM_WORLD = (HMPI_Comm_info*)MALLOC(HMPI_Comm_info, 1);
     HMPI_COMM_WORLD->comm = MPI_COMM_WORLD;
 
@@ -628,13 +650,10 @@ int HMPI_Init(int *argc, char ***argv)
         MPI_Comm_group(HMPI_COMM_WORLD->node_comm, &node_group);
         MPI_Comm_group(HMPI_COMM_WORLD->comm, &world_group);
 
-        //Translate rank 0 of our node to its COMM_WORLD rank.
         int base_rank = 0;
         MPI_Group_translate_ranks(node_group, 1,
-                &base_rank, world_group, &HMPI_COMM_WORLD->node_base);
+                &base_rank, world_group, &HMPI_COMM_WORLD->node_root);
 
-        //printf("%d node_base %d node_size %d\n",
-        //        g_rank, HMPI_COMM_WORLD->node_base, HMPI_COMM_WORLD->node_size);
     }
 
 
@@ -651,7 +670,63 @@ int HMPI_Init(int *argc, char ***argv)
     MPI_Comm_size(HMPI_COMM_WORLD->net_comm, &g_net_size);
 
 
-    //Check if every rank on the node got the same region address.
+    //Split the node comm into per-NUMA-domain (ie socket) comms.
+    //Look up the NUMA node of a stack page -- this should be local.
+    int ret = 0;
+    void* page = &ret;
+    ret = numa_move_pages(0, 1, &page, NULL, &g_numa_node, 0);
+    if(ret != 0) {
+        printf("ERROR numa_move_pages %s\n", strerror(ret));
+        MPI_Abort(MPI_COMM_WORLD, 0);
+    }
+
+    MPI_Comm_split(HMPI_COMM_WORLD->node_comm, g_numa_node, g_node_rank,
+            &HMPI_COMM_WORLD->numa_comm);
+
+    MPI_Comm_rank(HMPI_COMM_WORLD->numa_comm, &g_numa_rank);
+
+    {
+        MPI_Group numa_group;
+        MPI_Group world_group;
+        MPI_Comm_group(HMPI_COMM_WORLD->numa_comm, &numa_group);
+        MPI_Comm_group(HMPI_COMM_WORLD->comm, &world_group);
+
+        int base_rank = 0;
+        MPI_Group_translate_ranks(numa_group, 1,
+                &base_rank, world_group, &g_numa_root);
+    }
+
+    printf("%d rank=%3d size=%3d node_rank=%2d node_size=%2d node_root=%4d "
+            "net_rank=%2d net_size=%2d numa_node=%d numa_root=%2d "
+            "numa_rank=%2d\n",
+            getpid(), g_rank, g_size, g_node_rank, g_node_size,
+            HMPI_COMM_WORLD->node_root, g_net_rank, g_net_size, g_numa_node,
+            g_numa_root, g_numa_rank);
+
+    //Ensure every rank on the node has the same shared region address.
+    {
+        void* result = NULL;
+
+        MPI_Allreduce(&sm_lower, &result, 1, MPI_LONG,
+                MPI_MAX, HMPI_COMM_WORLD->node_comm);
+        if(result != sm_lower) {
+            printf("%d ERROR sm_lower %p doesn't agree with MAX %p\n",
+                    g_rank, sm_lower, result);
+            MPI_Abort(MPI_COMM_WORLD, 0);
+        }
+
+        MPI_Allreduce(&sm_upper, &result, 1, MPI_LONG,
+                MPI_MAX, HMPI_COMM_WORLD->node_comm);
+        if(result != sm_upper) {
+            printf("%d ERROR sm_upper %p doesn't agree with MAX %p\n",
+                    g_rank, sm_upper, result);
+            MPI_Abort(MPI_COMM_WORLD, 0);
+        }
+    }
+
+
+
+#if 0
     void** ptrs = alloca(sizeof(void*) * g_node_size);
     MPI_Gather(&sm_lower, 1, MPI_LONG,
             ptrs, 1, MPI_LONG, 0, HMPI_COMM_WORLD->node_comm);
@@ -665,12 +740,15 @@ int HMPI_Init(int *argc, char ***argv)
                 MPI_Abort(MPI_COMM_WORLD, 0);
             }
         }
+    }
+#endif
 
+
+    if(g_node_rank == 0) {
         //One rank per node allocates shared send request lists.
         g_send_reqs = MALLOC(HMPI_Request_list, g_node_size);
     }
 
-    //Share the location of g_send_reqs with other ranks on this node.
     MPI_Bcast(&g_send_reqs, 1, MPI_LONG, 0, HMPI_COMM_WORLD->node_comm);
 
 
@@ -678,9 +756,8 @@ int HMPI_Init(int *argc, char ***argv)
     g_recv_reqs_tail = &g_recv_reqs_head;
 
 #ifndef __bg__
-    //Except on BGQ, we need to allocate a lock Q structure for MCS lock.
+    //Except on BGQ, allocate a SHARED lock Q for use with MCS locks.
     //Used in Qing sends on the receiver and clearing that Q.
-    //Needs to be located in shared memory!
     g_lock_q = MALLOC(mcs_qnode_t, 1);
     memset(g_lock_q, 0, sizeof(mcs_qnode_t));
 #endif
@@ -694,8 +771,7 @@ int HMPI_Init(int *argc, char ***argv)
     g_tl_send_reqs.head.next = NULL;
     g_tl_send_reqs.tail = &g_tl_send_reqs.head;
 
-    //printf("%d pid %d\n", g_rank, getpid());
-    //print_numa();
+    print_numa();
 
 
 #ifdef ENABLE_OPI
@@ -780,10 +856,10 @@ inline void HMPI_Comm_node_rank(HMPI_Comm comm, int rank, int* node_rank)
         return;
     } 
     
-    int diff = rank - comm->node_base;
+    int diff = rank - comm->node_root;
     
-    //if(rank >= comm->node_base &&
-    //        (diff = rank - comm->node_base) < comm->node_size) {
+    //if(rank >= comm->node_root &&
+    //        (diff = rank - comm->node_root) < comm->node_size) {
     if(diff >= 0 && diff < comm->node_size) {
         *node_rank = diff;
         return;

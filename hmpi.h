@@ -56,6 +56,9 @@ extern int g_node_rank;                 //HMPI node rank
 extern int g_node_size;                 //HMPI node size
 extern int g_net_rank;                  //HMPI net rank
 extern int g_net_size;                  //HMPI net size
+extern int g_numa_node;                 //HMPI numa node (compute-node scope)
+extern int g_numa_root;                 //HMPI root rank on same numa node
+extern int g_numa_rank;                 //HMPI rank within numa node
 
 #endif
 
@@ -74,8 +77,9 @@ typedef struct {
   MPI_Comm comm;        //Underyling MPI communicator: MUST BE FIRST
   MPI_Comm node_comm;   //Contains only ranks in this comm on the same node
   MPI_Comm net_comm;    //Contains one rank from each node
-  int node_base;   //Rank of first rank on this node
-  int node_size;   //Number of ranks on this node
+  MPI_Comm numa_comm;   //Contains only ranks in this comm on the same NUMA
+  int node_root;        //Rank of first rank on this node
+  int node_size;        //Number of ranks on this node
 
   //barrier_t* barr;       //Barrier for local ranks in this comm
   //treebarrier_t tbarr;

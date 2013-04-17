@@ -15,8 +15,8 @@
 
 
 //#define USE_MMAP 1
-//#define USE_PSHM 1
-#define USE_SYSV 1
+#define USE_PSHM 1
+//#define USE_SYSV 1
 
 
 #if 0
@@ -59,11 +59,8 @@ void* sm_upper = NULL;
 static struct sm_region* sm_region = NULL;
 static mspace sm_mspace = NULL;
 
-static void* sm_my_base;
-static void* sm_my_limit;
 
-#define IS_MY_PTR(p) (sm_my_base <= p && p < sm_my_limit)
-
+#define TEMP_SIZE (1024 * 1024 * 2L) //Temporary mspace capacity
 
 //Keep this around for use with valgrind.
 //static char sm_temp[TEMP_SIZE] = {0};
@@ -71,7 +68,6 @@ static void* sm_my_limit;
 
 #ifdef USE_MMAP
 //MMAP and SYSV have different space capabilities.
-#define TEMP_SIZE (1024 * 1024 * 2L) //Temporary mspace capacity
 
 #define MSPACE_SIZE (1024L * 1024L * 896) //Use with file in /tmp
 //#define MSPACE_SIZE (1024L * 1024L * 1536) //Use with file in /p/lscratchX
@@ -169,11 +165,11 @@ static int __sm_init_region(void)
 
 #ifdef USE_PSHM
 
-#define TEMP_SIZE (1024 * 1024 * 2L) //Temporary mspace capacity
-
-#define MSPACE_SIZE (1024L * 1024L * 900L) //Use with file in /tmp
-//#define MSPACE_SIZE (1024L * 1024L * 1536) //Use with file in /p/lscratchX
-#define DEFAULT_SIZE (MSPACE_SIZE * 16L + (long)getpagesize()) //Default shared heap size
+//#define MSPACE_SIZE (1024L * 1024L * 900L)
+#define MSPACE_SIZE (1024L * 1024L * 1024L * 4L)
+#define DEFAULT_SIZE (MSPACE_SIZE * 16L + (long)getpagesize())
+//#define MSPACE_SIZE (1024L * 1024L * 128L)
+//#define DEFAULT_SIZE (1024L * 1024L * 1024L * 30 + (long)getpagesize())
 
 //On the LC machines, /tmp is a tmpfs, limiting us to half of the free memory.
 static char* sm_filename = "hmpismfile";
@@ -225,10 +221,7 @@ static int __sm_init_region(void)
 
 #ifdef USE_SYSV
 //MMAP and SYSV have different space capabilities.
-#define TEMP_SIZE (1024 * 1024 * 2L) //Temporary mspace capacity
-
-//20971520000 bytes is what the LC machines are configured for -- 20,000mb.
-//Let's use 18gb + 4k, or 1162mb per proc.
+//LC machines are configured for 12gb of sysv memory (768mb for 16 ranks)
 #define MSPACE_SIZE (1024L * 1024L * 700L)
 //#define DEFAULT_SIZE (MSPACE_SIZE * 16L + (long)getpagesize()) //Default shared heap size
 #define DEFAULT_SIZE (1024L * 1024L * 12200L)
@@ -302,6 +295,18 @@ static void __sm_init(void)
 
     sm_region->limit = TEMP_SIZE;
 
+    //Find the SM region size.
+    //SM_SIZE environment variable is size per proc in megabytes.
+    //We assume 16 procs per node.
+#if 0
+    char* tmp = getenv("SM_SIZE");
+    if(tmp == NULL) {
+        size = DEFAULT_SIZE;
+    } else {
+        size = atol(tmp) * 1024L * 1024L * 16 + getpagesize();
+    }
+#endif
+
 
     //Set up the SM region using one of mmap/sysv/pshm
     do_init = __sm_init_region();
@@ -320,9 +325,9 @@ static void __sm_init(void)
 
 
         sm_region->brk = (intptr_t)sm_region + offset;
-        printf("SM region %p default size 0x%lx mspace size 0x%lx limit 0x%lx brk 0x%lx\n",
-                sm_region, DEFAULT_SIZE, MSPACE_SIZE, sm_region->limit, sm_region->brk);
-        fflush(stdout);
+        //printf("SM region %p default size 0x%lx mspace size 0x%lx limit 0x%lx brk 0x%lx\n",
+        //        sm_region, DEFAULT_SIZE, MSPACE_SIZE, sm_region->limit, sm_region->brk);
+        //fflush(stdout);
     } else {
         //Wait for another process to finish initialization.
         void* volatile * brk_ptr = (void**)&sm_region->brk;
@@ -342,16 +347,8 @@ static void __sm_init(void)
 
     sm_mspace = create_mspace_with_base(base, MSPACE_SIZE, 0);
 
-
-    sm_my_base = base;
-    sm_my_limit = (void*)((uintptr_t)base + MSPACE_SIZE);
-
     sm_lower = sm_region;
     sm_upper = (void*)sm_region->limit;
-
-    if(sm_my_limit > sm_upper) {
-        abort();
-    }
 
     //This should go last so it can use proper malloc and friends.
     //PROFILE_INIT();
@@ -362,11 +359,9 @@ void* sm_morecore(intptr_t increment)
 {
     void* oldbrk = (void*)__sync_fetch_and_add(&sm_region->brk, increment);
 
-#if 0
-    printf("%d sm_morecore incr %ld brk %p limit %p\n",
+/*    printf("%d sm_morecore incr %ld brk %p limit %p\n",
             getpid(), increment, oldbrk, sm_region->limit);
-    fflush(stdout);
-#endif
+    fflush(stdout);*/
 
     if((uintptr_t)oldbrk + increment > (uintptr_t)sm_region->limit) {
         errno = ENOMEM;
@@ -378,6 +373,7 @@ void* sm_morecore(intptr_t increment)
 }
 
 
+#if 0
 void* sm_mmap(void* addr, size_t len, int prot, int flags, int fildes, off_t off)
 {
     //PROFILE_START(mmap);
@@ -407,6 +403,7 @@ int sm_munmap(void* addr, size_t len)
 
     return 0;
 }
+#endif
 
 
 int is_sm_buf(void* mem) {
@@ -416,27 +413,12 @@ int is_sm_buf(void* mem) {
         (intptr_t)mem < sm_region->limit;
 }
 
-#include <numa.h>
 
 void* malloc(size_t bytes) {
     if(unlikely(sm_region == NULL)) __sm_init();
     //PROFILE_START(malloc);
 
-    //show_backtrace();
-
     void* ptr = mspace_malloc(sm_mspace, bytes);
-
-    if(ptr == NULL) {
-        abort();
-    } else if(!IS_MY_PTR(ptr)) {
-        abort();
-    }
-
-#if 0
-    int status;
-    numa_move_pages(0, 1, &ptr, NULL, &status, 0);
-    printf("%d page %p status %d\n", getpid(), ptr, status);
-#endif
 
     //PROFILE_STOP(malloc);
     return ptr;
@@ -447,16 +429,12 @@ void free(void* mem) {
 
     //PROFILE_START(free);
 
-//    if(mem == NULL) {
     if(mem < sm_lower || mem >= sm_upper) {
         return;
     }
 
-    if(!IS_MY_PTR(mem)) {
-        abort();
-    }
+    if(unlikely(sm_region == NULL)) return;
 
-    if(unlikely(sm_region == NULL)) abort();
     mspace_free(sm_mspace, mem);
     //PROFILE_STOP(free);
 }
@@ -468,12 +446,6 @@ void* realloc(void* mem, size_t newsize) {
     void* ptr = mspace_realloc(sm_mspace, mem, newsize);
     //PROFILE_STOP(realloc);
 
-    if(ptr == NULL) {
-        abort();
-    } else if(!IS_MY_PTR(ptr)) {
-        abort();
-    }
-
     return ptr;
 }
 
@@ -484,12 +456,6 @@ void* calloc(size_t n_elements, size_t elem_size) {
     void* ptr = mspace_calloc(sm_mspace, n_elements, elem_size);
     //PROFILE_STOP(calloc);
 
-    if(ptr == NULL) {
-        abort();
-    } else if(!IS_MY_PTR(ptr)) {
-        abort();
-    }
-
     return ptr;
 }
 
@@ -499,12 +465,6 @@ void* memalign(size_t alignment, size_t bytes) {
     //PROFILE_START(memalign);
     void* ptr = mspace_memalign(sm_mspace, alignment, bytes);
     //PROFILE_STOP(memalign);
-
-    if(ptr == NULL) {
-        abort();
-    } else if(!IS_MY_PTR(ptr)) {
-        abort();
-    }
 
     return ptr;
 }
