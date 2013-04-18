@@ -103,7 +103,7 @@ typedef struct {
 
   //This mysteriously improves latency for netpipe.
   //I used to have more variables here; removing them slowed netpipe down.
-  char pad[40];
+  char pad[44];
 } HMPI_Comm_info;
 
 typedef HMPI_Comm_info* HMPI_Comm;

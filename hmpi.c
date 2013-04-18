@@ -525,7 +525,6 @@ static inline int match_probe(int source, int tag, HMPI_Comm comm, HMPI_Request*
 
 
 #ifndef __bg__
-#if 0
 #include <numa.h>
 #include <syscall.h>
 
@@ -589,7 +588,6 @@ void print_numa(void)
     free(data);
 }
 #endif
-#endif
 
 
 int HMPI_Init(int *argc, char ***argv)
@@ -597,6 +595,7 @@ int HMPI_Init(int *argc, char ***argv)
     MPI_Init(argc, argv);
     FULL_PROFILE_INIT();
 
+    printf("sizeof comm %d\n", sizeof(MPI_Comm));
 #ifdef __bg__
     //On BG/Q, we rely on BG_MAPCOMMONHEAP=1 to get shared memory.
     //Check that it is set before continuing.
