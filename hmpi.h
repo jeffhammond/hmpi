@@ -5,10 +5,7 @@
 #include <mpi.h>
 #include <assert.h>
 #include "lock.h"
-#include "barrier.h"
-#ifdef ENABLE_PSM
-#include "libpsm.h"
-#endif
+//#include "barrier.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -58,13 +55,17 @@ extern int g_node_rank;                 //HMPI node rank
 extern int g_node_size;                 //HMPI node size
 extern int g_net_rank;                  //HMPI net rank
 extern int g_net_size;                  //HMPI net size
+# if 0
 extern int g_numa_node;                 //HMPI numa node (compute-node scope)
 extern int g_numa_root;                 //HMPI root rank on same numa node
 extern int g_numa_rank;                 //HMPI rank within numa node
 extern int g_numa_size;                 //HMPI numa node size
-
 #endif
 
+#endif //HMPI_INTERNAL
+
+
+#if 0
 typedef struct {
     volatile int32_t ptopsense;
     int32_t padding[15];
@@ -84,6 +85,7 @@ typedef struct hmpi_coll_t {
     padptop* ptop[PTOP];
     hbarrier_record* t_barr;
 } hmpi_coll_t;
+#endif
 
 
 //Placeholder typedef - groups aren't implemented yet
@@ -93,16 +95,15 @@ typedef struct {
   MPI_Comm comm;        //Underyling MPI communicator: MUST BE FIRST
   MPI_Comm node_comm;   //Contains only ranks in this comm on the same node
   MPI_Comm net_comm;    //Contains one rank from each node
-  MPI_Comm numa_comm;   //Contains only ranks in this comm on the same NUMA
+//  MPI_Comm numa_comm;   //Contains only ranks in this comm on the same NUMA
   int node_root;        //Rank of first rank on this node
   int node_size;        //Number of ranks on this node
 
-  hmpi_coll_t* coll;
+  //hmpi_coll_t* coll;
 
   //This mysteriously improves latency for netpipe.
   //I used to have more variables here; removing them slowed netpipe down.
-  char pad[32];
-
+  char pad[40];
 } HMPI_Comm_info;
 
 typedef HMPI_Comm_info* HMPI_Comm;

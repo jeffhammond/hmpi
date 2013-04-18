@@ -95,10 +95,12 @@ int g_node_rank=-1;                 //HMPI node rank
 int g_node_size=-1;                 //HMPI node size
 int g_net_rank=-1;                  //HMPI net rank
 int g_net_size=-1;                  //HMPI net size
+#if 0
 int g_numa_node=-1;                 //HMPI numa node (compute-node scope)
 int g_numa_root=-1;                 //HMPI root rank on same numa node
 int g_numa_rank=-1;                 //HMPI rank within numa node
 int g_numa_size=-1;                 //HMPI numa node size
+#endif
 
 HMPI_Comm HMPI_COMM_WORLD;
 
@@ -677,6 +679,7 @@ int HMPI_Init(int *argc, char ***argv)
     MPI_Comm_size(HMPI_COMM_WORLD->net_comm, &g_net_size);
 
 
+#if 0
 #ifdef USE_NUMA
     //Split the node comm into per-NUMA-domain (ie socket) comms.
     //Look up the NUMA node of a stack page -- this should be local.
@@ -709,6 +712,7 @@ int HMPI_Init(int *argc, char ***argv)
         MPI_Group_translate_ranks(numa_group, 1,
                 &base_rank, world_group, &g_numa_root);
     }
+#endif
 
 #if 0
     printf("%5d rank=%3d size=%3d node_rank=%2d node_size=%2d node_root=%4d "
@@ -772,6 +776,7 @@ int HMPI_Init(int *argc, char ***argv)
 
     //print_numa();
 
+#if 0
     hmpi_coll_t* coll = HMPI_COMM_WORLD->coll = MALLOC(hmpi_coll_t, 1);
 
     MPI_Bcast(&HMPI_COMM_WORLD->coll, 1, MPI_LONG, 0,
@@ -814,6 +819,7 @@ int HMPI_Init(int *argc, char ***argv)
         //FANINEQUAL1(t_barrier_init_fanin1(&coll->t_barr, g_node_size);) 
         //PFANIN(t_barrier_init(&coll->t_barr, g_node_size););
     }
+#endif
 
 
 #ifdef ENABLE_OPI
