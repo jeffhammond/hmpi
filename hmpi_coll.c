@@ -17,7 +17,7 @@
 #include <string.h>
 #include <math.h>
 #include "lock.h"
-
+#include "barrier.h"
 
 int32_t sense=1;
 int32_t hcsense=1;
@@ -69,16 +69,16 @@ int HMPI_Barrier(HMPI_Comm comm) {
     printf("in HMPI_Barrier\n"); fflush(stdout);
 #endif
    // barrier_cb(&comm->barr, g_node_rank, barrier_iprobe);
-    t_barrier_cb(comm->t_barr, g_node_rank, barrier_iprobe);
+    t_barrier_cb(comm->coll->t_barr, g_node_rank, barrier_iprobe);
     if(g_net_size > 1) {
         // all root-threads perform MPI_Barrier 
         if(g_node_rank == 0) {
-            MPI_Barrier(comm->mpicomm);
+            MPI_Barrier(comm->comm);
         }
 
         //barrier_cb(&comm->barr, g_node_rank, barrier_iprobe);
-        //t_barrier(comm->t_barr, g_node_rank);
-        t_barrier_cb(comm->t_barr, g_node_rank, barrier_iprobe);
+        //t_barrier(comm->coll->t_barr, g_node_rank);
+        t_barrier_cb(comm->coll->t_barr, g_node_rank, barrier_iprobe);
     }
     return MPI_SUCCESS;
 }
@@ -86,9 +86,9 @@ int HMPI_Barrier(HMPI_Comm comm) {
 /*
  int HMPI_Barrier(HMPI_Comm comm) {
     int i;
-//	int sktid = tid/numpst;
-    barrier_record * nodes = comm->t_barr->nodes;
-    sbarrier_record * skts = comm->t_barr->skts;
+//	int sktid = tid/g_numa_size;
+    barrier_record * nodes = comm->coll->t_barr->nodes;
+    sbarrier_record * skts = comm->coll->t_barr->skts;
 //DEBUG1(printf("barrier tid=%d, %d, %d, %d, %d\n",tid,nodes[tid].cnotready[0],nodes[tid].cnotready[1],nodes[tid].cnotready[2],nodes[tid].cnotready[3]);)
     for(i=0; i<FANIN; i++)
       while(nodes[g_node_rank].cnotready[i].cnotready);
@@ -96,32 +96,32 @@ int HMPI_Barrier(HMPI_Comm comm) {
        nodes[g_node_rank].cnotready[i].cnotready = nodes[g_node_rank].havechild[i];
     *nodes[g_node_rank].parentpointer = 0;
 
-    if(g_node_rank == rthread)
+    if(g_node_rank == g_numa_root)
 	{
       for(i=0; i<SFANIN; i++)
-        while(skts[socket_id].cnotready[i].cnotready);
+        while(skts[g_numa_node].cnotready[i].cnotready);
 	  for(i=0; i<SFANIN; i++)
-	    skts[socket_id].cnotready[i].cnotready = skts[socket_id].havechild[i];
-      *skts[socket_id].parentpointer = 0;
+	    skts[g_numa_node].cnotready[i].cnotready = skts[g_numa_node].havechild[i];
+      *skts[g_numa_node].parentpointer = 0;
 	}
 
     if(g_net_size > 1&&g_node_rank == 0) {
-            MPI_Barrier(comm->mpicomm);
+            MPI_Barrier(comm->comm);
         }
 
 	if(SFANOUT>0)
     {
-     if(g_node_rank == rthread && g_node_rank != 0)
+     if(g_node_rank == g_numa_root && g_node_rank != 0)
      	{
-  	     while(skts[socket_id].wsense.wsense != sense);
+  	     while(skts[g_numa_node].wsense.wsense != sense);
   	       barrier_iprobe();
       	}
   
-  	  if(g_node_rank == rthread)
+  	  if(g_node_rank == g_numa_root)
   	    for(i=0; i<SFANOUT; i++)
-          *skts[socket_id].childpointer[i] = sense;
+          *skts[g_numa_node].childpointer[i] = sense;
   	
-      if(g_node_rank != rthread)
+      if(g_node_rank != g_numa_root)
        {  
   	    while(nodes[g_node_rank].wsense.wsense != sense);
   	  //     barrier_iprobe();
@@ -153,26 +153,26 @@ int HMPI_AllreduceTestFanout1(void *sendbuf, void *recvbuf, int count, MPI_Datat
     //PROFILE_START(allreduce);
     
     double begin; double elapse;
-    comm->sbuf[g_node_rank]=sendbuf;
-    comm->rbuf[g_node_rank]=recvbuf;
+    comm->coll->sbuf[g_node_rank]=sendbuf;
+    comm->coll->rbuf[g_node_rank]=recvbuf;
 
     unsigned long long i;
     unsigned long long *r, *s;
     r=(unsigned long long *)recvbuf;
     s=(unsigned long long *)sendbuf;
 
-    t_barrier(comm->t_barr, g_node_rank);
+    t_barrier(comm->coll->t_barr, g_node_rank);
 
     begin = MPI_Wtime();
 	if(g_node_rank != 0)
     {
 	    for(i=0; i<98304; i++)
         {
-          r[i] =  *(((unsigned long long *)(comm->sbuf[0]))+i);
+          r[i] =  *(((unsigned long long *)(comm->coll->sbuf[0]))+i);
         }
 	}
     
-    t_barrier(comm->t_barr, g_node_rank);
+    t_barrier(comm->coll->t_barr, g_node_rank);
    	  elapse = (MPI_Wtime() - begin);
 	  printf("intra-node fanout thread = %d, datasize = %d, time = %12.8f\n", g_node_rank,count,elapse);
     return MPI_SUCCESS;
@@ -184,23 +184,23 @@ int HMPI_AllreduceTestFanout2(void *sendbuf, void *recvbuf, int count, MPI_Datat
     //PROFILE_START(allreduce);
     
     double begin; double elapse;
-    comm->sbuf[g_node_rank]=sendbuf;
-    comm->rbuf[g_node_rank]=recvbuf;
+    comm->coll->sbuf[g_node_rank]=sendbuf;
+    comm->coll->rbuf[g_node_rank]=recvbuf;
 
     unsigned long long i;
     unsigned long long *r, *s;
     r=(unsigned long long *)recvbuf;
     s=(unsigned long long *)sendbuf;
 
-    t_barrier(comm->t_barr, g_node_rank);
+    t_barrier(comm->coll->t_barr, g_node_rank);
 
     begin = MPI_Wtime();
 	    for(i=0; i<98304; i++)
         {
-          r[i] =  *(((unsigned long long *)(comm->sbuf[rthread]))+i);
+          r[i] =  *(((unsigned long long *)(comm->coll->sbuf[g_numa_root]))+i);
         }
     
-    t_barrier(comm->t_barr, g_node_rank);
+    t_barrier(comm->coll->t_barr, g_node_rank);
    	  elapse = (MPI_Wtime() - begin);
 	  printf("intra-socket fanout thread = %d, datasize = %d, time = %12.8f\n", g_node_rank,count,elapse);
     return MPI_SUCCESS;
@@ -219,11 +219,11 @@ int HMPI_AllreduceTiledRed(void *sendbuf, void *recvbuf, int count, MPI_Datatype
     MPI_Type_size(datatype, &size);
     //to simplify, now only support threads number is the fold of sockets number
 	//number of threads per socket
-    //int numpst = g_nthreads/sockets;
-	//int socket_id = g_node_rank/numpst;
+    //int g_numa_size = g_node_size/sockets;
+	//int g_numa_node = g_node_rank/g_numa_size;
 
 	//root thread in each socket
-    //int rthread = g_node_rank/numpst*numpst;
+    //int g_numa_root = g_node_rank/g_numa_size*g_numa_size;
 
 	// dimensions of sockets in hypercube
 	int k=(int)sqrt((double)sockets);
@@ -236,23 +236,23 @@ int HMPI_AllreduceTiledRed(void *sendbuf, void *recvbuf, int count, MPI_Datatype
     void *tmp;
     stride1 = 128*1024/size;
 	//when data size larger than one chunk
-    if(count >= stride1*numpst)
+    if(count >= stride1*g_numa_size)
     {
-      chunksize1 = stride1*numpst;
+      chunksize1 = stride1*g_numa_size;
 	  remain1 =0;
       chunks = count/chunksize1;
       chunksize2 = count-chunksize1*chunks;
 	  if(chunksize2 > 0)
 	  {
-       stride2 = chunksize2/numpst;
-	   remain2 = chunksize2 - stride2*numpst;
+       stride2 = chunksize2/g_numa_size;
+	   remain2 = chunksize2 - stride2*g_numa_size;
 	   }
     }
 	//when data size smaller than one chunk
-    else if( count>= g_nthreads )
+    else if( count>= g_node_size )
     {
-     stride1 = count/numpst;
-	 remain1 = count - stride1*numpst;
+     stride1 = count/g_numa_size;
+	 remain1 = count - stride1*g_numa_size;
      chunks = 1;
      chunksize1 = count;
      chunksize2 = 0;
@@ -261,115 +261,115 @@ int HMPI_AllreduceTiledRed(void *sendbuf, void *recvbuf, int count, MPI_Datatype
 	else
 	{
 
-      if(g_node_rank%numpst == 0)
+      if(g_node_rank%g_numa_size == 0)
       {  
         tmp = (void *)malloc(size*count);
-        comm->tmp[g_node_rank] = tmp;
+        comm->coll->tmp[g_node_rank] = tmp;
       }
 
-      comm->sbuf[g_node_rank]=sendbuf;
-      comm->rbuf[g_node_rank]=recvbuf;
-      t_barrier(comm->t_barr, g_node_rank);
-	   if(g_node_rank%numpst == 0)
-	   for(j=g_node_rank; j<g_node_rank+numpst; j++)
+      comm->coll->sbuf[g_node_rank]=sendbuf;
+      comm->coll->rbuf[g_node_rank]=recvbuf;
+      t_barrier(comm->coll->t_barr, g_node_rank);
+	   if(g_node_rank%g_numa_size == 0)
+	   for(j=g_node_rank; j<g_node_rank+g_numa_size; j++)
 	   {
 	    if(j == g_node_rank)
-	       NBC_Operation((char *)comm->tmp[g_node_rank],
-		            (char *)comm->sbuf[j], 
-		            (char *)comm->sbuf[j+1], op, datatype, count);
+	       NBC_Operation((char *)comm->coll->tmp[g_node_rank],
+		            (char *)comm->coll->sbuf[j], 
+		            (char *)comm->coll->sbuf[j+1], op, datatype, count);
 	    else if(j == g_node_rank+1) continue;
 	    else 
-	      NBC_Operation((char *)comm->tmp[g_node_rank], 
-		            (char *)comm->tmp[g_node_rank], 
-	                    (char *)comm->sbuf[j], op, datatype, count);
+	      NBC_Operation((char *)comm->coll->tmp[g_node_rank], 
+		            (char *)comm->coll->tmp[g_node_rank], 
+	                    (char *)comm->coll->sbuf[j], op, datatype, count);
        }
 
-     t_barrier(comm->t_barr, g_node_rank);
+     t_barrier(comm->coll->t_barr, g_node_rank);
 
      if(g_net_size > 1)
 	 {
 		if(k == 0)
           if(g_node_rank==0)
 		  {
-            MPI_Allreduce((char *)tmp, (char *)recvbuf, count, datatype, op, comm->mpicomm);
+            MPI_Allreduce((char *)tmp, (char *)recvbuf, count, datatype, op, comm->comm);
 		  }
 //	    else if(k == 1)
 //          if(g_node_rank==0)
 //	      {  
-//           NBC_Operation((char *)comm->rbuf[g_node_rank], (char *)comm->tmp[0], (char *)comm->tmp[numpst], op, datatype, count);
-//           MPI_Allreduce(MPI_IN_PLACE, recvbuf, count, datatype, op, comm->mpicomm);
+//           NBC_Operation((char *)comm->coll->rbuf[g_node_rank], (char *)comm->coll->tmp[0], (char *)comm->coll->tmp[g_numa_size], op, datatype, count);
+//           MPI_Allreduce(MPI_IN_PLACE, recvbuf, count, datatype, op, comm->comm);
 //	      }
 	    if(k > 0)
 			{ 
 			  int l;
-			//  if(g_node_rank%numpst == 0)
+			//  if(g_node_rank%g_numa_size == 0)
 			//  {
 			    for( l=0; l<k; l++ )
 				{
 				    //use receive buffer and tmp buffer interchangeably
-			     if(g_node_rank%numpst == 0 && (socket_id%(int)pow(2,l)) == 0)
+			     if(g_node_rank%g_numa_size == 0 && (g_numa_node%(int)pow(2,l)) == 0)
 				 {
 					if(l%2 == 0)
-			      	  NBC_Operation((char *)recvbuf, (char*)comm->tmp[g_node_rank], (char*)comm->tmp[numpst*(socket_id^((int)pow(2,l)))], op, datatype, count);
+			      	  NBC_Operation((char *)recvbuf, (char*)comm->coll->tmp[g_node_rank], (char*)comm->coll->tmp[g_numa_size*(g_numa_node^((int)pow(2,l)))], op, datatype, count);
 					else
-			      	  NBC_Operation((char *)tmp, (char*)comm->rbuf[g_node_rank], (char*)comm->rbuf[numpst*(socket_id^((int)pow(2,l)))], op, datatype, count);
+			      	  NBC_Operation((char *)tmp, (char*)comm->coll->rbuf[g_node_rank], (char*)comm->coll->rbuf[g_numa_size*(g_numa_node^((int)pow(2,l)))], op, datatype, count);
 			     }
-                    t_barrier(comm->t_barr, g_node_rank);
+                    t_barrier(comm->coll->t_barr, g_node_rank);
 				}
 			   //l%2 == 0, final results stored in tmp buffer, else in receive buffer
-			   //if(g_node_rank%numpst == 0)
+			   //if(g_node_rank%g_numa_size == 0)
 			   if(g_node_rank == 0)
 			   {
 			     if(l%2 == 0)
 			     {
-                   MPI_Allreduce((char *)tmp, (char *)recvbuf, count, datatype, op, comm->mpicomm);
+                   MPI_Allreduce((char *)tmp, (char *)recvbuf, count, datatype, op, comm->comm);
 			     }
 			     else
-                   MPI_Allreduce(MPI_IN_PLACE, (char *)recvbuf, count, datatype, op, comm->mpicomm);
+                   MPI_Allreduce(MPI_IN_PLACE, (char *)recvbuf, count, datatype, op, comm->comm);
 			   }
 			//  }
 			}
-       t_barrier(comm->t_barr, g_node_rank);
+       t_barrier(comm->coll->t_barr, g_node_rank);
 
-       //if(g_node_rank%numpst!=0)
+       //if(g_node_rank%g_numa_size!=0)
        if(g_node_rank!=0)
-         //memcpy((void*)comm->rbuf[g_node_rank], (void*)comm->rbuf[rthread], count*size);
-         memcpy((void*)comm->rbuf[g_node_rank], (void*)comm->rbuf[0], count*size);
+         //memcpy((void*)comm->coll->rbuf[g_node_rank], (void*)comm->coll->rbuf[g_numa_root], count*size);
+         memcpy((void*)comm->coll->rbuf[g_node_rank], (void*)comm->coll->rbuf[0], count*size);
 	 }
      else
      {
 		if(k == 0)
-			memcpy((void*)comm->rbuf[g_node_rank], (void*)comm->tmp[k], count*size);
+			memcpy((void*)comm->coll->rbuf[g_node_rank], (void*)comm->coll->tmp[k], count*size);
 		else if(k == 1)
-    		NBC_Operation((char *)comm->rbuf[g_node_rank], (char *)comm->tmp[0], (char *)comm->tmp[numpst], op, datatype, count);
+    		NBC_Operation((char *)comm->coll->rbuf[g_node_rank], (char *)comm->coll->tmp[0], (char *)comm->coll->tmp[g_numa_size], op, datatype, count);
 		else
 			{ 
 			  int l;
 			  //allreduce among sockets, using hypercube
-			  //can also be changed to reduce and then broadcast, by setting socket_id equal to power of 2
+			  //can also be changed to reduce and then broadcast, by setting g_numa_node equal to power of 2
 			    for( l=0; l<k; l++ )
 				{
 				    //use receive buffer and tmp buffer interchangeably
-			      if(g_node_rank%numpst == 0)
+			      if(g_node_rank%g_numa_size == 0)
 				  {
 				   if(l%2 == 0)
-			      	  NBC_Operation(recvbuf, (char*)comm->tmp[g_node_rank], (char*)comm->tmp[numpst*(socket_id^((int)pow(2,l)))], op, datatype, count);
+			      	  NBC_Operation(recvbuf, (char*)comm->coll->tmp[g_node_rank], (char*)comm->coll->tmp[g_numa_size*(g_numa_node^((int)pow(2,l)))], op, datatype, count);
 					else
-			      	  NBC_Operation(tmp, (char*)comm->rbuf[g_node_rank], (char*)comm->rbuf[numpst*(socket_id^((int)pow(2,l)))], op, datatype, count);
+			      	  NBC_Operation(tmp, (char*)comm->coll->rbuf[g_node_rank], (char*)comm->coll->rbuf[g_numa_size*(g_numa_node^((int)pow(2,l)))], op, datatype, count);
 				   }
-                    t_barrier(comm->t_barr, g_node_rank);
+                    t_barrier(comm->coll->t_barr, g_node_rank);
 				}
 			   //l%2 == 0, final results stored in tmp buffer, else in receive buffer
 			   if(l%2 == 0)
-				 memcpy((void*)comm->rbuf[g_node_rank], (void*)comm->tmp[rthread], count*size);
+				 memcpy((void*)comm->coll->rbuf[g_node_rank], (void*)comm->coll->tmp[g_numa_root], count*size);
 			   else
-			     if(g_node_rank%numpst != 0)
-				 memcpy((void*)comm->rbuf[g_node_rank], (void*)comm->rbuf[rthread], count*size);
+			     if(g_node_rank%g_numa_size != 0)
+				 memcpy((void*)comm->coll->rbuf[g_node_rank], (void*)comm->coll->rbuf[g_numa_root], count*size);
 			}
 	 }
-     t_barrier(comm->t_barr, g_node_rank);
+     t_barrier(comm->coll->t_barr, g_node_rank);
 
-     if(g_node_rank%numpst == 0)
+     if(g_node_rank%g_numa_size == 0)
      free(tmp);
      return MPI_SUCCESS;
 	}
@@ -377,7 +377,7 @@ int HMPI_AllreduceTiledRed(void *sendbuf, void *recvbuf, int count, MPI_Datatype
 
 	//printf("stride1=%d,stride2=%d,chunksize1=%d,chunksize2=%d,chunks=%d,remain1=%d,remain2=%d \n",stride1,stride2,chunksize1,chunksize2,chunks,remain1,remain2);
 
-    //printf("numpst=%d, threads=%d, stride=%d, chunksize=%d, chunks=%d, remain=%d\n",numpst, g_nthreads,stride, chunksize, chunks, remain);
+    //printf("g_numa_size=%d, threads=%d, stride=%d, chunksize=%d, chunks=%d, remain=%d\n",g_numa_size, g_node_size,stride, chunksize, chunks, remain);
     //MPI_Type_get_extent(datatype, &lb, &extent);
     //MPI_Type_extent(datatype, &extent);
 
@@ -385,80 +385,80 @@ int HMPI_AllreduceTiledRed(void *sendbuf, void *recvbuf, int count, MPI_Datatype
     if(extent != size) {
         printf("allreduce non-contiguous derived datatypes are not supported yet!\n");
         fflush(stdout);
-        MPI_Abort(comm->mpicomm, 0);
+        MPI_Abort(comm->comm, 0);
     }
 #endif
-//printf("stride1=%d,stride2=%d,chunksize1=%d,chunksize2=%d,chunks=%d,remain1=%d,remain2=%d,thread_id=%d,numpst=%d,rthread=%d, g_node_rank=%d \n",stride1,stride2,chunksize1,chunksize2,chunks,remain1,remain2,thread_id,numpst,rthread,g_node_rank);
+//printf("stride1=%d,stride2=%d,chunksize1=%d,chunksize2=%d,chunks=%d,remain1=%d,remain2=%d,g_numa_rank=%d,g_numa_size=%d,g_numa_root=%d, g_node_rank=%d \n",stride1,stride2,chunksize1,chunksize2,chunks,remain1,remain2,g_numa_rank,g_numa_size,g_numa_root,g_node_rank);
 	DEBUG3(
     PROFILE_INIT(g_node_rank);
     PROFILE_START(allreduce);)
     //collect the addresses of send buffer and recieve buffer
 
-    if(g_node_rank%numpst == 0)
+    if(g_node_rank%g_numa_size == 0)
     {  
       tmp = (void *)malloc(size*chunksize1);
-      comm->tmp[g_node_rank] = tmp;
+      comm->coll->tmp[g_node_rank] = tmp;
     }
-    comm->sbuf[g_node_rank]=sendbuf;
-    comm->rbuf[g_node_rank]=recvbuf;
+    comm->coll->sbuf[g_node_rank]=sendbuf;
+    comm->coll->rbuf[g_node_rank]=recvbuf;
 
-    t_barrier(comm->t_barr, g_node_rank);
+    t_barrier(comm->coll->t_barr, g_node_rank);
     //barrier(&comm->barr, g_node_rank);
 	
     for(i=0; i<chunks; i++)
     {
 
-	   if(g_node_rank%numpst == numpst-1)
-	   for(j=0; j<numpst; j++)
+	   if(g_node_rank%g_numa_size == g_numa_size-1)
+	   for(j=0; j<g_numa_size; j++)
 	   {
 	    if(j == 0)
-	       NBC_Operation((char *)comm->tmp[rthread]+(g_node_rank%numpst)*stride1*size,
-		            (char *)comm->sbuf[j+rthread]+(g_node_rank%numpst)*stride1*size+chunksize1*i*size,
-					(char *)comm->sbuf[j+rthread+1]+(g_node_rank%numpst)*stride1*size+chunksize1*i*size, op, datatype, stride1+remain1);
+	       NBC_Operation((char *)comm->coll->tmp[g_numa_root]+(g_node_rank%g_numa_size)*stride1*size,
+		            (char *)comm->coll->sbuf[j+g_numa_root]+(g_node_rank%g_numa_size)*stride1*size+chunksize1*i*size,
+					(char *)comm->coll->sbuf[j+g_numa_root+1]+(g_node_rank%g_numa_size)*stride1*size+chunksize1*i*size, op, datatype, stride1+remain1);
 	    else if(j == 1) continue;
 	    else 
-	      NBC_Operation((char *)comm->tmp[rthread]+(g_node_rank%numpst)*stride1*size, 
-		            (char *)comm->tmp[rthread]+(g_node_rank%numpst)*stride1*size, 
-                    (char *)comm->sbuf[j+rthread]+(g_node_rank%numpst)*stride1*size+chunksize1*i*size, op, datatype, stride1+remain1);
+	      NBC_Operation((char *)comm->coll->tmp[g_numa_root]+(g_node_rank%g_numa_size)*stride1*size, 
+		            (char *)comm->coll->tmp[g_numa_root]+(g_node_rank%g_numa_size)*stride1*size, 
+                    (char *)comm->coll->sbuf[j+g_numa_root]+(g_node_rank%g_numa_size)*stride1*size+chunksize1*i*size, op, datatype, stride1+remain1);
        }
 	   else
-	   for(j=0; j<numpst; j++)
+	   for(j=0; j<g_numa_size; j++)
 	   {
 	    if(j == 0)
-	       NBC_Operation((char *)comm->tmp[rthread]+(g_node_rank%numpst)*stride1*size,
-		            (char *)comm->sbuf[j+rthread]+(g_node_rank%numpst)*stride1*size+chunksize1*i*size,
-					(char *)comm->sbuf[j+rthread+1]+(g_node_rank%numpst)*stride1*size+chunksize1*i*size, op, datatype, stride1);
+	       NBC_Operation((char *)comm->coll->tmp[g_numa_root]+(g_node_rank%g_numa_size)*stride1*size,
+		            (char *)comm->coll->sbuf[j+g_numa_root]+(g_node_rank%g_numa_size)*stride1*size+chunksize1*i*size,
+					(char *)comm->coll->sbuf[j+g_numa_root+1]+(g_node_rank%g_numa_size)*stride1*size+chunksize1*i*size, op, datatype, stride1);
 	    else if(j == 1) continue;
 	    else 
-	      NBC_Operation((char *)comm->tmp[rthread]+(g_node_rank%numpst)*stride1*size, 
-		            (char *)comm->tmp[rthread]+(g_node_rank%numpst)*stride1*size, 
-                    (char *)comm->sbuf[j+rthread]+(g_node_rank%numpst)*stride1*size+chunksize1*i*size, op, datatype, stride1);
+	      NBC_Operation((char *)comm->coll->tmp[g_numa_root]+(g_node_rank%g_numa_size)*stride1*size, 
+		            (char *)comm->coll->tmp[g_numa_root]+(g_node_rank%g_numa_size)*stride1*size, 
+                    (char *)comm->coll->sbuf[j+g_numa_root]+(g_node_rank%g_numa_size)*stride1*size+chunksize1*i*size, op, datatype, stride1);
        }
     //barrier(&comm->barr, g_node_rank);
-     t_barrier(comm->t_barr, g_node_rank);
+     t_barrier(comm->coll->t_barr, g_node_rank);
      
      if(g_net_size > 1)
 	 {
        if(k == 0)
          if(g_node_rank==0)
          {
-               MPI_Allreduce((char *)tmp, (char *)recvbuf+chunksize1*i*size, chunksize1, datatype, op, comm->mpicomm);
+               MPI_Allreduce((char *)tmp, (char *)recvbuf+chunksize1*i*size, chunksize1, datatype, op, comm->comm);
          }
 	  // if(k == 1)
 	  // {
-      //   if(g_node_rank<numpst)
-	  //    if(g_node_rank == numpst-1)
-	  //     NBC_Operation((char *)comm->rbuf[0]+g_node_rank*stride1*size+chunksize1*i*size,
-	  //                  (char *)comm->tmp[0]+g_node_rank*stride1*size,
-	  //  	            (char *)comm->tmp[numpst]+g_node_rank*stride1*size, op, datatype, stride1+remain1);
+      //   if(g_node_rank<g_numa_size)
+	  //    if(g_node_rank == g_numa_size-1)
+	  //     NBC_Operation((char *)comm->coll->rbuf[0]+g_node_rank*stride1*size+chunksize1*i*size,
+	  //                  (char *)comm->coll->tmp[0]+g_node_rank*stride1*size,
+	  //  	            (char *)comm->coll->tmp[g_numa_size]+g_node_rank*stride1*size, op, datatype, stride1+remain1);
 	  //    else
-	  //    NBC_Operation((char *)comm->rbuf[0]+g_node_rank*stride1*size+chunksize1*i*size,
-	  //                  (char *)comm->tmp[0]+g_node_rank*stride1*size,
-	  //                  (char *)comm->tmp[numpst]+g_node_rank*stride1*size, op, datatype, stride1);
-      //  t_barrier(comm->t_barr, g_node_rank);
+	  //    NBC_Operation((char *)comm->coll->rbuf[0]+g_node_rank*stride1*size+chunksize1*i*size,
+	  //                  (char *)comm->coll->tmp[0]+g_node_rank*stride1*size,
+	  //                  (char *)comm->coll->tmp[g_numa_size]+g_node_rank*stride1*size, op, datatype, stride1);
+      //  t_barrier(comm->coll->t_barr, g_node_rank);
 	  //  if(g_node_rank==0)
 	  //  {  
-      //   MPI_Allreduce(MPI_IN_PLACE, (char *)recvbuf+chunksize1*i*size, chunksize1, datatype, op, comm->mpicomm);
+      //   MPI_Allreduce(MPI_IN_PLACE, (char *)recvbuf+chunksize1*i*size, chunksize1, datatype, op, comm->comm);
 	  //  }
 	  // }
 	  if(k > 0)
@@ -467,54 +467,54 @@ int HMPI_AllreduceTiledRed(void *sendbuf, void *recvbuf, int count, MPI_Datatype
 		   for( l=0; l<k; l++ )
 		   {
 			//do a inter-socket reduce in hypercube, use receive buffer and tmp buffer interchangeably
-			if( socket_id%((int)pow(2,l)) == 0 )
+			if( g_numa_node%((int)pow(2,l)) == 0 )
 			{
 			  if(l%2 == 0)
 			  {
-                if(g_node_rank%numpst == numpst-1)
-			       NBC_Operation((char *)comm->rbuf[rthread]+(g_node_rank%numpst)*stride1*size+chunksize1*i*size, (char*)comm->tmp[rthread]+(g_node_rank%numpst)*stride1*size, (char*)comm->tmp[numpst*(socket_id^((int)pow(2,l )))]+(g_node_rank%numpst)*stride1*size, op, datatype, stride1+remain1);
+                if(g_node_rank%g_numa_size == g_numa_size-1)
+			       NBC_Operation((char *)comm->coll->rbuf[g_numa_root]+(g_node_rank%g_numa_size)*stride1*size+chunksize1*i*size, (char*)comm->coll->tmp[g_numa_root]+(g_node_rank%g_numa_size)*stride1*size, (char*)comm->coll->tmp[g_numa_size*(g_numa_node^((int)pow(2,l )))]+(g_node_rank%g_numa_size)*stride1*size, op, datatype, stride1+remain1);
                 else
-			    NBC_Operation((char *)comm->rbuf[rthread]+(g_node_rank%numpst)*stride1*size+chunksize1*i*size, (char*)comm->tmp[rthread]+(g_node_rank%numpst)*stride1*size, (char*)comm->tmp[numpst*(socket_id^((int)pow(2,l )))]+(g_node_rank%numpst)*stride1*size, op, datatype, stride1);
+			    NBC_Operation((char *)comm->coll->rbuf[g_numa_root]+(g_node_rank%g_numa_size)*stride1*size+chunksize1*i*size, (char*)comm->coll->tmp[g_numa_root]+(g_node_rank%g_numa_size)*stride1*size, (char*)comm->coll->tmp[g_numa_size*(g_numa_node^((int)pow(2,l )))]+(g_node_rank%g_numa_size)*stride1*size, op, datatype, stride1);
 			  }
 			  else
 			  {
 			    
-                if(g_node_rank%numpst == numpst-1)
-			       NBC_Operation((char *)comm->tmp[rthread]+(g_node_rank%numpst)*stride1*size, (char*)comm->rbuf[rthread]+(g_node_rank%numpst)*stride1*size+chunksize1*i*size, (char*)comm->rbuf[numpst*(socket_id^((int)pow(2,l )))]+(g_node_rank%numpst)*stride1*size+chunksize1*i*size, op, datatype, stride1+remain1);
+                if(g_node_rank%g_numa_size == g_numa_size-1)
+			       NBC_Operation((char *)comm->coll->tmp[g_numa_root]+(g_node_rank%g_numa_size)*stride1*size, (char*)comm->coll->rbuf[g_numa_root]+(g_node_rank%g_numa_size)*stride1*size+chunksize1*i*size, (char*)comm->coll->rbuf[g_numa_size*(g_numa_node^((int)pow(2,l )))]+(g_node_rank%g_numa_size)*stride1*size+chunksize1*i*size, op, datatype, stride1+remain1);
                 else
-			       NBC_Operation((char *)comm->tmp[rthread]+(g_node_rank%numpst)*stride1*size, (char*)comm->rbuf[rthread]+(g_node_rank%numpst)*stride1*size+chunksize1*i*size, (char*)comm->rbuf[numpst*(socket_id^((int)pow(2,l )))]+(g_node_rank%numpst)*stride1*size+chunksize1*i*size, op, datatype, stride1);
+			       NBC_Operation((char *)comm->coll->tmp[g_numa_root]+(g_node_rank%g_numa_size)*stride1*size, (char*)comm->coll->rbuf[g_numa_root]+(g_node_rank%g_numa_size)*stride1*size+chunksize1*i*size, (char*)comm->coll->rbuf[g_numa_size*(g_numa_node^((int)pow(2,l )))]+(g_node_rank%g_numa_size)*stride1*size+chunksize1*i*size, op, datatype, stride1);
 			  
 			  }
 			}
-			t_barrier(comm->t_barr, g_node_rank);
+			t_barrier(comm->coll->t_barr, g_node_rank);
 		   }
 	   if(g_node_rank == 0)
-	 	    MPI_Allreduce(MPI_IN_PLACE, (char *)recvbuf+chunksize1*i*size, chunksize1, datatype, op, comm->mpicomm);
+	 	    MPI_Allreduce(MPI_IN_PLACE, (char *)recvbuf+chunksize1*i*size, chunksize1, datatype, op, comm->comm);
 			
-//			t_barrier(comm->t_barr, g_node_rank);
-//	   if(g_node_rank == numpst)
-//	 	    MPI_Allreduce(MPI_IN_PLACE, (char *)recvbuf+chunksize1*i*size, chunksize1, datatype, op, comm->mpicomm);
-	 //  if(g_node_rank%numpst == 0)
+//			t_barrier(comm->coll->t_barr, g_node_rank);
+//	   if(g_node_rank == g_numa_size)
+//	 	    MPI_Allreduce(MPI_IN_PLACE, (char *)recvbuf+chunksize1*i*size, chunksize1, datatype, op, comm->comm);
+	 //  if(g_node_rank%g_numa_size == 0)
 	 //  if(l%2 == 0)
-	 //       MPI_Allreduce((char *)tmp, (char *)recvbuf+chunksize1*i*size, chunksize1, datatype, op, comm->mpicomm);
+	 //       MPI_Allreduce((char *)tmp, (char *)recvbuf+chunksize1*i*size, chunksize1, datatype, op, comm->comm);
 	 //  else
-	 // 	    MPI_Allreduce(MPI_IN_PLACE, (char *)recvbuf+chunksize1*i*size, chunksize1, datatype, op, comm->mpicomm);
+	 // 	    MPI_Allreduce(MPI_IN_PLACE, (char *)recvbuf+chunksize1*i*size, chunksize1, datatype, op, comm->comm);
        
 	   }
 
-	   t_barrier(comm->t_barr, g_node_rank);
+	   t_barrier(comm->coll->t_barr, g_node_rank);
        if(g_node_rank != 0)
-       memcpy((char*)comm->rbuf[g_node_rank]+chunksize1*i*size, (char*)comm->rbuf[0]+chunksize1*i*size, chunksize1*size);
+       memcpy((char*)comm->coll->rbuf[g_node_rank]+chunksize1*i*size, (char*)comm->coll->rbuf[0]+chunksize1*i*size, chunksize1*size);
       // if(g_node_rank != 0)
-      // memcpy((char*)comm->rbuf[g_node_rank]+chunksize1*i*size, (char*)comm->rbuf[0]+chunksize1*i*size, chunksize1*size);
+      // memcpy((char*)comm->coll->rbuf[g_node_rank]+chunksize1*i*size, (char*)comm->coll->rbuf[0]+chunksize1*i*size, chunksize1*size);
 	 }
 
      else
 	 {
        if(k == 0)
-         memcpy((char *)comm->rbuf[g_node_rank]+chunksize1*i*size, (char *)comm->tmp[0], chunksize1*size);
+         memcpy((char *)comm->coll->rbuf[g_node_rank]+chunksize1*i*size, (char *)comm->coll->tmp[0], chunksize1*size);
 	   //else if(k == 1)
-       // NBC_Operation((char *)comm->rbuf[g_node_rank]+chunksize1*i*size, (char *)comm->tmp[0], (char *)comm->tmp[numpst], op, datatype, chunksize1);
+       // NBC_Operation((char *)comm->coll->rbuf[g_node_rank]+chunksize1*i*size, (char *)comm->coll->tmp[0], (char *)comm->coll->tmp[g_numa_size], op, datatype, chunksize1);
 	   else
 	   {
 		   int l;
@@ -523,88 +523,88 @@ int HMPI_AllreduceTiledRed(void *sendbuf, void *recvbuf, int count, MPI_Datatype
 			//do a inter-socket allreduce in hypercube, use receive buffer and tmp buffer interchangeably
 			if(l%2 == 0)
 			{
-              if(g_node_rank%numpst == numpst-1)
-			     NBC_Operation((char *)comm->rbuf[rthread]+(g_node_rank%numpst)*stride1*size+chunksize1*i*size, (char*)comm->tmp[rthread]+(g_node_rank%numpst)*stride1*size, (char*)comm->tmp[numpst*(socket_id^((int)pow(2,l )))]+(g_node_rank%numpst)*stride1*size, op, datatype, stride1+remain1);
+              if(g_node_rank%g_numa_size == g_numa_size-1)
+			     NBC_Operation((char *)comm->coll->rbuf[g_numa_root]+(g_node_rank%g_numa_size)*stride1*size+chunksize1*i*size, (char*)comm->coll->tmp[g_numa_root]+(g_node_rank%g_numa_size)*stride1*size, (char*)comm->coll->tmp[g_numa_size*(g_numa_node^((int)pow(2,l )))]+(g_node_rank%g_numa_size)*stride1*size, op, datatype, stride1+remain1);
               else
-			  NBC_Operation((char *)comm->rbuf[rthread]+(g_node_rank%numpst)*stride1*size+chunksize1*i*size, (char*)comm->tmp[rthread]+(g_node_rank%numpst)*stride1*size, (char*)comm->tmp[numpst*(socket_id^((int)pow(2,l )))]+(g_node_rank%numpst)*stride1*size, op, datatype, stride1);
+			  NBC_Operation((char *)comm->coll->rbuf[g_numa_root]+(g_node_rank%g_numa_size)*stride1*size+chunksize1*i*size, (char*)comm->coll->tmp[g_numa_root]+(g_node_rank%g_numa_size)*stride1*size, (char*)comm->coll->tmp[g_numa_size*(g_numa_node^((int)pow(2,l )))]+(g_node_rank%g_numa_size)*stride1*size, op, datatype, stride1);
 			}
 			else
 			{
 			  
-              if(g_node_rank%numpst == numpst-1)
-			     NBC_Operation((char *)comm->tmp[rthread]+(g_node_rank%numpst)*stride1*size, (char*)comm->rbuf[rthread]+(g_node_rank%numpst)*stride1*size+chunksize1*i*size, (char*)comm->rbuf[numpst*(socket_id^((int)pow(2,l )))]+(g_node_rank%numpst)*stride1*size+chunksize1*i*size, op, datatype, stride1+remain1);
+              if(g_node_rank%g_numa_size == g_numa_size-1)
+			     NBC_Operation((char *)comm->coll->tmp[g_numa_root]+(g_node_rank%g_numa_size)*stride1*size, (char*)comm->coll->rbuf[g_numa_root]+(g_node_rank%g_numa_size)*stride1*size+chunksize1*i*size, (char*)comm->coll->rbuf[g_numa_size*(g_numa_node^((int)pow(2,l )))]+(g_node_rank%g_numa_size)*stride1*size+chunksize1*i*size, op, datatype, stride1+remain1);
               else
-			     NBC_Operation((char *)comm->tmp[rthread]+(g_node_rank%numpst)*stride1*size, (char*)comm->rbuf[rthread]+(g_node_rank%numpst)*stride1*size+chunksize1*i*size, (char*)comm->rbuf[numpst*(socket_id^((int)pow(2,l )))]+(g_node_rank%numpst)*stride1*size+chunksize1*i*size, op, datatype, stride1);
+			     NBC_Operation((char *)comm->coll->tmp[g_numa_root]+(g_node_rank%g_numa_size)*stride1*size, (char*)comm->coll->rbuf[g_numa_root]+(g_node_rank%g_numa_size)*stride1*size+chunksize1*i*size, (char*)comm->coll->rbuf[g_numa_size*(g_numa_node^((int)pow(2,l )))]+(g_node_rank%g_numa_size)*stride1*size+chunksize1*i*size, op, datatype, stride1);
 			
 			}
-			t_barrier(comm->t_barr, g_node_rank);
+			t_barrier(comm->coll->t_barr, g_node_rank);
 		   }
 		if(l%2 == 0)
-          memcpy((char*)comm->rbuf[g_node_rank]+chunksize1*i*size, (char*)comm->tmp[rthread], chunksize1*size);
+          memcpy((char*)comm->coll->rbuf[g_node_rank]+chunksize1*i*size, (char*)comm->coll->tmp[g_numa_root], chunksize1*size);
 		else
-          if(g_node_rank%numpst != 0)
-          memcpy((char*)comm->rbuf[g_node_rank]+chunksize1*i*size, (char*)comm->rbuf[rthread]+chunksize1*i*size, chunksize1*size);
+          if(g_node_rank%g_numa_size != 0)
+          memcpy((char*)comm->coll->rbuf[g_node_rank]+chunksize1*i*size, (char*)comm->coll->rbuf[g_numa_root]+chunksize1*i*size, chunksize1*size);
 	   } 
 	 }
 
-     t_barrier(comm->t_barr, g_node_rank);
+     t_barrier(comm->coll->t_barr, g_node_rank);
     
     }
   
 
     if(chunksize2 >0)
     {
-	   if(g_node_rank%numpst == numpst-1)
-	   for(j=0; j<numpst; j++)
+	   if(g_node_rank%g_numa_size == g_numa_size-1)
+	   for(j=0; j<g_numa_size; j++)
 	   {
 	    if(j == 0)
-	       NBC_Operation((char *)comm->tmp[rthread]+(g_node_rank%numpst)*stride2*size,
-		            (char *)comm->sbuf[j+rthread]+(g_node_rank%numpst)*stride2*size+chunksize1*i*size,
-					(char *)comm->sbuf[j+rthread+1]+(g_node_rank%numpst)*stride2*size+chunksize1*i*size, op, datatype, stride2+remain2);
+	       NBC_Operation((char *)comm->coll->tmp[g_numa_root]+(g_node_rank%g_numa_size)*stride2*size,
+		            (char *)comm->coll->sbuf[j+g_numa_root]+(g_node_rank%g_numa_size)*stride2*size+chunksize1*i*size,
+					(char *)comm->coll->sbuf[j+g_numa_root+1]+(g_node_rank%g_numa_size)*stride2*size+chunksize1*i*size, op, datatype, stride2+remain2);
 	    else if(j == 1) continue;
 	    else 
-	      NBC_Operation((char *)comm->tmp[rthread]+(g_node_rank%numpst)*stride2*size, 
-		            (char *)comm->tmp[rthread]+(g_node_rank%numpst)*stride2*size, 
-                    (char *)comm->sbuf[j+rthread]+(g_node_rank%numpst)*stride2*size+chunksize1*i*size, op, datatype, stride2+remain2);
+	      NBC_Operation((char *)comm->coll->tmp[g_numa_root]+(g_node_rank%g_numa_size)*stride2*size, 
+		            (char *)comm->coll->tmp[g_numa_root]+(g_node_rank%g_numa_size)*stride2*size, 
+                    (char *)comm->coll->sbuf[j+g_numa_root]+(g_node_rank%g_numa_size)*stride2*size+chunksize1*i*size, op, datatype, stride2+remain2);
        }
 	   else
-	   for(j=0; j<numpst; j++)
+	   for(j=0; j<g_numa_size; j++)
 	   {
 	    if(j == 0)
-	       NBC_Operation((char *)comm->tmp[rthread]+(g_node_rank%numpst)*stride2*size,
-		            (char *)comm->sbuf[j+rthread]+(g_node_rank%numpst)*stride2*size+chunksize1*i*size,
-					(char *)comm->sbuf[j+rthread+1]+(g_node_rank%numpst)*stride2*size+chunksize1*i*size, op, datatype, stride2);
+	       NBC_Operation((char *)comm->coll->tmp[g_numa_root]+(g_node_rank%g_numa_size)*stride2*size,
+		            (char *)comm->coll->sbuf[j+g_numa_root]+(g_node_rank%g_numa_size)*stride2*size+chunksize1*i*size,
+					(char *)comm->coll->sbuf[j+g_numa_root+1]+(g_node_rank%g_numa_size)*stride2*size+chunksize1*i*size, op, datatype, stride2);
 	    else if(j == 1) continue;
 	    else 
-	      NBC_Operation((char *)comm->tmp[rthread]+(g_node_rank%numpst)*stride2*size, 
-		            (char *)comm->tmp[rthread]+(g_node_rank%numpst)*stride2*size, 
-                    (char *)comm->sbuf[j+rthread]+(g_node_rank%numpst)*stride2*size+chunksize1*i*size, op, datatype, stride2);
+	      NBC_Operation((char *)comm->coll->tmp[g_numa_root]+(g_node_rank%g_numa_size)*stride2*size, 
+		            (char *)comm->coll->tmp[g_numa_root]+(g_node_rank%g_numa_size)*stride2*size, 
+                    (char *)comm->coll->sbuf[j+g_numa_root]+(g_node_rank%g_numa_size)*stride2*size+chunksize1*i*size, op, datatype, stride2);
        }
     //barrier(&comm->barr, g_node_rank);
-     t_barrier(comm->t_barr, g_node_rank);
+     t_barrier(comm->coll->t_barr, g_node_rank);
      
      if(g_net_size > 1)
 	 {
        if(k == 0)
          if(g_node_rank==0)
          {
-               MPI_Allreduce((char *)tmp, (char *)recvbuf+chunksize1*i*size, chunksize2, datatype, op, comm->mpicomm);
+               MPI_Allreduce((char *)tmp, (char *)recvbuf+chunksize1*i*size, chunksize2, datatype, op, comm->comm);
          }
 	  //  if(k == 1)
 	  // {
-      //   if(g_node_rank<numpst)
-	  //    if(g_node_rank == numpst-1)
-	  //     NBC_Operation((char *)comm->rbuf[0]+g_node_rank*stride2*size+chunksize1*i*size,
-	  //                  (char *)comm->tmp[0]+g_node_rank*stride2*size,
-	  //  	            (char *)comm->tmp[numpst]+g_node_rank*stride2*size, op, datatype, stride2+remain2);
+      //   if(g_node_rank<g_numa_size)
+	  //    if(g_node_rank == g_numa_size-1)
+	  //     NBC_Operation((char *)comm->coll->rbuf[0]+g_node_rank*stride2*size+chunksize1*i*size,
+	  //                  (char *)comm->coll->tmp[0]+g_node_rank*stride2*size,
+	  //  	            (char *)comm->coll->tmp[g_numa_size]+g_node_rank*stride2*size, op, datatype, stride2+remain2);
 	  //    else
-	  //    NBC_Operation((char *)comm->rbuf[0]+g_node_rank*stride2*size+chunksize1*i*size,
-	  //                  (char *)comm->tmp[0]+g_node_rank*stride2*size,
-	  //                  (char *)comm->tmp[numpst]+g_node_rank*stride2*size, op, datatype, stride2);
-      //  t_barrier(comm->t_barr, g_node_rank);
+	  //    NBC_Operation((char *)comm->coll->rbuf[0]+g_node_rank*stride2*size+chunksize1*i*size,
+	  //                  (char *)comm->coll->tmp[0]+g_node_rank*stride2*size,
+	  //                  (char *)comm->coll->tmp[g_numa_size]+g_node_rank*stride2*size, op, datatype, stride2);
+      //  t_barrier(comm->coll->t_barr, g_node_rank);
 	  //  if(g_node_rank==0)
 	  //  {  
-      //   MPI_Allreduce(MPI_IN_PLACE, (char *)recvbuf+chunksize1*i*size, chunksize2, datatype, op, comm->mpicomm);
+      //   MPI_Allreduce(MPI_IN_PLACE, (char *)recvbuf+chunksize1*i*size, chunksize2, datatype, op, comm->comm);
 	  //  }
 	  // }
 	  if(k > 0)
@@ -615,52 +615,52 @@ int HMPI_AllreduceTiledRed(void *sendbuf, void *recvbuf, int count, MPI_Datatype
 			//do a inter-socket reduce in hypercube, use receive buffer and tmp buffer interchangeably
 			if(l%2 == 0)
 			{
-			  if( socket_id%((int)pow(2,l)) == 0 )
+			  if( g_numa_node%((int)pow(2,l)) == 0 )
 			  {
-                if(g_node_rank%numpst == numpst-1)
-			       NBC_Operation((char *)comm->rbuf[rthread]+(g_node_rank%numpst)*stride2*size+chunksize1*i*size, (char*)comm->tmp[rthread]+(g_node_rank%numpst)*stride2*size, (char*)comm->tmp[numpst*(socket_id^((int)pow(2,l )))]+(g_node_rank%numpst)*stride2*size, op, datatype, stride2+remain2);
+                if(g_node_rank%g_numa_size == g_numa_size-1)
+			       NBC_Operation((char *)comm->coll->rbuf[g_numa_root]+(g_node_rank%g_numa_size)*stride2*size+chunksize1*i*size, (char*)comm->coll->tmp[g_numa_root]+(g_node_rank%g_numa_size)*stride2*size, (char*)comm->coll->tmp[g_numa_size*(g_numa_node^((int)pow(2,l )))]+(g_node_rank%g_numa_size)*stride2*size, op, datatype, stride2+remain2);
                 else
-			    NBC_Operation((char *)comm->rbuf[rthread]+(g_node_rank%numpst)*stride2*size+chunksize1*i*size, (char*)comm->tmp[rthread]+(g_node_rank%numpst)*stride2*size, (char*)comm->tmp[numpst*(socket_id^((int)pow(2,l )))]+(g_node_rank%numpst)*stride2*size, op, datatype, stride2);
+			    NBC_Operation((char *)comm->coll->rbuf[g_numa_root]+(g_node_rank%g_numa_size)*stride2*size+chunksize1*i*size, (char*)comm->coll->tmp[g_numa_root]+(g_node_rank%g_numa_size)*stride2*size, (char*)comm->coll->tmp[g_numa_size*(g_numa_node^((int)pow(2,l )))]+(g_node_rank%g_numa_size)*stride2*size, op, datatype, stride2);
 			  }
 			}
 			else
 			{
-              if(g_node_rank%numpst == numpst-1)
-			     NBC_Operation((char *)comm->tmp[rthread]+(g_node_rank%numpst)*stride2*size, (char*)comm->rbuf[rthread]+(g_node_rank%numpst)*stride2*size+chunksize1*i*size, (char*)comm->rbuf[numpst*(socket_id^((int)pow(2,l )))]+(g_node_rank%numpst)*stride2*size+chunksize1*i*size, op, datatype, stride2+remain2);
+              if(g_node_rank%g_numa_size == g_numa_size-1)
+			     NBC_Operation((char *)comm->coll->tmp[g_numa_root]+(g_node_rank%g_numa_size)*stride2*size, (char*)comm->coll->rbuf[g_numa_root]+(g_node_rank%g_numa_size)*stride2*size+chunksize1*i*size, (char*)comm->coll->rbuf[g_numa_size*(g_numa_node^((int)pow(2,l )))]+(g_node_rank%g_numa_size)*stride2*size+chunksize1*i*size, op, datatype, stride2+remain2);
               else
-			     NBC_Operation((char *)comm->tmp[rthread]+(g_node_rank%numpst)*stride2*size, (char*)comm->rbuf[rthread]+(g_node_rank%numpst)*stride2*size+chunksize1*i*size, (char*)comm->rbuf[numpst*(socket_id^((int)pow(2,l )))]+(g_node_rank%numpst)*stride2*size+chunksize1*i*size, op, datatype, stride2);
+			     NBC_Operation((char *)comm->coll->tmp[g_numa_root]+(g_node_rank%g_numa_size)*stride2*size, (char*)comm->coll->rbuf[g_numa_root]+(g_node_rank%g_numa_size)*stride2*size+chunksize1*i*size, (char*)comm->coll->rbuf[g_numa_size*(g_numa_node^((int)pow(2,l )))]+(g_node_rank%g_numa_size)*stride2*size+chunksize1*i*size, op, datatype, stride2);
 			}
-			t_barrier(comm->t_barr, g_node_rank);
+			t_barrier(comm->coll->t_barr, g_node_rank);
 		   }
 
-	   //t_barrier(comm->t_barr, g_node_rank);
+	   //t_barrier(comm->coll->t_barr, g_node_rank);
 	   if(g_node_rank == 0)
-	  	    MPI_Allreduce(MPI_IN_PLACE, (char *)recvbuf+chunksize1*i*size, chunksize2, datatype, op, comm->mpicomm);
+	  	    MPI_Allreduce(MPI_IN_PLACE, (char *)recvbuf+chunksize1*i*size, chunksize2, datatype, op, comm->comm);
 
-	 //  t_barrier(comm->t_barr, g_node_rank);
-	 //  if(g_node_rank == numpst)
-	 // 	    MPI_Allreduce(MPI_IN_PLACE, (char *)recvbuf+chunksize1*i*size, chunksize2, datatype, op, comm->mpicomm);
-	  // if(g_node_rank%numpst == 0)
+	 //  t_barrier(comm->coll->t_barr, g_node_rank);
+	 //  if(g_node_rank == g_numa_size)
+	 // 	    MPI_Allreduce(MPI_IN_PLACE, (char *)recvbuf+chunksize1*i*size, chunksize2, datatype, op, comm->comm);
+	  // if(g_node_rank%g_numa_size == 0)
 	  // if(l%2 == 0)
-	  //      MPI_Allreduce((char *)tmp, (char *)recvbuf+chunksize1*i*size, chunksize2, datatype, op, comm->mpicomm);
+	  //      MPI_Allreduce((char *)tmp, (char *)recvbuf+chunksize1*i*size, chunksize2, datatype, op, comm->comm);
 	  // else
-	  //	    MPI_Allreduce(MPI_IN_PLACE, (char *)recvbuf+chunksize1*i*size, chunksize2, datatype, op, comm->mpicomm);
+	  //	    MPI_Allreduce(MPI_IN_PLACE, (char *)recvbuf+chunksize1*i*size, chunksize2, datatype, op, comm->comm);
        
 	   }
 
-	   t_barrier(comm->t_barr, g_node_rank);
+	   t_barrier(comm->coll->t_barr, g_node_rank);
       // if(g_node_rank!= 0)
-      // memcpy((char*)comm->rbuf[g_node_rank]+chunksize1*i*size, (char*)comm->rbuf[0]+chunksize1*i*size, chunksize2*size);
+      // memcpy((char*)comm->coll->rbuf[g_node_rank]+chunksize1*i*size, (char*)comm->coll->rbuf[0]+chunksize1*i*size, chunksize2*size);
        if(g_node_rank != 0)
-       memcpy((char*)comm->rbuf[g_node_rank]+chunksize1*i*size, (char*)comm->rbuf[0]+chunksize1*i*size, chunksize2*size);
+       memcpy((char*)comm->coll->rbuf[g_node_rank]+chunksize1*i*size, (char*)comm->coll->rbuf[0]+chunksize1*i*size, chunksize2*size);
 	 }
 
      else
 	 {
        if(k == 0)
-         memcpy((char *)comm->rbuf[g_node_rank]+chunksize1*i*size, (char *)comm->tmp[0], chunksize2*size);
+         memcpy((char *)comm->coll->rbuf[g_node_rank]+chunksize1*i*size, (char *)comm->coll->tmp[0], chunksize2*size);
 	//   if(k == 1)
-    //	NBC_Operation((char *)comm->rbuf[g_node_rank]+chunksize1*i*size, (char *)comm->tmp[0], (char *)comm->tmp[numpst], op, datatype, chunksize2);
+    //	NBC_Operation((char *)comm->coll->rbuf[g_node_rank]+chunksize1*i*size, (char *)comm->coll->tmp[0], (char *)comm->coll->tmp[g_numa_size], op, datatype, chunksize2);
 	  if(k>0)
 	   {
 		   int l;
@@ -669,41 +669,41 @@ int HMPI_AllreduceTiledRed(void *sendbuf, void *recvbuf, int count, MPI_Datatype
 			//do a inter-socket allreduce in hypercube, use receive buffer and tmp buffer interchangeably
 			if(l%2 == 0)
 			{
-              if(g_node_rank%numpst == numpst-1)
-			     NBC_Operation((char *)comm->rbuf[rthread]+(g_node_rank%numpst)*stride2*size+chunksize1*i*size, (char*)comm->tmp[rthread]+(g_node_rank%numpst)*stride2*size, (char*)comm->tmp[numpst*(socket_id^((int)pow(2,l )))]+(g_node_rank%numpst)*stride2*size, op, datatype, stride2+remain2);
+              if(g_node_rank%g_numa_size == g_numa_size-1)
+			     NBC_Operation((char *)comm->coll->rbuf[g_numa_root]+(g_node_rank%g_numa_size)*stride2*size+chunksize1*i*size, (char*)comm->coll->tmp[g_numa_root]+(g_node_rank%g_numa_size)*stride2*size, (char*)comm->coll->tmp[g_numa_size*(g_numa_node^((int)pow(2,l )))]+(g_node_rank%g_numa_size)*stride2*size, op, datatype, stride2+remain2);
               else
-			  NBC_Operation((char *)comm->rbuf[rthread]+(g_node_rank%numpst)*stride2*size+chunksize1*i*size, (char*)comm->tmp[rthread]+(g_node_rank%numpst)*stride2*size, (char*)comm->tmp[numpst*(socket_id^((int)pow(2,l )))]+(g_node_rank%numpst)*stride2*size, op, datatype, stride2);
+			  NBC_Operation((char *)comm->coll->rbuf[g_numa_root]+(g_node_rank%g_numa_size)*stride2*size+chunksize1*i*size, (char*)comm->coll->tmp[g_numa_root]+(g_node_rank%g_numa_size)*stride2*size, (char*)comm->coll->tmp[g_numa_size*(g_numa_node^((int)pow(2,l )))]+(g_node_rank%g_numa_size)*stride2*size, op, datatype, stride2);
 			}
 			else
 			{
 			  
-              if(g_node_rank%numpst == numpst-1)
-			     NBC_Operation((char *)comm->tmp[rthread]+(g_node_rank%numpst)*stride2*size, (char*)comm->rbuf[rthread]+(g_node_rank%numpst)*stride2*size+chunksize1*i*size, (char*)comm->rbuf[numpst*(socket_id^((int)pow(2,l )))]+(g_node_rank%numpst)*stride2*size+chunksize1*i*size, op, datatype, stride2+remain2);
+              if(g_node_rank%g_numa_size == g_numa_size-1)
+			     NBC_Operation((char *)comm->coll->tmp[g_numa_root]+(g_node_rank%g_numa_size)*stride2*size, (char*)comm->coll->rbuf[g_numa_root]+(g_node_rank%g_numa_size)*stride2*size+chunksize1*i*size, (char*)comm->coll->rbuf[g_numa_size*(g_numa_node^((int)pow(2,l )))]+(g_node_rank%g_numa_size)*stride2*size+chunksize1*i*size, op, datatype, stride2+remain2);
               else
-			     NBC_Operation((char *)comm->tmp[rthread]+(g_node_rank%numpst)*stride2*size, (char*)comm->rbuf[rthread]+(g_node_rank%numpst)*stride2*size+chunksize1*i*size, (char*)comm->rbuf[numpst*(socket_id^((int)pow(2,l )))]+(g_node_rank%numpst)*stride2*size+chunksize1*i*size, op, datatype, stride2);
+			     NBC_Operation((char *)comm->coll->tmp[g_numa_root]+(g_node_rank%g_numa_size)*stride2*size, (char*)comm->coll->rbuf[g_numa_root]+(g_node_rank%g_numa_size)*stride2*size+chunksize1*i*size, (char*)comm->coll->rbuf[g_numa_size*(g_numa_node^((int)pow(2,l )))]+(g_node_rank%g_numa_size)*stride2*size+chunksize1*i*size, op, datatype, stride2);
 			
 			}
-			t_barrier(comm->t_barr, g_node_rank);
+			t_barrier(comm->coll->t_barr, g_node_rank);
 		   }
 		if(l%2 == 0)
-          memcpy((char*)comm->rbuf[g_node_rank]+chunksize1*i*size, (char*)comm->tmp[rthread], chunksize2*size);
+          memcpy((char*)comm->coll->rbuf[g_node_rank]+chunksize1*i*size, (char*)comm->coll->tmp[g_numa_root], chunksize2*size);
 		else
-          if(g_node_rank%numpst != 0)
-          memcpy((char*)comm->rbuf[g_node_rank]+chunksize1*i*size, (char*)comm->rbuf[rthread]+chunksize1*i*size, chunksize2*size);
+          if(g_node_rank%g_numa_size != 0)
+          memcpy((char*)comm->coll->rbuf[g_node_rank]+chunksize1*i*size, (char*)comm->coll->rbuf[g_numa_root]+chunksize1*i*size, chunksize2*size);
 	   } 
 	 }
 
-     t_barrier(comm->t_barr, g_node_rank);
+     t_barrier(comm->coll->t_barr, g_node_rank);
 
     } 
 
-   if(g_node_rank%numpst == 0)
+   if(g_node_rank%g_numa_size == 0)
    free(tmp);
 
    DEBUG3(
     PROFILE_STOP(allreduce);
     PROFILE_SHOW(allreduce);
-    SHOW(g_node_rank, numpst);
+    SHOW(g_node_rank, g_numa_size);
     PROFILE_SHOW_REDUCE(allreduce);
 	)
     return MPI_SUCCESS;
@@ -721,45 +721,45 @@ int HMPI_AllreduceHyperCube(void *sendbuf, void *recvbuf, int count, MPI_Datatyp
     PROFILE_INIT(g_node_rank);
     PROFILE_START(allreduce);)
 
-    comm->sbuf[g_node_rank]=sendbuf;
-    comm->rbuf[g_node_rank]=recvbuf;
-    comm->tmp[g_node_rank]=tmp;
-    t_barrier(comm->t_barr, g_node_rank);
-    NBC_Operation(recvbuf, sendbuf, (void*)comm->sbuf[g_node_rank^1], op, datatype, count);
-    t_barrier(comm->t_barr, g_node_rank);
+    comm->coll->sbuf[g_node_rank]=sendbuf;
+    comm->coll->rbuf[g_node_rank]=recvbuf;
+    comm->coll->tmp[g_node_rank]=tmp;
+    t_barrier(comm->coll->t_barr, g_node_rank);
+    NBC_Operation(recvbuf, sendbuf, (void*)comm->coll->sbuf[g_node_rank^1], op, datatype, count);
+    t_barrier(comm->coll->t_barr, g_node_rank);
     switch(g_node_rank%6){
     case 0:
-    NBC_Operation(tmp, recvbuf, (void*)comm->rbuf[g_node_rank+2], op, datatype, count);
-    NBC_Operation(tmp, tmp, (void*)comm->rbuf[g_node_rank+4], op, datatype, count);
+    NBC_Operation(tmp, recvbuf, (void*)comm->coll->rbuf[g_node_rank+2], op, datatype, count);
+    NBC_Operation(tmp, tmp, (void*)comm->coll->rbuf[g_node_rank+4], op, datatype, count);
     break;
     case 1:
-    NBC_Operation(tmp, recvbuf, (void*)comm->rbuf[g_node_rank+2], op, datatype, count);
-    NBC_Operation(tmp, tmp, (void*)comm->rbuf[g_node_rank+4], op, datatype, count);
+    NBC_Operation(tmp, recvbuf, (void*)comm->coll->rbuf[g_node_rank+2], op, datatype, count);
+    NBC_Operation(tmp, tmp, (void*)comm->coll->rbuf[g_node_rank+4], op, datatype, count);
     break;
     case 2:
-    NBC_Operation(tmp, recvbuf, (void*)comm->rbuf[g_node_rank+2], op, datatype, count);
-    NBC_Operation(tmp, tmp, (void*)comm->rbuf[g_node_rank-2], op, datatype, count);
+    NBC_Operation(tmp, recvbuf, (void*)comm->coll->rbuf[g_node_rank+2], op, datatype, count);
+    NBC_Operation(tmp, tmp, (void*)comm->coll->rbuf[g_node_rank-2], op, datatype, count);
     break;
     case 3:
-    NBC_Operation(tmp, recvbuf, (void*)comm->rbuf[g_node_rank+2], op, datatype, count);
-    NBC_Operation(tmp, tmp, (void*)comm->rbuf[g_node_rank-2], op, datatype, count);
+    NBC_Operation(tmp, recvbuf, (void*)comm->coll->rbuf[g_node_rank+2], op, datatype, count);
+    NBC_Operation(tmp, tmp, (void*)comm->coll->rbuf[g_node_rank-2], op, datatype, count);
     break;
     case 4:
-    NBC_Operation(tmp, recvbuf, (void*)comm->rbuf[g_node_rank-2], op, datatype, count);
-    NBC_Operation(tmp, tmp, (void*)comm->rbuf[g_node_rank-4], op, datatype, count);
+    NBC_Operation(tmp, recvbuf, (void*)comm->coll->rbuf[g_node_rank-2], op, datatype, count);
+    NBC_Operation(tmp, tmp, (void*)comm->coll->rbuf[g_node_rank-4], op, datatype, count);
     break;
     case 5:
-    NBC_Operation(tmp, recvbuf, (void*)comm->rbuf[g_node_rank-2], op, datatype, count);
-    NBC_Operation(tmp, tmp, (void*)comm->rbuf[g_node_rank-4], op, datatype, count);
+    NBC_Operation(tmp, recvbuf, (void*)comm->coll->rbuf[g_node_rank-2], op, datatype, count);
+    NBC_Operation(tmp, tmp, (void*)comm->coll->rbuf[g_node_rank-4], op, datatype, count);
     break;
     }
 
-    t_barrier(comm->t_barr, g_node_rank);
+    t_barrier(comm->coll->t_barr, g_node_rank);
     if(g_node_rank<6)
-    NBC_Operation(recvbuf, tmp, (void*)comm->tmp[g_node_rank+6], op, datatype, count);
+    NBC_Operation(recvbuf, tmp, (void*)comm->coll->tmp[g_node_rank+6], op, datatype, count);
     else
-    NBC_Operation(recvbuf, tmp, (void*)comm->tmp[g_node_rank-6], op, datatype, count);
-    t_barrier(comm->t_barr, g_node_rank);
+    NBC_Operation(recvbuf, tmp, (void*)comm->coll->tmp[g_node_rank-6], op, datatype, count);
+    t_barrier(comm->coll->t_barr, g_node_rank);
     free (tmp);
     DEBUG3(
     PROFILE_STOP(allreduce);
@@ -780,19 +780,19 @@ int HMPI_AllreduceHypercubeChunks(void *sendbuf, void *recvbuf, int count, MPI_D
     
     //to simplify, now only support threads number is the fold of sockets numberi
 	//number of threads per socket
-    //int numpst = g_nthreads/sockets;
-	// socket_id
-	//int socket_id = g_node_rank/numpst;
+    //int g_numa_size = g_node_size/sockets;
+	// g_numa_node
+	//int g_numa_node = g_node_rank/g_numa_size;
 	//intra-socket thread id
-    //int thread_id = g_node_rank%numpst;
+    //int g_numa_rank = g_node_rank%g_numa_size;
 
 	//root thread in each socket
-    //int rthread = g_node_rank/numpst*numpst;
+    //int g_numa_root = g_node_rank/g_numa_size*g_numa_size;
 
 	// dimensions of sockets
 	int k=(int)(log((double)sockets)/log(2.0));
     // dimentions of intra-socket threads
-	int t=(int)(log((double)numpst)/log(2.0));
+	int t=(int)(log((double)g_numa_size)/log(2.0));
 
     //to utilize L3 cache(each socket share 12MB L3 cache), 
     //first fetch total 4.5MB data in send buffer into each L3 cache
@@ -808,23 +808,23 @@ int HMPI_AllreduceHypercubeChunks(void *sendbuf, void *recvbuf, int count, MPI_D
     void *tmp;
     stride1 = 128*1024/size;
 	//when data size larger than one chunk
-    if(count >= stride1*numpst)
+    if(count >= stride1*g_numa_size)
     {
-      chunksize1 = stride1*numpst;
+      chunksize1 = stride1*g_numa_size;
 	  remain1 =0;
       chunks = count/chunksize1;
 	  chunksize2 = count-chunksize1*chunks;
 	  if(chunksize2 > 0)
 	  {
-       stride2 = chunksize2/numpst;
-	   remain2 = chunksize2 - stride2*numpst;
+       stride2 = chunksize2/g_numa_size;
+	   remain2 = chunksize2 - stride2*g_numa_size;
 	   }
     }
 	//when data size smaller than one chunk
-    else if( count>= g_nthreads )
+    else if( count>= g_node_size )
     {
-     stride1 = count/numpst;
-     remain1 = count - stride1*numpst;
+     stride1 = count/g_numa_size;
+     remain1 = count - stride1*g_numa_size;
 	 chunks = 1;
      chunksize1 = count;
      chunksize2 = 0;
@@ -834,45 +834,45 @@ int HMPI_AllreduceHypercubeChunks(void *sendbuf, void *recvbuf, int count, MPI_D
 	else
 	{
 
-      if(g_node_rank%numpst == 0)
+      if(g_node_rank%g_numa_size == 0)
       {  
         tmp = (void *)malloc(size*count);
-        comm->tmp[g_node_rank] = tmp;
+        comm->coll->tmp[g_node_rank] = tmp;
       }
 
-      comm->sbuf[g_node_rank]=sendbuf;
-      comm->rbuf[g_node_rank]=recvbuf;
+      comm->coll->sbuf[g_node_rank]=sendbuf;
+      comm->coll->rbuf[g_node_rank]=recvbuf;
 
-      t_barrier(comm->t_barr, g_node_rank);
+      t_barrier(comm->coll->t_barr, g_node_rank);
 
-	   if(g_node_rank%numpst == 0)
-	   for(j=g_node_rank; j<g_node_rank+numpst; j++)
+	   if(g_node_rank%g_numa_size == 0)
+	   for(j=g_node_rank; j<g_node_rank+g_numa_size; j++)
 	   {
 	    if(j == g_node_rank)
-	       NBC_Operation((char *)comm->tmp[g_node_rank],
-		            (char *)comm->sbuf[j], 
-		            (char *)comm->sbuf[j+1], op, datatype, count);
+	       NBC_Operation((char *)comm->coll->tmp[g_node_rank],
+		            (char *)comm->coll->sbuf[j], 
+		            (char *)comm->coll->sbuf[j+1], op, datatype, count);
 	    else if(j == g_node_rank+1) continue;
 	    else 
-	      NBC_Operation((char *)comm->tmp[g_node_rank], 
-		            (char *)comm->tmp[g_node_rank], 
-	                    (char *)comm->sbuf[j], op, datatype, count);
+	      NBC_Operation((char *)comm->coll->tmp[g_node_rank], 
+		            (char *)comm->coll->tmp[g_node_rank], 
+	                    (char *)comm->coll->sbuf[j], op, datatype, count);
        }
 
-     t_barrier(comm->t_barr, g_node_rank);
+     t_barrier(comm->coll->t_barr, g_node_rank);
 
      if(g_net_size > 1)
 	 {
 		if(k == 0)
           if(g_node_rank==0)
 		  {
-            MPI_Allreduce((char *)tmp, (char *)recvbuf, count, datatype, op, comm->mpicomm);
+            MPI_Allreduce((char *)tmp, (char *)recvbuf, count, datatype, op, comm->comm);
 		  }
 //	    else if(k == 1)
 //          if(g_node_rank==0)
 //	      {  
-//           NBC_Operation((char *)comm->rbuf[g_node_rank], (char *)comm->tmp[0], (char *)comm->tmp[numpst], op, datatype, count);
-//           MPI_Allreduce(MPI_IN_PLACE, recvbuf, count, datatype, op, comm->mpicomm);
+//           NBC_Operation((char *)comm->coll->rbuf[g_node_rank], (char *)comm->coll->tmp[0], (char *)comm->coll->tmp[g_numa_size], op, datatype, count);
+//           MPI_Allreduce(MPI_IN_PLACE, recvbuf, count, datatype, op, comm->comm);
 //	      }
 		if(k > 0)
 			{ 
@@ -881,39 +881,39 @@ int HMPI_AllreduceHypercubeChunks(void *sendbuf, void *recvbuf, int count, MPI_D
 			    for( l=0; l<k; l++ )
 				{
 				    //use receive buffer and tmp buffer interchangeably
-					n = socket_id - (int)pow(2,l);
+					n = g_numa_node - (int)pow(2,l);
 					if(n < 0)
 					  n += sockets;
 					
-			     if(g_node_rank%numpst == 0 && (socket_id%(int)pow(2,l)) == 0)
+			     if(g_node_rank%g_numa_size == 0 && (g_numa_node%(int)pow(2,l)) == 0)
 				 {
 					if(l%2 == 0)
-			      	  NBC_Operation((char *)recvbuf, (char*)comm->tmp[g_node_rank], (char*)comm->tmp[numpst*n], op, datatype, count);
+			      	  NBC_Operation((char *)recvbuf, (char*)comm->coll->tmp[g_node_rank], (char*)comm->coll->tmp[g_numa_size*n], op, datatype, count);
 					else
-			      	  NBC_Operation((char *)tmp, (char*)comm->rbuf[g_node_rank], (char*)comm->rbuf[numpst*n], op, datatype, count);
+			      	  NBC_Operation((char *)tmp, (char*)comm->coll->rbuf[g_node_rank], (char*)comm->coll->rbuf[g_numa_size*n], op, datatype, count);
 			     }
-                    t_barrier(comm->t_barr, g_node_rank);
+                    t_barrier(comm->coll->t_barr, g_node_rank);
 				}
 			   //if l%2 == 0, final results stored in tmp buffer, else in receive buffer
 			   if(g_node_rank == 0)
 			   {
 			     if(l%2 == 0)
-                   MPI_Allreduce(tmp, recvbuf, count, datatype, op, comm->mpicomm);
+                   MPI_Allreduce(tmp, recvbuf, count, datatype, op, comm->comm);
 			     else
-                   MPI_Allreduce(MPI_IN_PLACE, recvbuf, count, datatype, op, comm->mpicomm);
+                   MPI_Allreduce(MPI_IN_PLACE, recvbuf, count, datatype, op, comm->comm);
 			   }
 			}
-       t_barrier(comm->t_barr, g_node_rank);
+       t_barrier(comm->coll->t_barr, g_node_rank);
 
        if(g_node_rank!=0)
-         memcpy((void*)comm->rbuf[g_node_rank], (void*)comm->rbuf[0], count*size);
+         memcpy((void*)comm->coll->rbuf[g_node_rank], (void*)comm->coll->rbuf[0], count*size);
 	 }
      else
      {
 		if(k == 0)
-			memcpy((void*)comm->rbuf[g_node_rank], (void*)comm->tmp[k], count*size);
+			memcpy((void*)comm->coll->rbuf[g_node_rank], (void*)comm->coll->tmp[k], count*size);
 		else if(k == 1)
-    		NBC_Operation((char *)comm->rbuf[g_node_rank], (char *)comm->tmp[0], (char *)comm->tmp[numpst], op, datatype, count);
+    		NBC_Operation((char *)comm->coll->rbuf[g_node_rank], (char *)comm->coll->tmp[0], (char *)comm->coll->tmp[g_numa_size], op, datatype, count);
 		else
 			{ 
 			   
@@ -922,30 +922,30 @@ int HMPI_AllreduceHypercubeChunks(void *sendbuf, void *recvbuf, int count, MPI_D
 			    for( l=0; l<k; l++ )
 				{
 				    //use receive buffer and tmp buffer interchangeably
-			        if(g_node_rank%numpst == 0)
+			        if(g_node_rank%g_numa_size == 0)
 				  {
-					n = socket_id - (int)pow(2,l);
+					n = g_numa_node - (int)pow(2,l);
 					if(n < 0)
 					  n += sockets;
 
 					if(l%2 == 0)
-			      	  NBC_Operation(recvbuf, (char*)comm->tmp[g_node_rank], (char*)comm->tmp[numpst*n], op, datatype, count);
+			      	  NBC_Operation(recvbuf, (char*)comm->coll->tmp[g_node_rank], (char*)comm->coll->tmp[g_numa_size*n], op, datatype, count);
 					else
-			      	  NBC_Operation(tmp, (char*)comm->rbuf[g_node_rank], (char*)comm->rbuf[numpst*n], op, datatype, count);               }
-                    t_barrier(comm->t_barr, g_node_rank);
+			      	  NBC_Operation(tmp, (char*)comm->coll->rbuf[g_node_rank], (char*)comm->coll->rbuf[g_numa_size*n], op, datatype, count);               }
+                    t_barrier(comm->coll->t_barr, g_node_rank);
 				}
 			   
 			   //l%2 == 0, final results stored in tmp buffer of root thread, else in receive buffer of root thread
 			   if(l%2 == 0)
-				 memcpy((void*)comm->rbuf[g_node_rank], (void*)comm->tmp[rthread], count*size);
+				 memcpy((void*)comm->coll->rbuf[g_node_rank], (void*)comm->coll->tmp[g_numa_root], count*size);
 			   else
-			     if(g_node_rank%numpst != 0)
-				 memcpy((void*)comm->rbuf[g_node_rank], (void*)comm->rbuf[rthread], count*size);
+			     if(g_node_rank%g_numa_size != 0)
+				 memcpy((void*)comm->coll->rbuf[g_node_rank], (void*)comm->coll->rbuf[g_numa_root], count*size);
 			}
 	 }
-     t_barrier(comm->t_barr, g_node_rank);
+     t_barrier(comm->coll->t_barr, g_node_rank);
 
-     if(g_node_rank%numpst == 0)
+     if(g_node_rank%g_numa_size == 0)
      free(tmp);
      return MPI_SUCCESS;
 	}
@@ -954,24 +954,24 @@ int HMPI_AllreduceHypercubeChunks(void *sendbuf, void *recvbuf, int count, MPI_D
     if(extent != size) {
         printf("allreduce non-contiguous derived datatypes are not supported yet!\n");
         fflush(stdout);
-        MPI_Abort(comm->mpicomm, 0);
+        MPI_Abort(comm->comm, 0);
     }
 #endif
-//printf("stride1=%d,stride2=%d,chunksize1=%d,chunksize2=%d,chunks=%d,remain1=%d,remain2=%d,thread_id=%d,numpst=%d,rthread=%d, g_node_rank=%d, t=%d, k=%d,count =%d \n",stride1,stride2,chunksize1,chunksize2,chunks,remain1,remain2,thread_id,numpst,rthread,g_node_rank,t,k,count);
+//printf("stride1=%d,stride2=%d,chunksize1=%d,chunksize2=%d,chunks=%d,remain1=%d,remain2=%d,g_numa_rank=%d,g_numa_size=%d,g_numa_root=%d, g_node_rank=%d, t=%d, k=%d,count =%d \n",stride1,stride2,chunksize1,chunksize2,chunks,remain1,remain2,g_numa_rank,g_numa_size,g_numa_root,g_node_rank,t,k,count);
 	DEBUG3(
     PROFILE_INIT(g_node_rank);
     PROFILE_START(allreduce);)
     //collect the addresses of send buffer and recieve buffer
 
-    if(g_node_rank%numpst == 0)
+    if(g_node_rank%g_numa_size == 0)
     {  
       tmp = (void *)malloc(size*chunksize1);
-      comm->tmp[g_node_rank] = tmp;
+      comm->coll->tmp[g_node_rank] = tmp;
     }
-    comm->sbuf[g_node_rank]=sendbuf;
-    comm->rbuf[g_node_rank]=recvbuf;
+    comm->coll->sbuf[g_node_rank]=sendbuf;
+    comm->coll->rbuf[g_node_rank]=recvbuf;
 
-    t_barrier(comm->t_barr, g_node_rank);
+    t_barrier(comm->coll->t_barr, g_node_rank);
     //barrier(&comm->barr, g_node_rank);
 	
 	int l, n;
@@ -986,52 +986,52 @@ int HMPI_AllreduceHypercubeChunks(void *sendbuf, void *recvbuf, int count, MPI_D
 		    //use receive buffer and tmp buffer interchangeably
 
 			//size of each block
-			bcount = (numpst/(int)pow(2, l+1))*stride1;
+			bcount = (g_numa_size/(int)pow(2, l+1))*stride1;
 
 			//offset
-	        offset += (thread_id / (int)pow(2, l) + 1)%2*bcount;
+	        offset += (g_numa_rank / (int)pow(2, l) + 1)%2*bcount;
 
 			//handle the remainder
-			if(thread_id%(int)pow(2, l+1) == 0)
+			if(g_numa_rank%(int)pow(2, l+1) == 0)
 			  bcount += remain1;
 
-			n = thread_id - (int)pow(2,l);
+			n = g_numa_rank - (int)pow(2,l);
 			if(n < 0)
-			  n += numpst;
+			  n += g_numa_size;
 
 			if(l == 0)
-	      	  NBC_Operation((char *)recvbuf+chunksize1*i*size+offset*size, (char *)comm->sbuf[g_node_rank]+chunksize1*i*size+offset*size, (char *)comm->sbuf[n]+chunksize1*i*size+offset*size, op, datatype, bcount);
+	      	  NBC_Operation((char *)recvbuf+chunksize1*i*size+offset*size, (char *)comm->coll->sbuf[g_node_rank]+chunksize1*i*size+offset*size, (char *)comm->coll->sbuf[n]+chunksize1*i*size+offset*size, op, datatype, bcount);
 			else if(l == t-1)
-	      	  NBC_Operation((char *)comm->tmp[rthread]+offset*size, (char*)comm->rbuf[g_node_rank]+chunksize1*i*size+offset*size, (char*)comm->rbuf[n]+chunksize1*i*size+offset*size, op, datatype, bcount);
+	      	  NBC_Operation((char *)comm->coll->tmp[g_numa_root]+offset*size, (char*)comm->coll->rbuf[g_node_rank]+chunksize1*i*size+offset*size, (char*)comm->coll->rbuf[n]+chunksize1*i*size+offset*size, op, datatype, bcount);
 			else
-	      	  NBC_Operation((char *)recvbuf+chunksize1*i*size+offset*size, (char*)comm->rbuf[g_node_rank]+chunksize1*i*size+offset*size, (char*)comm->rbuf[n]+chunksize1*i*size+offset*size, op, datatype, bcount);
-            t_barrier(comm->t_barr, g_node_rank);
+	      	  NBC_Operation((char *)recvbuf+chunksize1*i*size+offset*size, (char*)comm->coll->rbuf[g_node_rank]+chunksize1*i*size+offset*size, (char*)comm->coll->rbuf[n]+chunksize1*i*size+offset*size, op, datatype, bcount);
+            t_barrier(comm->coll->t_barr, g_node_rank);
 		}
     //barrier(&comm->barr, g_node_rank);
-     t_barrier(comm->t_barr, g_node_rank);
+     t_barrier(comm->coll->t_barr, g_node_rank);
      
      if(g_net_size > 1)
 	 {
        if(k == 0)
          if(g_node_rank==0)
          {
-               MPI_Allreduce((char *)tmp, (char *)recvbuf+chunksize1*i*size, chunksize1, datatype, op, comm->mpicomm);
+               MPI_Allreduce((char *)tmp, (char *)recvbuf+chunksize1*i*size, chunksize1, datatype, op, comm->comm);
          }
 	   //else if(k == 1)
 	   //{
-       //  if(g_node_rank<numpst)
-	   //   if(g_node_rank == numpst-1)
-	   //    NBC_Operation((char *)comm->rbuf[0]+g_node_rank*stride1*size+chunksize1*i*size,
-	   //                 (char *)comm->tmp[0]+g_node_rank*stride1*size,
-	   // 	            (char *)comm->tmp[numpst]+g_node_rank*stride1*size, op, datatype, stride1+remain1);
+       //  if(g_node_rank<g_numa_size)
+	   //   if(g_node_rank == g_numa_size-1)
+	   //    NBC_Operation((char *)comm->coll->rbuf[0]+g_node_rank*stride1*size+chunksize1*i*size,
+	   //                 (char *)comm->coll->tmp[0]+g_node_rank*stride1*size,
+	   // 	            (char *)comm->coll->tmp[g_numa_size]+g_node_rank*stride1*size, op, datatype, stride1+remain1);
 	   //   else
-	   //   NBC_Operation((char *)comm->rbuf[0]+g_node_rank*stride1*size+chunksize1*i*size,
-	   //                 (char *)comm->tmp[0]+g_node_rank*stride1*size,
-	   //                 (char *)comm->tmp[numpst]+g_node_rank*stride1*size, op, datatype, stride1);
-       // t_barrier(comm->t_barr, g_node_rank);
+	   //   NBC_Operation((char *)comm->coll->rbuf[0]+g_node_rank*stride1*size+chunksize1*i*size,
+	   //                 (char *)comm->coll->tmp[0]+g_node_rank*stride1*size,
+	   //                 (char *)comm->coll->tmp[g_numa_size]+g_node_rank*stride1*size, op, datatype, stride1);
+       // t_barrier(comm->coll->t_barr, g_node_rank);
 	   // if(g_node_rank==0)
 	   // {  
-       //  MPI_Allreduce(MPI_IN_PLACE, (char *)recvbuf+chunksize1*i*size, chunksize1, datatype, op, comm->mpicomm);
+       //  MPI_Allreduce(MPI_IN_PLACE, (char *)recvbuf+chunksize1*i*size, chunksize1, datatype, op, comm->comm);
 	   // }
 	   //}
 	   if (k > 0)
@@ -1040,87 +1040,87 @@ int HMPI_AllreduceHypercubeChunks(void *sendbuf, void *recvbuf, int count, MPI_D
 		   for( l=0; l<k; l++ )
 		   {
 			//do a inter-socket allreduce in dissemination, use receive buffer and tmp buffer interchangeably
-			n = socket_id - (int)pow(2,l);
+			n = g_numa_node - (int)pow(2,l);
 			if(n < 0)
 			  n += sockets;
-			if( socket_id%((int)pow(2,l)) == 0 )
+			if( g_numa_node%((int)pow(2,l)) == 0 )
 			{
 			  if(l%2 == 0)
 			  {
-                if(g_node_rank%numpst == numpst-1)
-			       NBC_Operation((char *)comm->rbuf[rthread]+(g_node_rank%numpst)*stride1*size+chunksize1*i*size, (char*)comm->tmp[rthread]+(g_node_rank%numpst)*stride1*size, (char*)comm->tmp[numpst*n]+(g_node_rank%numpst)*stride1*size, op, datatype, stride1+remain1);
+                if(g_node_rank%g_numa_size == g_numa_size-1)
+			       NBC_Operation((char *)comm->coll->rbuf[g_numa_root]+(g_node_rank%g_numa_size)*stride1*size+chunksize1*i*size, (char*)comm->coll->tmp[g_numa_root]+(g_node_rank%g_numa_size)*stride1*size, (char*)comm->coll->tmp[g_numa_size*n]+(g_node_rank%g_numa_size)*stride1*size, op, datatype, stride1+remain1);
                 else
-			    NBC_Operation((char *)comm->rbuf[rthread]+(g_node_rank%numpst)*stride1*size+chunksize1*i*size, (char*)comm->tmp[rthread]+(g_node_rank%numpst)*stride1*size, (char*)comm->tmp[numpst*n]+(g_node_rank%numpst)*stride1*size, op, datatype, stride1);
+			    NBC_Operation((char *)comm->coll->rbuf[g_numa_root]+(g_node_rank%g_numa_size)*stride1*size+chunksize1*i*size, (char*)comm->coll->tmp[g_numa_root]+(g_node_rank%g_numa_size)*stride1*size, (char*)comm->coll->tmp[g_numa_size*n]+(g_node_rank%g_numa_size)*stride1*size, op, datatype, stride1);
 			  }
 			  else
 			  {
 			    
-                if(g_node_rank%numpst == numpst-1)
-			       NBC_Operation((char *)comm->tmp[rthread]+(g_node_rank%numpst)*stride1*size, (char*)comm->rbuf[rthread]+(g_node_rank%numpst)*stride1*size+chunksize1*i*size, (char*)comm->rbuf[numpst*n]+(g_node_rank%numpst)*stride1*size+chunksize1*i*size, op, datatype, stride1+remain1);
+                if(g_node_rank%g_numa_size == g_numa_size-1)
+			       NBC_Operation((char *)comm->coll->tmp[g_numa_root]+(g_node_rank%g_numa_size)*stride1*size, (char*)comm->coll->rbuf[g_numa_root]+(g_node_rank%g_numa_size)*stride1*size+chunksize1*i*size, (char*)comm->coll->rbuf[g_numa_size*n]+(g_node_rank%g_numa_size)*stride1*size+chunksize1*i*size, op, datatype, stride1+remain1);
                 else
-			       NBC_Operation((char *)comm->tmp[rthread]+(g_node_rank%numpst)*stride1*size, (char*)comm->rbuf[rthread]+(g_node_rank%numpst)*stride1*size+chunksize1*i*size, (char*)comm->rbuf[numpst*n]+(g_node_rank%numpst)*stride1*size+chunksize1*i*size, op, datatype, stride1);
+			       NBC_Operation((char *)comm->coll->tmp[g_numa_root]+(g_node_rank%g_numa_size)*stride1*size, (char*)comm->coll->rbuf[g_numa_root]+(g_node_rank%g_numa_size)*stride1*size+chunksize1*i*size, (char*)comm->coll->rbuf[g_numa_size*n]+(g_node_rank%g_numa_size)*stride1*size+chunksize1*i*size, op, datatype, stride1);
 			  
 			  }
 		    }
-			t_barrier(comm->t_barr, g_node_rank);
+			t_barrier(comm->coll->t_barr, g_node_rank);
 		   }
 
 	   if(g_node_rank == 0)
 	   {  
 	     if(l%2 == 0)
-	          MPI_Allreduce(tmp, recvbuf+chunksize1*i*size, chunksize1, datatype, op, comm->mpicomm);
+	          MPI_Allreduce(tmp, recvbuf+chunksize1*i*size, chunksize1, datatype, op, comm->comm);
 	     else
-	    	  MPI_Allreduce(MPI_IN_PLACE, recvbuf+chunksize1*i*size, chunksize1, datatype, op, comm->mpicomm);
+	    	  MPI_Allreduce(MPI_IN_PLACE, recvbuf+chunksize1*i*size, chunksize1, datatype, op, comm->comm);
 	   }
 	  }
 
-	   t_barrier(comm->t_barr, g_node_rank);
+	   t_barrier(comm->coll->t_barr, g_node_rank);
        if(g_node_rank != 0)
-       memcpy((char*)comm->rbuf[g_node_rank]+chunksize1*i*size, (char*)comm->rbuf[0]+chunksize1*i*size, chunksize1*size);
+       memcpy((char*)comm->coll->rbuf[g_node_rank]+chunksize1*i*size, (char*)comm->coll->rbuf[0]+chunksize1*i*size, chunksize1*size);
 	 }
 
      else
 	 {
        if(k == 0)
-         memcpy((char *)comm->rbuf[g_node_rank]+chunksize1*i*size, (char *)comm->tmp[0], chunksize1*size);
+         memcpy((char *)comm->coll->rbuf[g_node_rank]+chunksize1*i*size, (char *)comm->coll->tmp[0], chunksize1*size);
 	   else if(k == 1)
-    	NBC_Operation((char *)comm->rbuf[g_node_rank]+chunksize1*i*size, (char *)comm->tmp[0], (char *)comm->tmp[numpst], op, datatype, chunksize1);
+    	NBC_Operation((char *)comm->coll->rbuf[g_node_rank]+chunksize1*i*size, (char *)comm->coll->tmp[0], (char *)comm->coll->tmp[g_numa_size], op, datatype, chunksize1);
 	   else
 	   {
 		   int l, n;
 		   for( l=0; l<k;l++ )
 		   {
 			//do a inter-socket allreduce in dissemination, use receive buffer and tmp buffer interchangeably
-			n = socket_id - (int)pow(2,l);
+			n = g_numa_node - (int)pow(2,l);
 			if(n < 0)
 			  n += sockets;
 			if(l%2 == 0)
 			{
-              if(g_node_rank%numpst == numpst-1)
-			     NBC_Operation((char *)comm->rbuf[rthread]+(g_node_rank%numpst)*stride1*size+chunksize1*i*size, (char*)comm->tmp[rthread]+(g_node_rank%numpst)*stride1*size, (char*)comm->tmp[numpst*n]+(g_node_rank%numpst)*stride1*size, op, datatype, stride1+remain1);
+              if(g_node_rank%g_numa_size == g_numa_size-1)
+			     NBC_Operation((char *)comm->coll->rbuf[g_numa_root]+(g_node_rank%g_numa_size)*stride1*size+chunksize1*i*size, (char*)comm->coll->tmp[g_numa_root]+(g_node_rank%g_numa_size)*stride1*size, (char*)comm->coll->tmp[g_numa_size*n]+(g_node_rank%g_numa_size)*stride1*size, op, datatype, stride1+remain1);
               else
-			  NBC_Operation((char *)comm->rbuf[rthread]+(g_node_rank%numpst)*stride1*size+chunksize1*i*size, (char*)comm->tmp[rthread]+(g_node_rank%numpst)*stride1*size, (char*)comm->tmp[numpst*n]+(g_node_rank%numpst)*stride1*size, op, datatype, stride1);
+			  NBC_Operation((char *)comm->coll->rbuf[g_numa_root]+(g_node_rank%g_numa_size)*stride1*size+chunksize1*i*size, (char*)comm->coll->tmp[g_numa_root]+(g_node_rank%g_numa_size)*stride1*size, (char*)comm->coll->tmp[g_numa_size*n]+(g_node_rank%g_numa_size)*stride1*size, op, datatype, stride1);
 			}
 			else
 			{
 			  
-              if(g_node_rank%numpst == numpst-1)
-			     NBC_Operation((char *)comm->tmp[rthread]+(g_node_rank%numpst)*stride1*size, (char*)comm->rbuf[rthread]+(g_node_rank%numpst)*stride1*size+chunksize1*i*size, (char*)comm->rbuf[numpst*n]+(g_node_rank%numpst)*stride1*size+chunksize1*i*size, op, datatype, stride1+remain1);
+              if(g_node_rank%g_numa_size == g_numa_size-1)
+			     NBC_Operation((char *)comm->coll->tmp[g_numa_root]+(g_node_rank%g_numa_size)*stride1*size, (char*)comm->coll->rbuf[g_numa_root]+(g_node_rank%g_numa_size)*stride1*size+chunksize1*i*size, (char*)comm->coll->rbuf[g_numa_size*n]+(g_node_rank%g_numa_size)*stride1*size+chunksize1*i*size, op, datatype, stride1+remain1);
               else
-			     NBC_Operation((char *)comm->tmp[rthread]+(g_node_rank%numpst)*stride1*size, (char*)comm->rbuf[rthread]+(g_node_rank%numpst)*stride1*size+chunksize1*i*size, (char*)comm->rbuf[numpst*n]+(g_node_rank%numpst)*stride1*size+chunksize1*i*size, op, datatype, stride1);
+			     NBC_Operation((char *)comm->coll->tmp[g_numa_root]+(g_node_rank%g_numa_size)*stride1*size, (char*)comm->coll->rbuf[g_numa_root]+(g_node_rank%g_numa_size)*stride1*size+chunksize1*i*size, (char*)comm->coll->rbuf[g_numa_size*n]+(g_node_rank%g_numa_size)*stride1*size+chunksize1*i*size, op, datatype, stride1);
 			
 			}
-			t_barrier(comm->t_barr, g_node_rank);
+			t_barrier(comm->coll->t_barr, g_node_rank);
 		   }
 		if(l%2 == 0)
-          memcpy((char*)comm->rbuf[g_node_rank]+chunksize1*i*size, (char*)comm->tmp[rthread], chunksize1*size);
+          memcpy((char*)comm->coll->rbuf[g_node_rank]+chunksize1*i*size, (char*)comm->coll->tmp[g_numa_root], chunksize1*size);
 		else
-          if(g_node_rank%numpst != 0)
-          memcpy((char*)comm->rbuf[g_node_rank]+chunksize1*i*size, (char*)comm->rbuf[rthread]+chunksize1*i*size, chunksize1*size);
+          if(g_node_rank%g_numa_size != 0)
+          memcpy((char*)comm->coll->rbuf[g_node_rank]+chunksize1*i*size, (char*)comm->coll->rbuf[g_numa_root]+chunksize1*i*size, chunksize1*size);
 	   } 
 	 }
 
-     t_barrier(comm->t_barr, g_node_rank);
+     t_barrier(comm->coll->t_barr, g_node_rank);
     
     }
   
@@ -1133,52 +1133,52 @@ int HMPI_AllreduceHypercubeChunks(void *sendbuf, void *recvbuf, int count, MPI_D
 		    //use receive buffer and tmp buffer interchangeably
 
 			//size of each block
-			bcount = (numpst/(int)pow(2, l+1))*stride2;
+			bcount = (g_numa_size/(int)pow(2, l+1))*stride2;
 
 			//offset
-	        offset += (thread_id / (int)pow(2, l) + 1)%2*bcount;
+	        offset += (g_numa_rank / (int)pow(2, l) + 1)%2*bcount;
 
 			//handle the remainder
-			if(thread_id%(int)pow(2, l+1) == 0)
+			if(g_numa_rank%(int)pow(2, l+1) == 0)
 			  bcount += remain2;
 
-			n = thread_id - (int)pow(2,l);
+			n = g_numa_rank - (int)pow(2,l);
 			if(n < 0)
-			  n += numpst;
+			  n += g_numa_size;
 
 			if(l == 0)
-	      	  NBC_Operation((char *)recvbuf+chunksize1*i*size+offset*size, (char *)comm->sbuf[g_node_rank]+chunksize1*i*size+offset*size, (char *)comm->sbuf[n]+chunksize1*i*size+offset*size, op, datatype, bcount);
+	      	  NBC_Operation((char *)recvbuf+chunksize1*i*size+offset*size, (char *)comm->coll->sbuf[g_node_rank]+chunksize1*i*size+offset*size, (char *)comm->coll->sbuf[n]+chunksize1*i*size+offset*size, op, datatype, bcount);
 			else if(l == t-1)
-	      	  NBC_Operation((char *)comm->tmp[rthread]+offset*size, (char*)comm->rbuf[g_node_rank]+chunksize1*i*size+offset*size, (char*)comm->rbuf[n]+chunksize1*i*size+offset*size, op, datatype, bcount);
+	      	  NBC_Operation((char *)comm->coll->tmp[g_numa_root]+offset*size, (char*)comm->coll->rbuf[g_node_rank]+chunksize1*i*size+offset*size, (char*)comm->coll->rbuf[n]+chunksize1*i*size+offset*size, op, datatype, bcount);
 			else
-	      	  NBC_Operation((char *)recvbuf+chunksize1*i*size+offset*size, (char*)comm->rbuf[g_node_rank]+chunksize1*i*size+offset*size, (char*)comm->rbuf[n]+chunksize1*i*size+offset*size, op, datatype, bcount);
-            t_barrier(comm->t_barr, g_node_rank);
+	      	  NBC_Operation((char *)recvbuf+chunksize1*i*size+offset*size, (char*)comm->coll->rbuf[g_node_rank]+chunksize1*i*size+offset*size, (char*)comm->coll->rbuf[n]+chunksize1*i*size+offset*size, op, datatype, bcount);
+            t_barrier(comm->coll->t_barr, g_node_rank);
 		}
     //barrier(&comm->barr, g_node_rank);
-    // t_barrier(comm->t_barr, g_node_rank);
+    // t_barrier(comm->coll->t_barr, g_node_rank);
      
      if(g_net_size > 1)
 	 {
        if(k == 0)
          if(g_node_rank==0)
          {
-               MPI_Allreduce((char *)tmp, (char *)recvbuf+chunksize1*i*size, chunksize2, datatype, op, comm->mpicomm);
+               MPI_Allreduce((char *)tmp, (char *)recvbuf+chunksize1*i*size, chunksize2, datatype, op, comm->comm);
          }
 	   //else if(k == 1)
 	   //{
-       //  if(g_node_rank<numpst)
-	   //   if(g_node_rank == numpst-1)
-	   //    NBC_Operation((char *)comm->rbuf[0]+g_node_rank*stride2*size+chunksize1*i*size,
-	   //                 (char *)comm->tmp[0]+g_node_rank*stride2*size,
-	   // 	            (char *)comm->tmp[numpst]+g_node_rank*stride2*size, op, datatype, stride2+remain2);
+       //  if(g_node_rank<g_numa_size)
+	   //   if(g_node_rank == g_numa_size-1)
+	   //    NBC_Operation((char *)comm->coll->rbuf[0]+g_node_rank*stride2*size+chunksize1*i*size,
+	   //                 (char *)comm->coll->tmp[0]+g_node_rank*stride2*size,
+	   // 	            (char *)comm->coll->tmp[g_numa_size]+g_node_rank*stride2*size, op, datatype, stride2+remain2);
 	   //   else
-	   //   NBC_Operation((char *)comm->rbuf[0]+g_node_rank*stride2*size+chunksize1*i*size,
-	   //                 (char *)comm->tmp[0]+g_node_rank*stride2*size,
-	   //                 (char *)comm->tmp[numpst]+g_node_rank*stride2*size, op, datatype, stride2);
-       // t_barrier(comm->t_barr, g_node_rank);
+	   //   NBC_Operation((char *)comm->coll->rbuf[0]+g_node_rank*stride2*size+chunksize1*i*size,
+	   //                 (char *)comm->coll->tmp[0]+g_node_rank*stride2*size,
+	   //                 (char *)comm->coll->tmp[g_numa_size]+g_node_rank*stride2*size, op, datatype, stride2);
+       // t_barrier(comm->coll->t_barr, g_node_rank);
 	   // if(g_node_rank==0)
 	   // {  
-       //  MPI_Allreduce(MPI_IN_PLACE, (char *)recvbuf+chunksize1*i*size, chunksize2, datatype, op, comm->mpicomm);
+       //  MPI_Allreduce(MPI_IN_PLACE, (char *)recvbuf+chunksize1*i*size, chunksize2, datatype, op, comm->comm);
 	   // }
 	   //}
 	   if(k > 0)
@@ -1187,96 +1187,96 @@ int HMPI_AllreduceHypercubeChunks(void *sendbuf, void *recvbuf, int count, MPI_D
 		   for( l=0; l<k; l++ )
 		   {
 			//do a inter-socket allreduce in dissemination, use receive buffer and tmp buffer interchangeably
-			n = socket_id - (int)pow(2,l);
+			n = g_numa_node - (int)pow(2,l);
 			if(n < 0)
 			  n += sockets;
-			if( socket_id%((int)pow(2,l)) == 0 )
+			if( g_numa_node%((int)pow(2,l)) == 0 )
 			{  
 			  if(l%2 == 0)
 			  {
-                if(g_node_rank%numpst == numpst-1)
-			       NBC_Operation((char *)comm->rbuf[rthread]+(g_node_rank%numpst)*stride2*size+chunksize1*i*size, (char*)comm->tmp[rthread]+(g_node_rank%numpst)*stride2*size, (char*)comm->tmp[numpst*n]+(g_node_rank%numpst)*stride2*size, op, datatype, stride2+remain2);
+                if(g_node_rank%g_numa_size == g_numa_size-1)
+			       NBC_Operation((char *)comm->coll->rbuf[g_numa_root]+(g_node_rank%g_numa_size)*stride2*size+chunksize1*i*size, (char*)comm->coll->tmp[g_numa_root]+(g_node_rank%g_numa_size)*stride2*size, (char*)comm->coll->tmp[g_numa_size*n]+(g_node_rank%g_numa_size)*stride2*size, op, datatype, stride2+remain2);
                 else
-			    NBC_Operation((char *)comm->rbuf[rthread]+(g_node_rank%numpst)*stride2*size+chunksize1*i*size, (char*)comm->tmp[rthread]+(g_node_rank%numpst)*stride2*size, (char*)comm->tmp[numpst*n]+(g_node_rank%numpst)*stride2*size, op, datatype, stride2);
+			    NBC_Operation((char *)comm->coll->rbuf[g_numa_root]+(g_node_rank%g_numa_size)*stride2*size+chunksize1*i*size, (char*)comm->coll->tmp[g_numa_root]+(g_node_rank%g_numa_size)*stride2*size, (char*)comm->coll->tmp[g_numa_size*n]+(g_node_rank%g_numa_size)*stride2*size, op, datatype, stride2);
 			  }
 			  else
 			  {
-                if(g_node_rank%numpst == numpst-1)
-			       NBC_Operation((char *)comm->tmp[rthread]+(g_node_rank%numpst)*stride2*size, (char*)comm->rbuf[rthread]+(g_node_rank%numpst)*stride2*size+chunksize1*i*size, (char*)comm->rbuf[numpst*n]+(g_node_rank%numpst)*stride2*size+chunksize1*i*size, op, datatype, stride2+remain2);
+                if(g_node_rank%g_numa_size == g_numa_size-1)
+			       NBC_Operation((char *)comm->coll->tmp[g_numa_root]+(g_node_rank%g_numa_size)*stride2*size, (char*)comm->coll->rbuf[g_numa_root]+(g_node_rank%g_numa_size)*stride2*size+chunksize1*i*size, (char*)comm->coll->rbuf[g_numa_size*n]+(g_node_rank%g_numa_size)*stride2*size+chunksize1*i*size, op, datatype, stride2+remain2);
                 else
-			       NBC_Operation((char *)comm->tmp[rthread]+(g_node_rank%numpst)*stride2*size, (char*)comm->rbuf[rthread]+(g_node_rank%numpst)*stride2*size+chunksize1*i*size, (char*)comm->rbuf[numpst*n]+(g_node_rank%numpst)*stride2*size+chunksize1*i*size, op, datatype, stride2);
+			       NBC_Operation((char *)comm->coll->tmp[g_numa_root]+(g_node_rank%g_numa_size)*stride2*size, (char*)comm->coll->rbuf[g_numa_root]+(g_node_rank%g_numa_size)*stride2*size+chunksize1*i*size, (char*)comm->coll->rbuf[g_numa_size*n]+(g_node_rank%g_numa_size)*stride2*size+chunksize1*i*size, op, datatype, stride2);
 			  }
 		   }
-			t_barrier(comm->t_barr, g_node_rank);
+			t_barrier(comm->coll->t_barr, g_node_rank);
 		 }
 
 	   if(g_node_rank == 0)
 	   {
 	     if(l%2 == 0)
-	          MPI_Allreduce(tmp, recvbuf+chunksize1*i*size, chunksize2, datatype, op, comm->mpicomm);
+	          MPI_Allreduce(tmp, recvbuf+chunksize1*i*size, chunksize2, datatype, op, comm->comm);
 	     else
-	    	  MPI_Allreduce(MPI_IN_PLACE, recvbuf+chunksize1*i*size, chunksize2, datatype, op, comm->mpicomm);
+	    	  MPI_Allreduce(MPI_IN_PLACE, recvbuf+chunksize1*i*size, chunksize2, datatype, op, comm->comm);
 	   }
        
 	   }
 
-	   t_barrier(comm->t_barr, g_node_rank);
+	   t_barrier(comm->coll->t_barr, g_node_rank);
        if(g_node_rank != 0)
-       memcpy((char*)comm->rbuf[g_node_rank]+chunksize1*i*size, (char*)comm->rbuf[0]+chunksize1*i*size, chunksize2*size);
+       memcpy((char*)comm->coll->rbuf[g_node_rank]+chunksize1*i*size, (char*)comm->coll->rbuf[0]+chunksize1*i*size, chunksize2*size);
 	 }
 
      else
 	 {
        if(k == 0)
-         memcpy((char *)comm->rbuf[g_node_rank]+chunksize1*i*size, (char *)comm->tmp[0], chunksize2*size);
+         memcpy((char *)comm->coll->rbuf[g_node_rank]+chunksize1*i*size, (char *)comm->coll->tmp[0], chunksize2*size);
 	   else if(k == 1)
-    	NBC_Operation((char *)comm->rbuf[g_node_rank]+chunksize1*i*size, (char *)comm->tmp[0], (char *)comm->tmp[numpst], op, datatype, chunksize2);
+    	NBC_Operation((char *)comm->coll->rbuf[g_node_rank]+chunksize1*i*size, (char *)comm->coll->tmp[0], (char *)comm->coll->tmp[g_numa_size], op, datatype, chunksize2);
 	   else
 	   {
 		   int l, n;
 		   for( l=0; l<k;l++ )
 		   {
 			//do a inter-socket allreduce in dissemination, use receive buffer and tmp buffer interchangeably
-			n = socket_id - (int)pow(2,l);
+			n = g_numa_node - (int)pow(2,l);
 			if(n < 0)
 			  n += sockets;
 			if(l%2 == 0)
 			{
-              if(g_node_rank%numpst == numpst-1)
-			     NBC_Operation((char *)comm->rbuf[rthread]+(g_node_rank%numpst)*stride2*size+chunksize1*i*size, (char*)comm->tmp[rthread]+(g_node_rank%numpst)*stride2*size, (char*)comm->tmp[numpst*n]+(g_node_rank%numpst)*stride2*size, op, datatype, stride2+remain2);
+              if(g_node_rank%g_numa_size == g_numa_size-1)
+			     NBC_Operation((char *)comm->coll->rbuf[g_numa_root]+(g_node_rank%g_numa_size)*stride2*size+chunksize1*i*size, (char*)comm->coll->tmp[g_numa_root]+(g_node_rank%g_numa_size)*stride2*size, (char*)comm->coll->tmp[g_numa_size*n]+(g_node_rank%g_numa_size)*stride2*size, op, datatype, stride2+remain2);
               else
-			  NBC_Operation((char *)comm->rbuf[rthread]+(g_node_rank%numpst)*stride2*size+chunksize1*i*size, (char*)comm->tmp[rthread]+(g_node_rank%numpst)*stride2*size, (char*)comm->tmp[numpst*n]+(g_node_rank%numpst)*stride2*size, op, datatype, stride2);
+			  NBC_Operation((char *)comm->coll->rbuf[g_numa_root]+(g_node_rank%g_numa_size)*stride2*size+chunksize1*i*size, (char*)comm->coll->tmp[g_numa_root]+(g_node_rank%g_numa_size)*stride2*size, (char*)comm->coll->tmp[g_numa_size*n]+(g_node_rank%g_numa_size)*stride2*size, op, datatype, stride2);
 			}
 			else
 			{
 			  
-              if(g_node_rank%numpst == numpst-1)
-			     NBC_Operation((char *)comm->tmp[rthread]+(g_node_rank%numpst)*stride2*size, (char*)comm->rbuf[rthread]+(g_node_rank%numpst)*stride2*size+chunksize1*i*size, (char*)comm->rbuf[numpst*n]+(g_node_rank%numpst)*stride2*size+chunksize1*i*size, op, datatype, stride2+remain2);
+              if(g_node_rank%g_numa_size == g_numa_size-1)
+			     NBC_Operation((char *)comm->coll->tmp[g_numa_root]+(g_node_rank%g_numa_size)*stride2*size, (char*)comm->coll->rbuf[g_numa_root]+(g_node_rank%g_numa_size)*stride2*size+chunksize1*i*size, (char*)comm->coll->rbuf[g_numa_size*n]+(g_node_rank%g_numa_size)*stride2*size+chunksize1*i*size, op, datatype, stride2+remain2);
               else
-			     NBC_Operation((char *)comm->tmp[rthread]+(g_node_rank%numpst)*stride2*size, (char*)comm->rbuf[rthread]+(g_node_rank%numpst)*stride2*size+chunksize1*i*size, (char*)comm->rbuf[numpst*n]+(g_node_rank%numpst)*stride2*size+chunksize1*i*size, op, datatype, stride2);
+			     NBC_Operation((char *)comm->coll->tmp[g_numa_root]+(g_node_rank%g_numa_size)*stride2*size, (char*)comm->coll->rbuf[g_numa_root]+(g_node_rank%g_numa_size)*stride2*size+chunksize1*i*size, (char*)comm->coll->rbuf[g_numa_size*n]+(g_node_rank%g_numa_size)*stride2*size+chunksize1*i*size, op, datatype, stride2);
 			
 			}
-			t_barrier(comm->t_barr, g_node_rank);
+			t_barrier(comm->coll->t_barr, g_node_rank);
 		   }
 		if(l%2 == 0)
-          memcpy((char*)comm->rbuf[g_node_rank]+chunksize1*i*size, (char*)comm->tmp[rthread], chunksize2*size);
+          memcpy((char*)comm->coll->rbuf[g_node_rank]+chunksize1*i*size, (char*)comm->coll->tmp[g_numa_root], chunksize2*size);
 		else
-          if(g_node_rank%numpst != 0)
-          memcpy((char*)comm->rbuf[g_node_rank]+chunksize1*i*size, (char*)comm->rbuf[rthread]+chunksize1*i*size, chunksize2*size);
+          if(g_node_rank%g_numa_size != 0)
+          memcpy((char*)comm->coll->rbuf[g_node_rank]+chunksize1*i*size, (char*)comm->coll->rbuf[g_numa_root]+chunksize1*i*size, chunksize2*size);
 	   } 
 	 }
 
-     t_barrier(comm->t_barr, g_node_rank);
+     t_barrier(comm->coll->t_barr, g_node_rank);
 
     } 
 
-   if(g_node_rank%numpst == 0)
+   if(g_node_rank%g_numa_size == 0)
    free(tmp);
 
    DEBUG3(
     PROFILE_STOP(allreduce);
     PROFILE_SHOW(allreduce);
-    SHOW(g_node_rank, numpst);
+    SHOW(g_node_rank, g_numa_size);
     PROFILE_SHOW_REDUCE(allreduce);
 	)
     return MPI_SUCCESS;
@@ -1289,8 +1289,8 @@ int HMPI_ReduceTree_sub(void *sendbuf, void *recvbuf, int count, MPI_Datatype da
     int i;
     int size;
 	int tag = 0;
-    barrier_record * nodes = comm->t_barr->nodes;
-    sbarrier_record * skts = comm->t_barr->skts;
+    barrier_record * nodes = comm->coll->t_barr->nodes;
+    sbarrier_record * skts = comm->coll->t_barr->skts;
    
     MPI_Type_size(datatype, &size);
     DEBUG2(
@@ -1300,8 +1300,8 @@ int HMPI_ReduceTree_sub(void *sendbuf, void *recvbuf, int count, MPI_Datatype da
     DEBUG3( double begin; double elapse; )
 
     //collect the addresses of send buffer and recieve buffer
-    comm->sbuf[g_node_rank]=sendbuf;
-    comm->rbuf[g_node_rank]=recvbuf;
+    comm->coll->sbuf[g_node_rank]=sendbuf;
+    comm->coll->rbuf[g_node_rank]=recvbuf;
    if(!nodes[g_node_rank].leafbool) 
        recvbuf=(uint64_t *)malloc(sizeof(uint64_t)*count);
     //corresponding to the number of FANIN, after all the child nodes arriving, parent node begins to do the following computation
@@ -1319,47 +1319,47 @@ int HMPI_ReduceTree_sub(void *sendbuf, void *recvbuf, int count, MPI_Datatype da
 	     if(tag==1)
     	   //distinguish leaf nodes and other nodes to reduce extra memcpy overhead
 	       if(nodes[nodes[g_node_rank].havechild[i]].leafbool) 
-             NBC_Operation(recvbuf, sendbuf, (void*)comm->sbuf[nodes[g_node_rank].havechild[i]], op, datatype, count);
+             NBC_Operation(recvbuf, sendbuf, (void*)comm->coll->sbuf[nodes[g_node_rank].havechild[i]], op, datatype, count);
            else
-	         NBC_Operation(recvbuf, sendbuf, (void*)comm->rbuf[nodes[g_node_rank].havechild[i]], op, datatype, count);
+	         NBC_Operation(recvbuf, sendbuf, (void*)comm->coll->rbuf[nodes[g_node_rank].havechild[i]], op, datatype, count);
 	     else
 	       if(nodes[nodes[g_node_rank].havechild[i]].leafbool) 
-	         NBC_Operation(recvbuf, recvbuf, (void*)comm->sbuf[nodes[g_node_rank].havechild[i]], op, datatype, count);
+	         NBC_Operation(recvbuf, recvbuf, (void*)comm->coll->sbuf[nodes[g_node_rank].havechild[i]], op, datatype, count);
 	       else  
-	         NBC_Operation(recvbuf, recvbuf, (void*)comm->rbuf[nodes[g_node_rank].havechild[i]], op, datatype, count);
+	         NBC_Operation(recvbuf, recvbuf, (void*)comm->coll->rbuf[nodes[g_node_rank].havechild[i]], op, datatype, count);
        }
     }
     *nodes[g_node_rank].parentpointer = 0;
 
-	if( g_node_rank == rthread)
+	if( g_node_rank == g_numa_root)
 	{
 	  tag = 0;
       for(i=SFANIN-1; i>=0; i--)
       {
-	    while(skts[socket_id].cnotready[i].cnotready);
-        if(skts[socket_id].havechild[i]>0)
+	    while(skts[g_numa_node].cnotready[i].cnotready);
+        if(skts[g_numa_node].havechild[i]>0)
         {
 		 tag++;
-         skts[socket_id].cnotready[i].cnotready = skts[socket_id].havechild[i];
+         skts[g_numa_node].cnotready[i].cnotready = skts[g_numa_node].havechild[i];
 
-	      if(g_nthreads <= sockets)
+	      if(g_node_size <= sockets)
 	      {
 	       if(tag==1)
-	         if(skts[skts[socket_id].havechild[i]].leafbool) 
-               NBC_Operation(recvbuf, sendbuf, (void*)comm->sbuf[skts[socket_id].havechild[i]*numpst], op, datatype, count);
+	         if(skts[skts[g_numa_node].havechild[i]].leafbool) 
+               NBC_Operation(recvbuf, sendbuf, (void*)comm->coll->sbuf[skts[g_numa_node].havechild[i]*g_numa_size], op, datatype, count);
              else
-	           NBC_Operation(recvbuf, sendbuf, (void*)comm->rbuf[skts[socket_id].havechild[i]*numpst], op, datatype, count);
+	           NBC_Operation(recvbuf, sendbuf, (void*)comm->coll->rbuf[skts[g_numa_node].havechild[i]*g_numa_size], op, datatype, count);
 	       else
-	         if(skts[skts[socket_id].havechild[i]].leafbool) 
-	           NBC_Operation(recvbuf, recvbuf, (void*)comm->sbuf[skts[socket_id].havechild[i]*numpst], op, datatype, count);
+	         if(skts[skts[g_numa_node].havechild[i]].leafbool) 
+	           NBC_Operation(recvbuf, recvbuf, (void*)comm->coll->sbuf[skts[g_numa_node].havechild[i]*g_numa_size], op, datatype, count);
 	         else  
-	           NBC_Operation(recvbuf, recvbuf, (void*)comm->rbuf[skts[socket_id].havechild[i]*numpst], op, datatype, count);
+	           NBC_Operation(recvbuf, recvbuf, (void*)comm->coll->rbuf[skts[g_numa_node].havechild[i]*g_numa_size], op, datatype, count);
 	       }
 	      else
-	          NBC_Operation(recvbuf, recvbuf, (void*)comm->rbuf[skts[socket_id].havechild[i]*numpst], op, datatype, count);
+	          NBC_Operation(recvbuf, recvbuf, (void*)comm->coll->rbuf[skts[g_numa_node].havechild[i]*g_numa_size], op, datatype, count);
        }
       }
-      *skts[socket_id].parentpointer = 0;
+      *skts[g_numa_node].parentpointer = 0;
 	}
     DEBUG3(
      if(g_node_rank == 0)
@@ -1371,30 +1371,30 @@ int HMPI_ReduceTree_sub(void *sendbuf, void *recvbuf, int count, MPI_Datatype da
 
     //do mpi_allreduce if there are more than one MPI processes
      if(g_net_size > 1 && g_node_rank==0)
-       MPI_Reduce(recvbuf, sendbuf, count, datatype, op,root, comm->mpicomm);
+       MPI_Reduce(recvbuf, sendbuf, count, datatype, op,root, comm->comm);
 
     // if(g_node_rank==1 && g_net_size > 1)
-    //   MPI_Allreduce(MPI_IN_PLACE, sendbuf, count, datatype, op, comm->mpicomm);
+    //   MPI_Allreduce(MPI_IN_PLACE, sendbuf, count, datatype, op, comm->comm);
 
    // DEBUG3(
     //begin = MPI_Wtime();
    //)
    if(SFANOUT>0)
    { //inter-socket FANOUT
-	if(g_node_rank == rthread && g_node_rank != 0)
+	if(g_node_rank == g_numa_root && g_node_rank != 0)
 	{
-	  while(skts[socket_id].wsense.wsense != sense);
-      //memcpy((void*)comm->rbuf[g_node_rank], (void*)comm->rbuf[skts[socket_id].parentindx*numpst], count*size);
+	  while(skts[g_numa_node].wsense.wsense != sense);
+      //memcpy((void*)comm->coll->rbuf[g_node_rank], (void*)comm->coll->rbuf[skts[g_numa_node].parentindx*g_numa_size], count*size);
 	}
-	if(g_node_rank == rthread)
+	if(g_node_rank == g_numa_root)
 	  for(i=0; i<SFANOUT; i++)
-        *skts[socket_id].childpointer[i] = sense;
+        *skts[g_numa_node].childpointer[i] = sense;
 
     //intra-scoket FANOUT	
-    if(g_node_rank != rthread)
+    if(g_node_rank != g_numa_root)
     {  
 	  while(nodes[g_node_rank].wsense.wsense != sense);
-      //memcpy((void*)comm->rbuf[g_node_rank], (void*)comm->rbuf[nodes[g_node_rank].parentindx], count*size);
+      //memcpy((void*)comm->coll->rbuf[g_node_rank], (void*)comm->coll->rbuf[nodes[g_node_rank].parentindx], count*size);
     }
 	for(i=0; i<FANOUT; i++)
       *nodes[g_node_rank].childpointer[i] = sense;
@@ -1408,7 +1408,7 @@ int HMPI_ReduceTree_sub(void *sendbuf, void *recvbuf, int count, MPI_Datatype da
     if(g_node_rank != 0)
     {  
 	  while(nodes[g_node_rank].wsense.wsense != sense);
-      //memcpy((void*)comm->rbuf[g_node_rank], (void*)comm->rbuf[nodes[g_node_rank].parentindx], count*size);
+      //memcpy((void*)comm->coll->rbuf[g_node_rank], (void*)comm->coll->rbuf[nodes[g_node_rank].parentindx], count*size);
     }
 	for(i=0; i<FANOUT; i++)
       *nodes[g_node_rank].childpointer[i] = sense;
@@ -1417,7 +1417,7 @@ int HMPI_ReduceTree_sub(void *sendbuf, void *recvbuf, int count, MPI_Datatype da
     sense = sense == 0? 1: 0;
 
    } 
-    //t_barrier(comm->t_barr, g_node_rank);
+    //t_barrier(comm->coll->t_barr, g_node_rank);
     DEBUG3(
     	elapse = (MPI_Wtime() - begin);
 	printf("thread = %d, step2 time = %12.8f\n", g_node_rank,elapse);
@@ -1428,7 +1428,7 @@ int HMPI_ReduceTree_sub(void *sendbuf, void *recvbuf, int count, MPI_Datatype da
     PROFILE_SHOW(allreduce);
     PROFILE_SHOW_REDUCE(allreduce);)
    //if(g_node_rank!=0)
-   //     memcpy(comm->rbuf[g_node_rank], comm->rbuf[0], count*size);
+   //     memcpy(comm->coll->rbuf[g_node_rank], comm->coll->rbuf[0], count*size);
     return MPI_SUCCESS;
 }
 
@@ -1452,7 +1452,7 @@ int HMPI_ReduceTree(void *sendbuf, void *recvbuf, int count, MPI_Datatype dataty
 	    for(i=0; i<chunks; i++) 
 	    {    
 	       HMPI_ReduceTree_sub((char *)sendbuf+chunksize*i*size,(char *)recvbuf+chunksize*i*size, chunksize, datatype, op, root, comm);
-	      t_barrier(comm->t_barr, g_node_rank);
+	      t_barrier(comm->coll->t_barr, g_node_rank);
           }    
 	        if(remain>0)
 	       HMPI_ReduceTree_sub((char *)sendbuf+chunksize*i*size,(char *)recvbuf+chunksize*i*size, remain, datatype, op, root, comm);
@@ -1470,8 +1470,8 @@ int HMPI_AllreduceTree(void *sendbuf, void *recvbuf, int count, MPI_Datatype dat
     int i;
     int size;
 	int tag = 0;
-    barrier_record * nodes = comm->t_barr->nodes;
-    sbarrier_record * skts = comm->t_barr->skts;
+    barrier_record * nodes = comm->coll->t_barr->nodes;
+    sbarrier_record * skts = comm->coll->t_barr->skts;
    
     MPI_Type_size(datatype, &size);
     DEBUG2(
@@ -1481,8 +1481,8 @@ int HMPI_AllreduceTree(void *sendbuf, void *recvbuf, int count, MPI_Datatype dat
     DEBUG3( double begin; double elapse; )
 
     //collect the addresses of send buffer and recieve buffer
-    comm->sbuf[g_node_rank]=sendbuf;
-    comm->rbuf[g_node_rank]=recvbuf;
+    comm->coll->sbuf[g_node_rank]=sendbuf;
+    comm->coll->rbuf[g_node_rank]=recvbuf;
     
     //corresponding to the number of FANIN, after all the child nodes arriving, parent node begins to do the following computation
     DEBUG3(
@@ -1499,47 +1499,47 @@ int HMPI_AllreduceTree(void *sendbuf, void *recvbuf, int count, MPI_Datatype dat
 	     if(tag==1)
     	   //distinguish leaf nodes and other nodes to reduce extra memcpy overhead
 	       if(nodes[nodes[g_node_rank].havechild[i]].leafbool) 
-             NBC_Operation(recvbuf, sendbuf, (void*)comm->sbuf[nodes[g_node_rank].havechild[i]], op, datatype, count);
+             NBC_Operation(recvbuf, sendbuf, (void*)comm->coll->sbuf[nodes[g_node_rank].havechild[i]], op, datatype, count);
            else
-	         NBC_Operation(recvbuf, sendbuf, (void*)comm->rbuf[nodes[g_node_rank].havechild[i]], op, datatype, count);
+	         NBC_Operation(recvbuf, sendbuf, (void*)comm->coll->rbuf[nodes[g_node_rank].havechild[i]], op, datatype, count);
 	     else
 	       if(nodes[nodes[g_node_rank].havechild[i]].leafbool) 
-	         NBC_Operation(recvbuf, recvbuf, (void*)comm->sbuf[nodes[g_node_rank].havechild[i]], op, datatype, count);
+	         NBC_Operation(recvbuf, recvbuf, (void*)comm->coll->sbuf[nodes[g_node_rank].havechild[i]], op, datatype, count);
 	       else  
-	         NBC_Operation(recvbuf, recvbuf, (void*)comm->rbuf[nodes[g_node_rank].havechild[i]], op, datatype, count);
+	         NBC_Operation(recvbuf, recvbuf, (void*)comm->coll->rbuf[nodes[g_node_rank].havechild[i]], op, datatype, count);
        }
     }
     *nodes[g_node_rank].parentpointer = 0;
 
-	if( g_node_rank == rthread)
+	if( g_node_rank == g_numa_root)
 	{
 	  tag = 0;
       for(i=SFANIN-1; i>=0; i--)
       {
-	    while(skts[socket_id].cnotready[i].cnotready);
-        if(skts[socket_id].havechild[i]>0)
+	    while(skts[g_numa_node].cnotready[i].cnotready);
+        if(skts[g_numa_node].havechild[i]>0)
         {
 		 tag++;
-         skts[socket_id].cnotready[i].cnotready = skts[socket_id].havechild[i];
+         skts[g_numa_node].cnotready[i].cnotready = skts[g_numa_node].havechild[i];
 
-	      if(g_nthreads <= sockets)
+	      if(g_node_size <= sockets)
 	      {
 	       if(tag==1)
-	         if(skts[skts[socket_id].havechild[i]].leafbool) 
-               NBC_Operation(recvbuf, sendbuf, (void*)comm->sbuf[skts[socket_id].havechild[i]*numpst], op, datatype, count);
+	         if(skts[skts[g_numa_node].havechild[i]].leafbool) 
+               NBC_Operation(recvbuf, sendbuf, (void*)comm->coll->sbuf[skts[g_numa_node].havechild[i]*g_numa_size], op, datatype, count);
              else
-	           NBC_Operation(recvbuf, sendbuf, (void*)comm->rbuf[skts[socket_id].havechild[i]*numpst], op, datatype, count);
+	           NBC_Operation(recvbuf, sendbuf, (void*)comm->coll->rbuf[skts[g_numa_node].havechild[i]*g_numa_size], op, datatype, count);
 	       else
-	         if(skts[skts[socket_id].havechild[i]].leafbool) 
-	           NBC_Operation(recvbuf, recvbuf, (void*)comm->sbuf[skts[socket_id].havechild[i]*numpst], op, datatype, count);
+	         if(skts[skts[g_numa_node].havechild[i]].leafbool) 
+	           NBC_Operation(recvbuf, recvbuf, (void*)comm->coll->sbuf[skts[g_numa_node].havechild[i]*g_numa_size], op, datatype, count);
 	         else  
-	           NBC_Operation(recvbuf, recvbuf, (void*)comm->rbuf[skts[socket_id].havechild[i]*numpst], op, datatype, count);
+	           NBC_Operation(recvbuf, recvbuf, (void*)comm->coll->rbuf[skts[g_numa_node].havechild[i]*g_numa_size], op, datatype, count);
 	       }
 	      else
-	          NBC_Operation(recvbuf, recvbuf, (void*)comm->rbuf[skts[socket_id].havechild[i]*numpst], op, datatype, count);
+	          NBC_Operation(recvbuf, recvbuf, (void*)comm->coll->rbuf[skts[g_numa_node].havechild[i]*g_numa_size], op, datatype, count);
        }
       }
-      *skts[socket_id].parentpointer = 0;
+      *skts[g_numa_node].parentpointer = 0;
 	}
     DEBUG3(
      if(g_node_rank == 0)
@@ -1551,30 +1551,30 @@ int HMPI_AllreduceTree(void *sendbuf, void *recvbuf, int count, MPI_Datatype dat
 
     //do mpi_allreduce if there are more than one MPI processes
      if(g_net_size > 1 && g_node_rank==0)
-       MPI_Allreduce(MPI_IN_PLACE, recvbuf, count, datatype, op, comm->mpicomm);
+       MPI_Allreduce(MPI_IN_PLACE, recvbuf, count, datatype, op, comm->comm);
 
     // if(g_node_rank==1 && g_net_size > 1)
-    //   MPI_Allreduce(MPI_IN_PLACE, sendbuf, count, datatype, op, comm->mpicomm);
+    //   MPI_Allreduce(MPI_IN_PLACE, sendbuf, count, datatype, op, comm->comm);
 
    // DEBUG3(
     //begin = MPI_Wtime();
    //)
    if(SFANOUT>0)
    { //inter-socket FANOUT
-	if(g_node_rank == rthread && g_node_rank != 0)
+	if(g_node_rank == g_numa_root && g_node_rank != 0)
 	{
-	  while(skts[socket_id].wsense.wsense != sense);
-      memcpy((void*)comm->rbuf[g_node_rank], (void*)comm->rbuf[skts[socket_id].parentindx*numpst], count*size);
+	  while(skts[g_numa_node].wsense.wsense != sense);
+      memcpy((void*)comm->coll->rbuf[g_node_rank], (void*)comm->coll->rbuf[skts[g_numa_node].parentindx*g_numa_size], count*size);
 	}
-	if(g_node_rank == rthread)
+	if(g_node_rank == g_numa_root)
 	  for(i=0; i<SFANOUT; i++)
-        *skts[socket_id].childpointer[i] = sense;
+        *skts[g_numa_node].childpointer[i] = sense;
 
     //intra-scoket FANOUT	
-    if(g_node_rank != rthread)
+    if(g_node_rank != g_numa_root)
     {  
 	  while(nodes[g_node_rank].wsense.wsense != sense);
-      memcpy((void*)comm->rbuf[g_node_rank], (void*)comm->rbuf[nodes[g_node_rank].parentindx], count*size);
+      memcpy((void*)comm->coll->rbuf[g_node_rank], (void*)comm->coll->rbuf[nodes[g_node_rank].parentindx], count*size);
     }
 	for(i=0; i<FANOUT; i++)
       *nodes[g_node_rank].childpointer[i] = sense;
@@ -1588,7 +1588,7 @@ int HMPI_AllreduceTree(void *sendbuf, void *recvbuf, int count, MPI_Datatype dat
     if(g_node_rank != 0)
     {  
 	  while(nodes[g_node_rank].wsense.wsense != sense);
-      memcpy((void*)comm->rbuf[g_node_rank], (void*)comm->rbuf[nodes[g_node_rank].parentindx], count*size);
+      memcpy((void*)comm->coll->rbuf[g_node_rank], (void*)comm->coll->rbuf[nodes[g_node_rank].parentindx], count*size);
     }
 	for(i=0; i<FANOUT; i++)
       *nodes[g_node_rank].childpointer[i] = sense;
@@ -1597,7 +1597,7 @@ int HMPI_AllreduceTree(void *sendbuf, void *recvbuf, int count, MPI_Datatype dat
     sense = sense == 0? 1: 0;
 
    } 
-    //t_barrier(comm->t_barr, g_node_rank);
+    //t_barrier(comm->coll->t_barr, g_node_rank);
     DEBUG3(
     	elapse = (MPI_Wtime() - begin);
 	printf("thread = %d, step2 time = %12.8f\n", g_node_rank,elapse);
@@ -1608,7 +1608,7 @@ int HMPI_AllreduceTree(void *sendbuf, void *recvbuf, int count, MPI_Datatype dat
     PROFILE_SHOW(allreduce);
     PROFILE_SHOW_REDUCE(allreduce);)
    //if(g_node_rank!=0)
-   //     memcpy(comm->rbuf[g_node_rank], comm->rbuf[0], count*size);
+   //     memcpy(comm->coll->rbuf[g_node_rank], comm->coll->rbuf[0], count*size);
     return MPI_SUCCESS;
 }
 
@@ -1629,48 +1629,48 @@ int HMPI_AllreduceDis1D(void *sendbuf, void *recvbuf, int count, MPI_Datatype da
     PROFILE_START(allreduce);)
 
 	// dimensions of threads intra-node
-	int k=(int)ceil(log((double)g_nthreads)/log(2.0));
+	int k=(int)ceil(log((double)g_node_size)/log(2.0));
 
-    comm->sbuf[g_node_rank]=sendbuf;
-    comm->rbuf[g_node_rank]=recvbuf;
-    comm->tmp[g_node_rank]=tmp;
-    t_barrier(comm->t_barr, g_node_rank);
+    comm->coll->sbuf[g_node_rank]=sendbuf;
+    comm->coll->rbuf[g_node_rank]=recvbuf;
+    comm->coll->tmp[g_node_rank]=tmp;
+    t_barrier(comm->coll->t_barr, g_node_rank);
     for( i=0; i<k; i++)
 	{
       n = g_node_rank - (int)pow(2,i);
       if(n < 0)
-    	n += g_nthreads;
+    	n += g_node_size;
       if(i>=1)
-	  	while(comm->ptop[i-1][n].ptopsense!=hcsense);
+	  	while(comm->coll->ptop[i-1][n].ptopsense!=hcsense);
 	  if(i == 0)
-	   NBC_Operation((char *)recvbuf, (char *)sendbuf, (char *)comm->sbuf[n], op, datatype, count);
+	   NBC_Operation((char *)recvbuf, (char *)sendbuf, (char *)comm->coll->sbuf[n], op, datatype, count);
 	  else if(i%2 == 1)
-	   NBC_Operation((char *)tmp, (char *)recvbuf, (char *)comm->rbuf[n], op, datatype, count);
+	   NBC_Operation((char *)tmp, (char *)recvbuf, (char *)comm->coll->rbuf[n], op, datatype, count);
 	  else
-	   NBC_Operation((char *)recvbuf, (char *)tmp, (char *)comm->tmp[n], op, datatype, count);
-    //t_barrier(comm->t_barr, g_node_rank);
+	   NBC_Operation((char *)recvbuf, (char *)tmp, (char *)comm->coll->tmp[n], op, datatype, count);
+    //t_barrier(comm->coll->t_barr, g_node_rank);
 	   if(i<k-1)
-       comm->ptop[i][g_node_rank].ptopsense=hcsense;
+       comm->coll->ptop[i][g_node_rank].ptopsense=hcsense;
 	}
 	if(g_net_size > 1)
 	{
 	      if(g_node_rank == 0)
 	  	  {
 		     if(i%2 == 0)
-	  	       MPI_Allreduce(tmp, recvbuf, count, datatype, op, comm->mpicomm);
+	  	       MPI_Allreduce(tmp, recvbuf, count, datatype, op, comm->comm);
 	         else
-	  	       MPI_Allreduce(MPI_IN_PLACE, recvbuf, count, datatype, op, comm->mpicomm);
+	  	       MPI_Allreduce(MPI_IN_PLACE, recvbuf, count, datatype, op, comm->comm);
 	      }
-        t_barrier(comm->t_barr, g_node_rank);
+        t_barrier(comm->coll->t_barr, g_node_rank);
 		  if(g_node_rank != 0)
-		     memcpy((char*)comm->rbuf[g_node_rank], (char*)comm->rbuf[0], count*size);
+		     memcpy((char*)comm->coll->rbuf[g_node_rank], (char*)comm->coll->rbuf[0], count*size);
     }
 	else
 	{
 	   if(i%2 == 0)
            memcpy(recvbuf, tmp, count*size);	
 	}
-	t_barrier(comm->t_barr, g_node_rank);
+	t_barrier(comm->coll->t_barr, g_node_rank);
       free (tmp);
 	  hcsense = hcsense == 0? 1: 0;
     return MPI_SUCCESS;
@@ -1692,83 +1692,83 @@ int HMPI_AllreduceDis2D(void *sendbuf, void *recvbuf, int count, MPI_Datatype da
     PROFILE_INIT(g_node_rank);
     PROFILE_START(allreduce);)
 
-    comm->sbuf[g_node_rank]=sendbuf;
-    comm->rbuf[g_node_rank]=recvbuf;
-    comm->tmp[g_node_rank]=tmp;
+    comm->coll->sbuf[g_node_rank]=sendbuf;
+    comm->coll->rbuf[g_node_rank]=recvbuf;
+    comm->coll->tmp[g_node_rank]=tmp;
 
 	// dimensions of sockets
 	int k=(int)(log((double)sockets)/log(2.0));
     // dimentions of intra-socket threads
-	int t=(int)(log((double)numpst)/log(2.0));
+	int t=(int)(log((double)g_numa_size)/log(2.0));
 
-    t_barrier(comm->t_barr, g_node_rank);
+    t_barrier(comm->coll->t_barr, g_node_rank);
     
     for( i=0; i<t; i++)
 	{
-      n = thread_id - (int)pow(2,i);
+      n = g_numa_rank - (int)pow(2,i);
       if(n < 0)
-    	n += numpst;
+    	n += g_numa_size;
 	  if(i == 0)
-	   NBC_Operation((char *)recvbuf, (char *)sendbuf, (char *)comm->sbuf[rthread+n], op, datatype, count);
+	   NBC_Operation((char *)recvbuf, (char *)sendbuf, (char *)comm->coll->sbuf[g_numa_root+n], op, datatype, count);
 	  else if(i%2 == 1)
-	   NBC_Operation((char *)tmp, (char *)recvbuf, (char *)comm->rbuf[rthread+n], op, datatype, count);
+	   NBC_Operation((char *)tmp, (char *)recvbuf, (char *)comm->coll->rbuf[g_numa_root+n], op, datatype, count);
 	  else
-	   NBC_Operation((char *)recvbuf, (char *)tmp, (char *)comm->tmp[rthread+n], op, datatype, count);
-      t_barrier(comm->t_barr, g_node_rank);
+	   NBC_Operation((char *)recvbuf, (char *)tmp, (char *)comm->coll->tmp[g_numa_root+n], op, datatype, count);
+      t_barrier(comm->coll->t_barr, g_node_rank);
 	}
 
 	if(g_net_size > 1)
 	{
 	  for(j=0; j<k; j++)
 	  {
-       if( socket_id%((int)pow(2,j)) == 0 )
+       if( g_numa_node%((int)pow(2,j)) == 0 )
        { 
-	    n = socket_id - (int)pow(2,j);
+	    n = g_numa_node - (int)pow(2,j);
         if(n < 0)
       	n += sockets;
 		if(i%2 == 0)
 		  if(j%2 == 0)
-    	     NBC_Operation((char *)recvbuf, (char *)tmp, (char *)comm->tmp[n*numpst], op, datatype, count);
+    	     NBC_Operation((char *)recvbuf, (char *)tmp, (char *)comm->coll->tmp[n*g_numa_size], op, datatype, count);
 		  else
-    	     NBC_Operation((char *)tmp, (char *)recvbuf, (char *)comm->rbuf[n*numpst], op, datatype, count);
+    	     NBC_Operation((char *)tmp, (char *)recvbuf, (char *)comm->coll->rbuf[n*g_numa_size], op, datatype, count);
 		else
 		  if(j%2 == 0)
-    	       NBC_Operation((char *)tmp, (char *)recvbuf, (char *)comm->rbuf[n*numpst], op, datatype, count);
+    	       NBC_Operation((char *)tmp, (char *)recvbuf, (char *)comm->coll->rbuf[n*g_numa_size], op, datatype, count);
 		  else
-    	       NBC_Operation((char *)recvbuf, (char *)tmp, (char *)comm->tmp[n*numpst], op, datatype, count);
+    	       NBC_Operation((char *)recvbuf, (char *)tmp, (char *)comm->coll->tmp[n*g_numa_size], op, datatype, count);
 	    }
-        t_barrier(comm->t_barr, g_node_rank);
+        t_barrier(comm->coll->t_barr, g_node_rank);
 	   }
 	   if(g_node_rank == 0)
 	   {
 	      if((i%2 == 0 && j%2 == 0) || (i%2 == 1 && j%2 == 1))
-	  	     MPI_Allreduce(tmp, recvbuf, count, datatype, op, comm->mpicomm);
+	  	     MPI_Allreduce(tmp, recvbuf, count, datatype, op, comm->comm);
 	      else
-	  	     MPI_Allreduce(MPI_IN_PLACE, recvbuf, count, datatype, op, comm->mpicomm);
+	  	     MPI_Allreduce(MPI_IN_PLACE, recvbuf, count, datatype, op, comm->comm);
 	   }
-        t_barrier(comm->t_barr, g_node_rank);
+        t_barrier(comm->coll->t_barr, g_node_rank);
 
 		  if(g_node_rank != 0)
-		     memcpy((char*)comm->rbuf[g_node_rank], (char*)comm->rbuf[0], count*size);
+		     memcpy((char*)comm->coll->rbuf[g_node_rank], (char*)comm->coll->rbuf[0], count*size);
     }
 	else
 	{
 	  for(j=0; j<k; j++)
 	  {
-        n = socket_id - (int)pow(2,j);
+        n = g_numa_node - (int)pow(2,j);
         if(n < 0)
       	n += sockets;
 		if(i%2 == 0)
 		  if(j%2 == 0)
-    	     NBC_Operation((char *)recvbuf, (char *)tmp, (char *)comm->tmp[n*numpst], op, datatype, count);
+    	     NBC_Operation((char *)recvbuf, (char *)tmp, (char *)comm->coll->tmp[n*g_numa_size], op, datatype, count);
 		  else
-    	     NBC_Operation((char *)tmp, (char *)recvbuf, (char *)comm->rbuf[n*numpst], op, datatype, count);
+    	     NBC_Operation((char *)tmp, (char *)recvbuf, (char *)comm->coll->rbuf[n*g_numa_size], op, datatype, count);
 		else
 		  if(j%2 == 0)
-    	       NBC_Operation((char *)tmp, (char *)recvbuf, (char *)comm->rbuf[n*numpst], op, datatype, count);
+    	       NBC_Operation((char *)tmp, (char *)recvbuf, (char *)comm->coll->rbuf[n*g_numa_size], op, datatype, count);
 		  else
-    	       NBC_Operation((char *)recvbuf, (char *)tmp, (char *)comm->tmp[n*numpst], op, datatype, count);
-        t_barrier(comm->t_barr, g_node_rank);
+    	       NBC_Operation((char *)recvbuf, (char *)tmp, (char *)comm->coll->tmp[n*g_numa_size], op, datatype, count);
+        t_barrier(comm->coll->t_barr, g_node_rank);
 	   }
 	   if((i%2 == 0 && j%2 == 0) || (i%2 == 1 && j%2 == 1))
            memcpy(recvbuf, tmp, count*size);	
@@ -1789,96 +1789,96 @@ int HMPI_AllreduceHyperCube(void *sendbuf, void *recvbuf, int count, MPI_Datatyp
     PROFILE_INIT(g_node_rank);
     PROFILE_START(allreduce);)
 
-    comm->sbuf[g_node_rank]=sendbuf;
-    comm->rbuf[g_node_rank]=recvbuf;
-    comm->tmp[g_node_rank]=tmp;
-    t_barrier(comm->t_barr, g_node_rank);
+    comm->coll->sbuf[g_node_rank]=sendbuf;
+    comm->coll->rbuf[g_node_rank]=recvbuf;
+    comm->coll->tmp[g_node_rank]=tmp;
+    t_barrier(comm->coll->t_barr, g_node_rank);
     
     //STORE_FENCE();
-    //comm->ptop_0[g_node_rank].ptopsense=hcsense;
+    //comm->coll->ptop_0[g_node_rank].ptopsense=hcsense;
     //STORE_FENCE();
-    //while(comm->ptop_0[g_node_rank^1].ptopsense != hcsense) ;
+    //while(comm->coll->ptop_0[g_node_rank^1].ptopsense != hcsense) ;
 
-    NBC_Operation(recvbuf, sendbuf, (void*)comm->sbuf[g_node_rank^1], op, datatype, count);
+    NBC_Operation(recvbuf, sendbuf, (void*)comm->coll->sbuf[g_node_rank^1], op, datatype, count);
 
-    //t_barrier(comm->t_barr, g_node_rank);
+    //t_barrier(comm->coll->t_barr, g_node_rank);
     //STORE_FENCE();
-    comm->ptop_1[g_node_rank].ptopsense=hcsense;
+    comm->coll->ptop_1[g_node_rank].ptopsense=hcsense;
     //STORE_FENCE();
     
     switch(g_node_rank%6){
     case 0:
-    while(comm->ptop_1[g_node_rank+2].ptopsense!=hcsense || comm->ptop_1[g_node_rank+4].ptopsense!=hcsense) ;
-    NBC_Operation(tmp, recvbuf, (void*)comm->rbuf[g_node_rank+2], op, datatype, count);
-    NBC_Operation(tmp, tmp, (void*)comm->rbuf[g_node_rank+4], op, datatype, count);
+    while(comm->coll->ptop_1[g_node_rank+2].ptopsense!=hcsense || comm->coll->ptop_1[g_node_rank+4].ptopsense!=hcsense) ;
+    NBC_Operation(tmp, recvbuf, (void*)comm->coll->rbuf[g_node_rank+2], op, datatype, count);
+    NBC_Operation(tmp, tmp, (void*)comm->coll->rbuf[g_node_rank+4], op, datatype, count);
     break;
     case 1:
-    while(comm->ptop_1[g_node_rank+1].ptopsense!=hcsense || comm->ptop_1[g_node_rank+3].ptopsense!=hcsense) ;
-    NBC_Operation(tmp, recvbuf, (void*)comm->rbuf[g_node_rank+1], op, datatype, count);
-    NBC_Operation(tmp, tmp, (void*)comm->rbuf[g_node_rank+3], op, datatype, count);
+    while(comm->coll->ptop_1[g_node_rank+1].ptopsense!=hcsense || comm->coll->ptop_1[g_node_rank+3].ptopsense!=hcsense) ;
+    NBC_Operation(tmp, recvbuf, (void*)comm->coll->rbuf[g_node_rank+1], op, datatype, count);
+    NBC_Operation(tmp, tmp, (void*)comm->coll->rbuf[g_node_rank+3], op, datatype, count);
     break;
     case 2:
-    while(comm->ptop_1[g_node_rank+2].ptopsense!=hcsense || comm->ptop_1[g_node_rank-2].ptopsense!=hcsense) ;
-    NBC_Operation(tmp, recvbuf, (void*)comm->rbuf[g_node_rank+2], op, datatype, count);
-    NBC_Operation(tmp, tmp, (void*)comm->rbuf[g_node_rank-2], op, datatype, count);
+    while(comm->coll->ptop_1[g_node_rank+2].ptopsense!=hcsense || comm->coll->ptop_1[g_node_rank-2].ptopsense!=hcsense) ;
+    NBC_Operation(tmp, recvbuf, (void*)comm->coll->rbuf[g_node_rank+2], op, datatype, count);
+    NBC_Operation(tmp, tmp, (void*)comm->coll->rbuf[g_node_rank-2], op, datatype, count);
     break;
     case 3:
-    while(comm->ptop_1[g_node_rank+1].ptopsense!=hcsense || comm->ptop_1[g_node_rank-3].ptopsense!=hcsense) ;
-    NBC_Operation(tmp, recvbuf, (void*)comm->rbuf[g_node_rank+1], op, datatype, count);
-    NBC_Operation(tmp, tmp, (void*)comm->rbuf[g_node_rank-3], op, datatype, count);
+    while(comm->coll->ptop_1[g_node_rank+1].ptopsense!=hcsense || comm->coll->ptop_1[g_node_rank-3].ptopsense!=hcsense) ;
+    NBC_Operation(tmp, recvbuf, (void*)comm->coll->rbuf[g_node_rank+1], op, datatype, count);
+    NBC_Operation(tmp, tmp, (void*)comm->coll->rbuf[g_node_rank-3], op, datatype, count);
     break;
     case 4:
-    while(comm->ptop_1[g_node_rank-2].ptopsense!=hcsense || comm->ptop_1[g_node_rank-4].ptopsense!=hcsense) ;
-    NBC_Operation(tmp, recvbuf, (void*)comm->rbuf[g_node_rank-2], op, datatype, count);
-    NBC_Operation(tmp, tmp, (void*)comm->rbuf[g_node_rank-4], op, datatype, count);
+    while(comm->coll->ptop_1[g_node_rank-2].ptopsense!=hcsense || comm->coll->ptop_1[g_node_rank-4].ptopsense!=hcsense) ;
+    NBC_Operation(tmp, recvbuf, (void*)comm->coll->rbuf[g_node_rank-2], op, datatype, count);
+    NBC_Operation(tmp, tmp, (void*)comm->coll->rbuf[g_node_rank-4], op, datatype, count);
     break;
     case 5:
-    while(comm->ptop_1[g_node_rank-3].ptopsense!=hcsense || comm->ptop_1[g_node_rank-5].ptopsense!=hcsense) ;
-    NBC_Operation(tmp, recvbuf, (void*)comm->rbuf[g_node_rank-3], op, datatype, count);
-    NBC_Operation(tmp, tmp, (void*)comm->rbuf[g_node_rank-5], op, datatype, count);
+    while(comm->coll->ptop_1[g_node_rank-3].ptopsense!=hcsense || comm->coll->ptop_1[g_node_rank-5].ptopsense!=hcsense) ;
+    NBC_Operation(tmp, recvbuf, (void*)comm->coll->rbuf[g_node_rank-3], op, datatype, count);
+    NBC_Operation(tmp, tmp, (void*)comm->coll->rbuf[g_node_rank-5], op, datatype, count);
     break;
     }
 
     //STORE_FENCE();
-    comm->ptop_2[g_node_rank].ptopsense=hcsense;
+    comm->coll->ptop_2[g_node_rank].ptopsense=hcsense;
     //STORE_FENCE();
-    //t_barrier(comm->t_barr, g_node_rank);
+    //t_barrier(comm->coll->t_barr, g_node_rank);
     if(0<g_node_rank && g_node_rank<6)
     {
-      while(comm->ptop_2[6].ptopsense!=hcsense) ;
-      NBC_Operation(recvbuf, tmp, (void*)comm->tmp[6], op, datatype, count);
+      while(comm->coll->ptop_2[6].ptopsense!=hcsense) ;
+      NBC_Operation(recvbuf, tmp, (void*)comm->coll->tmp[6], op, datatype, count);
 
       //STORE_FENCE();
-      comm->ptop_3[g_node_rank].ptopsense=hcsense;
+      comm->coll->ptop_3[g_node_rank].ptopsense=hcsense;
       //STORE_FENCE();
-      //while(comm->ptop_3[6].ptopsense!=hcsense || comm->ptop_3[0].ptopsense!=hcsense) ;
+      //while(comm->coll->ptop_3[6].ptopsense!=hcsense || comm->coll->ptop_3[0].ptopsense!=hcsense) ;
       free (tmp);
       hcsense = hcsense == 0? 1: 0;
     }
     
     if(6<g_node_rank && g_node_rank<12)
     {
-      while(comm->ptop_2[0].ptopsense!=hcsense) ;
-      NBC_Operation(recvbuf, tmp, (void*)comm->tmp[0], op, datatype, count);
+      while(comm->coll->ptop_2[0].ptopsense!=hcsense) ;
+      NBC_Operation(recvbuf, tmp, (void*)comm->coll->tmp[0], op, datatype, count);
 
       //STORE_FENCE();
-      comm->ptop_3[g_node_rank].ptopsense=hcsense;
+      comm->coll->ptop_3[g_node_rank].ptopsense=hcsense;
       //STORE_FENCE();
-      //while(comm->ptop_3[6].ptopsense!=hcsense || comm->ptop_3[0].ptopsense!=hcsense) ;
+      //while(comm->coll->ptop_3[6].ptopsense!=hcsense || comm->coll->ptop_3[0].ptopsense!=hcsense) ;
       free (tmp);
       hcsense = hcsense == 0? 1: 0;
     }
     
     if(g_node_rank == 0) 
     {
-      while(comm->ptop_2[6].ptopsense!=hcsense) ;
-      NBC_Operation(recvbuf, tmp, (void*)comm->tmp[6], op, datatype, count);
+      while(comm->coll->ptop_2[6].ptopsense!=hcsense) ;
+      NBC_Operation(recvbuf, tmp, (void*)comm->coll->tmp[6], op, datatype, count);
 
       //STORE_FENCE();
-      comm->ptop_3[g_node_rank].ptopsense=hcsense;
+      comm->coll->ptop_3[g_node_rank].ptopsense=hcsense;
 
       //STORE_FENCE();
-      while(comm->ptop_3[6].ptopsense!=hcsense || comm->ptop_3[7].ptopsense!=hcsense || comm->ptop_3[8].ptopsense!=hcsense || comm->ptop_3[9].ptopsense!=hcsense || comm->ptop_3[10].ptopsense!=hcsense || comm->ptop_3[11].ptopsense!=hcsense) ;
+      while(comm->coll->ptop_3[6].ptopsense!=hcsense || comm->coll->ptop_3[7].ptopsense!=hcsense || comm->coll->ptop_3[8].ptopsense!=hcsense || comm->coll->ptop_3[9].ptopsense!=hcsense || comm->coll->ptop_3[10].ptopsense!=hcsense || comm->coll->ptop_3[11].ptopsense!=hcsense) ;
       //STORE_FENCE();
       free (tmp);
       hcsense = hcsense == 0? 1: 0;
@@ -1886,14 +1886,14 @@ int HMPI_AllreduceHyperCube(void *sendbuf, void *recvbuf, int count, MPI_Datatyp
 
     if(g_node_rank == 6) 
     {
-      while(comm->ptop_2[0].ptopsense!=hcsense) ;
-      NBC_Operation(recvbuf, tmp, (void*)comm->tmp[0], op, datatype, count);
+      while(comm->coll->ptop_2[0].ptopsense!=hcsense) ;
+      NBC_Operation(recvbuf, tmp, (void*)comm->coll->tmp[0], op, datatype, count);
 
       //STORE_FENCE();
-      comm->ptop_3[g_node_rank].ptopsense=hcsense;
+      comm->coll->ptop_3[g_node_rank].ptopsense=hcsense;
 
       //STORE_FENCE();
-      while(comm->ptop_3[0].ptopsense!=hcsense || comm->ptop_3[1].ptopsense!=hcsense || comm->ptop_3[2].ptopsense!=hcsense || comm->ptop_3[3].ptopsense!=hcsense || comm->ptop_3[4].ptopsense!=hcsense || comm->ptop_3[5].ptopsense!=hcsense) ;
+      while(comm->coll->ptop_3[0].ptopsense!=hcsense || comm->coll->ptop_3[1].ptopsense!=hcsense || comm->coll->ptop_3[2].ptopsense!=hcsense || comm->coll->ptop_3[3].ptopsense!=hcsense || comm->coll->ptop_3[4].ptopsense!=hcsense || comm->coll->ptop_3[5].ptopsense!=hcsense) ;
       //STORE_FENCE();
       free (tmp);
       hcsense = hcsense == 0? 1: 0;
@@ -1924,7 +1924,7 @@ int HMPI_Reduce(void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype, 
     }
 #endif
 
-    if(g_node_rank == root % g_nthreads) {
+    if(g_node_rank == root % g_node_size) {
         //The true root uses its recv buf; others alloc a temp buf.
         void* localbuf;
         if(g_rank == root) {
@@ -1938,14 +1938,14 @@ int HMPI_Reduce(void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype, 
          nodes[g_node_rank].cnotready[j].cnotready = nodes[g_node_rank].havechild[j];
 	     if(j==0)
 	       if(nodes[nodes[g_node_rank].havechild[j]].leafbool) 
-             NBC_Operation(recvbuf, sendbuf, (void*)comm->sbuf[nodes[g_node_rank].havechild[j]], op, datatype, count);
+             NBC_Operation(recvbuf, sendbuf, (void*)comm->coll->sbuf[nodes[g_node_rank].havechild[j]], op, datatype, count);
            else
-	         NBC_Operation(recvbuf, sendbuf, (void*)comm->rbuf[nodes[g_node_rank].havechild[j]], op, datatype, count);
+	         NBC_Operation(recvbuf, sendbuf, (void*)comm->coll->rbuf[nodes[g_node_rank].havechild[j]], op, datatype, count);
 	     else
 	       if(nodes[nodes[g_node_rank].havechild[j]].leafbool) 
-	         NBC_Operation(recvbuf, recvbuf, (void*)comm->sbuf[nodes[g_node_rank].havechild[j]], op, datatype, count);
+	         NBC_Operation(recvbuf, recvbuf, (void*)comm->coll->sbuf[nodes[g_node_rank].havechild[j]], op, datatype, count);
 	       else  
-	         NBC_Operation(recvbuf, recvbuf, (void*)comm->rbuf[nodes[g_node_rank].havechild[j]], op, datatype, count);
+	         NBC_Operation(recvbuf, recvbuf, (void*)comm->coll->rbuf[nodes[g_node_rank].havechild[j]], op, datatype, count);
        }
 
     *nodes[g_node_rank].parentpointer = 0;
@@ -1958,10 +1958,10 @@ int HMPI_Reduce(void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype, 
     //)
     //do mpi_allreduce if there are more than one MPI processes
      if(g_node_rank==0 && g_net_size > 1)
-       MPI_Allreduce(MPI_IN_PLACE, recvbuf, count, datatype, op, comm->mpicomm);
+       MPI_Allreduce(MPI_IN_PLACE, recvbuf, count, datatype, op, comm->comm);
 
     // if(g_node_rank==1 && g_net_size > 1)
-    //   MPI_Allreduce(MPI_IN_PLACE, sendbuf, count, datatype, op, comm->mpicomm);
+    //   MPI_Allreduce(MPI_IN_PLACE, sendbuf, count, datatype, op, comm->comm);
 
    // DEBUG3(
     //begin = MPI_Wtime();
@@ -1970,7 +1970,7 @@ int HMPI_Reduce(void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype, 
     if(g_node_rank != 0)
     { 
       while(nodes[g_node_rank].wsense.wsense!=sense);
-      memcpy((void*)comm->rbuf[g_node_rank], (void*)comm->rbuf[nodes[g_node_rank].parentindx], count*size);
+      memcpy((void*)comm->coll->rbuf[g_node_rank], (void*)comm->coll->rbuf[nodes[g_node_rank].parentindx], count*size);
     }
     //printf("tid = %d, child0 = %d, child1 = %d\n", g_node_rank, nodes[g_node_rank].childindx[0], nodes[g_node_rank].childindx[1]);
 
@@ -1980,13 +1980,13 @@ int HMPI_Reduce(void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype, 
     for(j=0; j<FANOUT; j++)
     if(nodes[g_node_rank].childindx[j]>0)
     {
-   //   memcpy((void*)comm->rbuf[nodes[g_node_rank].childindx[j]], (void*)comm->rbuf[g_node_rank], count*size);
+   //   memcpy((void*)comm->coll->rbuf[nodes[g_node_rank].childindx[j]], (void*)comm->coll->rbuf[g_node_rank], count*size);
       *nodes[g_node_rank].childpointer[j] = sense;
     }
     
     sense = sense == 0? 1: 0;
     
-    //t_barrier(comm->t_barr, g_node_rank);
+    //t_barrier(comm->coll->t_barr, g_node_rank);
     DEBUG3(
     	elapse = (MPI_Wtime() - begin);
 	printf("thread = %d, step2 time = %12.8f\n", g_node_rank,elapse);
@@ -1997,7 +1997,7 @@ int HMPI_Reduce(void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype, 
     PROFILE_SHOW(allreduce);
     PROFILE_SHOW_REDUCE(allreduce);)
    //if(g_node_rank!=0)
-   //     memcpy(comm->rbuf[g_node_rank], comm->rbuf[0], count*size);
+   //     memcpy(comm->coll->rbuf[g_node_rank], comm->coll->rbuf[0], count*size);
 
     return MPI_SUCCESS;
 }*/
@@ -2019,7 +2019,7 @@ int HMPI_Reduce(void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype, 
     }
 #endif
 
-    if(g_node_rank == root % g_nthreads) {
+    if(g_node_rank == root % g_node_size) {
         //The true root uses its recv buf; others alloc a temp buf.
         void* localbuf;
         if(g_rank == root) {
@@ -2032,21 +2032,21 @@ int HMPI_Reduce(void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype, 
         memcpy(localbuf, sendbuf, size * count);
 
         //barrier_cb(&comm->barr, 0, barrier_iprobe);
-        t_barrier_cb(comm->t_barr, g_node_rank, barrier_iprobe);
+        t_barrier_cb(comm->coll->t_barr, g_node_rank, barrier_iprobe);
 
-        for(i=0; i<g_nthreads; ++i) {
+        for(i=0; i<g_node_size; ++i) {
             if(i == g_node_rank) continue;
             NBC_Operation(localbuf,
-                    localbuf, (void*)comm->sbuf[i], op, datatype, count);
+                    localbuf, (void*)comm->coll->sbuf[i], op, datatype, count);
         }
 
         //Other local ranks are free to go.
         //barrier(&comm->barr, 0);
-        t_barrier(comm->t_barr, g_node_rank);
+        t_barrier(comm->coll->t_barr, g_node_rank);
 
         if(g_net_size > 1) {
             MPI_Reduce(MPI_IN_PLACE,
-                    localbuf, count, datatype, op, root / g_nthreads, comm->mpicomm);
+                    localbuf, count, datatype, op, root / g_node_size, comm->comm);
         }
 
         if(g_rank != root) {
@@ -2054,16 +2054,16 @@ int HMPI_Reduce(void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype, 
         }
     } else {
         //First barrier signals to root that all buffers are ready.
-        comm->sbuf[g_node_rank] = sendbuf;
+        comm->coll->sbuf[g_node_rank] = sendbuf;
         //barrier_cb(&comm->barr, g_node_rank, barrier_iprobe);
-        t_barrier_cb(comm->t_barr, g_node_rank, barrier_iprobe);
+        t_barrier_cb(comm->coll->t_barr, g_node_rank, barrier_iprobe);
 
         //Wait for root to copy our data; were free when it's done.
         //barrier(&comm->barr, g_node_rank);
-        t_barrier(comm->t_barr, g_node_rank);
+        t_barrier(comm->coll->t_barr, g_node_rank);
     }
 
-        t_barrier(comm->t_barr, g_node_rank);
+        t_barrier(comm->coll->t_barr, g_node_rank);
     return MPI_SUCCESS;
 }
 
@@ -2081,7 +2081,7 @@ int HMPI_Allreduce(void *sendbuf, void *recvbuf, int count, MPI_Datatype datatyp
     if(extent != size) {
         printf("allreduce non-contiguous derived datatypes are not supported yet!\n");
         fflush(stdout);
-        MPI_Abort(comm->mpicomm, 0);
+        MPI_Abort(comm->comm, 0);
     }
 #endif
 #ifdef DEBUG
@@ -2096,50 +2096,50 @@ int HMPI_Allreduce(void *sendbuf, void *recvbuf, int count, MPI_Datatype datatyp
     PROFILE_START(allreduce);)
     // Do the MPI allreduce, then each rank can copy out.
     if(g_node_rank == 0) {
-        comm->rbuf[0] = recvbuf;
+        comm->coll->rbuf[0] = recvbuf;
         //barrier_cb(&comm->barr, 0, barrier_iprobe);
-	t_barrier_cb(comm->t_barr, 0, barrier_iprobe);
+	t_barrier_cb(comm->coll->t_barr, 0, barrier_iprobe);
    // DEBUG1(printf("t%d: step1\n", g_node_rank);)
         //TODO eliminate this memcpy by folding into a reduce call?
         memcpy(recvbuf, sendbuf, size * count);
 
-        for(i=1; i<g_nthreads; ++i) {
+        for(i=1; i<g_node_size; ++i) {
             NBC_Operation(recvbuf, recvbuf,
-                    (void*)comm->sbuf[i], op, datatype, count);
+                    (void*)comm->coll->sbuf[i], op, datatype, count);
         }
 
         if(g_net_size > 1) {
-            MPI_Allreduce(MPI_IN_PLACE, recvbuf, count, datatype, op, comm->mpicomm);
+            MPI_Allreduce(MPI_IN_PLACE, recvbuf, count, datatype, op, comm->comm);
         }
 
       DEBUG1(printf("t%d: step1\n", g_node_rank);)
-        t_barrier(comm->t_barr, 0);
-   //      t_barrier_cb(comm->t_barr, 0, barrier_iprobe);
+        t_barrier(comm->coll->t_barr, 0);
+   //      t_barrier_cb(comm->coll->t_barr, 0, barrier_iprobe);
      DEBUG1(printf("t%d: step2\n", g_node_rank);)
     } else {
         //Put up our send buffer for the root thread to reduce from.
-        comm->sbuf[g_node_rank] = sendbuf;
-          t_barrier_cb(comm->t_barr, g_node_rank, barrier_iprobe);
+        comm->coll->sbuf[g_node_rank] = sendbuf;
+          t_barrier_cb(comm->coll->t_barr, g_node_rank, barrier_iprobe);
      
 		DEBUG1(printf("t%d: step1_others\n", g_node_rank);)
         //Wait for the root rank to do its thing.
-	  t_barrier(comm->t_barr, g_node_rank);
-	  //t_barrier_cb(comm->t_barr, g_node_rank, barrier_iprobe);
+	  t_barrier(comm->coll->t_barr, g_node_rank);
+	  //t_barrier_cb(comm->coll->t_barr, g_node_rank, barrier_iprobe);
          DEBUG1(printf("t%d: step2_others\n", g_node_rank); )
         //Copy reduced data to our own buffer.
-        memcpy(recvbuf, (void*)comm->rbuf[0], count*size);
+        memcpy(recvbuf, (void*)comm->coll->rbuf[0], count*size);
     }
 
     //Potential optimization -- 0 can't leave until all threads arrive.. all
     //others can go
-    t_barrier(comm->t_barr, g_node_rank);
+    t_barrier(comm->coll->t_barr, g_node_rank);
 
     DEBUG3(
     PROFILE_STOP(allreduce);
     PROFILE_SHOW(allreduce);
     //PROFILE_SHOW_REDUCE(allreduce);
     )
-    //t_barrier_cb(comm->t_barr, g_node_rank, barrier_iprobe);
+    //t_barrier_cb(comm->coll->t_barr, g_node_rank, barrier_iprobe);
     return MPI_SUCCESS;
 }
 
@@ -2180,56 +2180,56 @@ int HMPI_AlltoallPairWise(void* sendbuf, int sendcount, MPI_Datatype sendtype, v
 
   if(send_extent != send_size || recv_extent != recv_size) {
     printf("alltoall non-contiguous derived datatypes are not supported yet!\n");
-    MPI_Abort(comm->mpicomm, 0);
+    MPI_Abort(comm->comm, 0);
   }
 
   if(send_size * sendcount != recv_size * recvcount) {
     printf("different send and receive size is not supported!\n");
-    MPI_Abort(comm->mpicomm, 0);
+    MPI_Abort(comm->comm, 0);
   }
 #endif
 
 #ifdef DEBUG
-  printf("[%i] HMPI_Alltoall(%p, %i, %p, %p, %i, %p, %p)\n", g_net_rank*g_nthreads+g_node_rank, sendbuf, sendcount, sendtype, recvbuf, recvcount, recvtype, comm);
+  printf("[%i] HMPI_Alltoall(%p, %i, %p, %p, %i, %p, %p)\n", g_net_rank*g_node_size+g_node_rank, sendbuf, sendcount, sendtype, recvbuf, recvcount, recvtype, comm);
   fflush(stdout);
 #endif
 
-  //uint64_t comm_size = g_nthreads * g_net_size;
-  uint64_t comm_size = g_nthreads;
-  //uint64_t comm_size = g_nthreads;
+  //uint64_t comm_size = g_node_size * g_net_size;
+  uint64_t comm_size = g_node_size;
+  //uint64_t comm_size = g_node_size;
   uint64_t data_size = send_size * sendcount;
 
-  comm->sbuf[g_node_rank] = sendbuf;
+  comm->coll->sbuf[g_node_rank] = sendbuf;
 
   if(g_node_rank == 0) {
       //Alloc temp send/recv buffers
-      comm->mpi_sbuf = memalign(4096, data_size * g_nthreads * comm_size);
-      comm->mpi_rbuf = memalign(4096, data_size * g_nthreads * comm_size);
+      comm->coll->mpi_sbuf = memalign(4096, data_size * g_node_size * comm_size);
+      comm->coll->mpi_rbuf = memalign(4096, data_size * g_node_size * comm_size);
 
      // send_reqs = (MPI_Request*)malloc(sizeof(MPI_Request) * g_net_size);
      // recv_reqs = (MPI_Request*)malloc(sizeof(MPI_Request) * g_net_size);
 
       //Seems like we should multiply by comm_size, but alltoall already
-      // assumes one element per process.  We do have g_nthreads per process
+      // assumes one element per process.  We do have g_node_size per process
       // though, so we multiply by that.
-      MPI_Type_contiguous(sendcount * g_nthreads * g_nthreads, sendtype, &dt_send);
+      MPI_Type_contiguous(sendcount * g_node_size * g_node_size, sendtype, &dt_send);
       MPI_Type_commit(&dt_send);
 
-      MPI_Type_contiguous(recvcount * g_nthreads * g_nthreads, recvtype, &dt_recv);
+      MPI_Type_contiguous(recvcount * g_node_size * g_node_size, recvtype, &dt_recv);
       MPI_Type_commit(&dt_recv);
 
       //Post receives from each other rank, except self.
-      //int len = data_size * g_nthreads * g_nthreads;
+      //int len = data_size * g_node_size * g_node_size;
       //for(int i = 0; i < g_net_size; i++) {
       //    if(i != g_net_rank) {
-      //        MPI_Irecv((void*)((uintptr_t)comm->mpi_rbuf + (len * i)), 1,
-      //                dt_recv, i, HMPI_ALLTOALL_TAG, comm->mpicomm, &recv_reqs[i]);
+      //        MPI_Irecv((void*)((uintptr_t)comm->coll->mpi_rbuf + (len * i)), 1,
+      //                dt_recv, i, HMPI_ALLTOALL_TAG, comm->comm, &recv_reqs[i]);
       //    }
       //}
     //  for(int i = 0; i < g_net_size; i++) {
     //      if(i != g_net_rank) {
-    //          MPI_Irecv((void*)((uintptr_t)comm->mpi_rbuf), 1,
-    //                  dt_recv, i, HMPI_ALLTOALL_TAG, comm->mpicomm, &recv_reqs);
+    //          MPI_Irecv((void*)((uintptr_t)comm->coll->mpi_rbuf), 1,
+    //                  dt_recv, i, HMPI_ALLTOALL_TAG, comm->comm, &recv_reqs);
     //      }
     //  }
       //recv_reqs[g_net_rank] = MPI_REQUEST_NULL;
@@ -2239,41 +2239,44 @@ int HMPI_AlltoallPairWise(void* sendbuf, int sendcount, MPI_Datatype sendtype, v
           
 		  int source = (g_net_rank - i - 1 + g_net_size) % g_net_size;
           if(i != (g_net_size-1) && g_node_rank == 0) {
-              MPI_Irecv((void*)((uintptr_t)comm->mpi_rbuf), 1,
-                      dt_recv, source, HMPI_ALLTOALL_TAG, comm->mpicomm, &recv_reqs);
+              MPI_Irecv((void*)((uintptr_t)comm->coll->mpi_rbuf), 1,
+                      dt_recv, source, HMPI_ALLTOALL_TAG, comm->comm, &recv_reqs);
           }
  // barrier_cb(&comm->barr, g_node_rank, barrier_iprobe);
- t_barrier(comm->t_barr, g_node_rank);
+ t_barrier(comm->coll->t_barr, g_node_rank);
 
-  //Copy into the shared send buffer on a stride by g_nthreads
+  //Copy into the shared send buffer on a stride by g_node_size
   //This way our temp buffer has all the data going to proc 0, then proc 1, etc
   uintptr_t offset = g_node_rank * data_size;
-  uintptr_t scale = data_size * g_nthreads;
+  uintptr_t scale = data_size * g_node_size;
   
   //Verified from (now missing) prints, this is correct
   //TODO - try staggering
   // Data is pushed here -- remote thread can't read it
   //for(uintptr_t i = 0; i < comm_size; i++) {
-  for(uintptr_t j = 0; j < g_nthreads; j++) {
-      if(!HMPI_Comm_local(comm, i)) {
+  for(uintptr_t j = 0; j < g_node_size; j++) {
+      int node_rank = MPI_UNDEFINED;
+      HMPI_Comm_node_rank(comm, i, &node_rank);
+      //if(!HMPI_Comm_local(comm, i)) {
+      if(node_rank != MPI_UNDEFINED) {
           //Copy to send buffer to go out over network
-          memcpy((void*)((uintptr_t)(comm->mpi_sbuf) + (scale * j) + offset),
-                  (void*)((uintptr_t)sendbuf + data_size * (i*g_nthreads+j)), data_size);
+          memcpy((void*)((uintptr_t)(comm->coll->mpi_sbuf) + (scale * j) + offset),
+                  (void*)((uintptr_t)sendbuf + data_size * (i*g_node_size+j)), data_size);
       }
   }
 
   //Start sends to each other rank
  // barrier_cb(&comm->barr, g_node_rank, barrier_iprobe);
- t_barrier(comm->t_barr, g_node_rank);
+ t_barrier(comm->coll->t_barr, g_node_rank);
 
   int dest = (g_net_rank + i + 1) % g_net_size;
   if(g_node_rank == 0) {
-  //    int len = data_size * g_nthreads * g_nthreads;
+  //    int len = data_size * g_node_size * g_node_size;
   //    for(int i = 1; i < g_net_size; i++) {
 
           if( i != (g_net_size-1)) {
-              MPI_Isend((void*)((uintptr_t)comm->mpi_sbuf), 1,
-                      dt_send, dest, HMPI_ALLTOALL_TAG, comm->mpicomm, &send_reqs);
+              MPI_Isend((void*)((uintptr_t)comm->coll->mpi_sbuf), 1,
+                      dt_send, dest, HMPI_ALLTOALL_TAG, comm->comm, &send_reqs);
           }
    //   }
 
@@ -2282,13 +2285,13 @@ int HMPI_AlltoallPairWise(void* sendbuf, int sendcount, MPI_Datatype sendtype, v
 
   //Pull local data from other threads' send buffers.
   //For each thread, memcpy from their send buffer into my receive buffer.
-  int r = g_net_rank * g_nthreads; //Base rank
+  int r = g_net_rank * g_node_size; //Base rank
   if( i == 0 )
-  for(uintptr_t thr = 0; thr < g_nthreads; thr++) {
+  for(uintptr_t thr = 0; thr < g_node_size; thr++) {
       //Note careful use of addition by r to get the right offsets
-      int t = (g_node_rank + thr) % g_nthreads;
+      int t = (g_node_rank + thr) % g_node_size;
       memcpy((void*)((uintptr_t)recvbuf + ((r + t) * data_size)),
-             (void*)((uintptr_t)comm->sbuf[t] + ((r + g_node_rank) * data_size)),
+             (void*)((uintptr_t)comm->coll->sbuf[t] + ((r + g_node_rank) * data_size)),
              data_size);
   }
 
@@ -2300,29 +2303,29 @@ int HMPI_AlltoallPairWise(void* sendbuf, int sendcount, MPI_Datatype sendtype, v
       MPI_Wait(&send_reqs, &send_stat);
   }
 
- t_barrier(comm->t_barr, g_node_rank);
+ t_barrier(comm->coll->t_barr, g_node_rank);
  // barrier_cb(&comm->barr, g_node_rank, barrier_iprobe);
 
   //Need to do g_net_size memcpy's -- one block of data per MPI process.
-  // We copy g_nthreads * data_size at a time.
-  offset = g_node_rank * data_size * g_nthreads;
-  //scale = data_size * g_nthreads * g_nthreads;
-  size = g_nthreads * data_size;
+  // We copy g_node_size * data_size at a time.
+  offset = g_node_rank * data_size * g_node_size;
+  //scale = data_size * g_node_size * g_node_size;
+  size = g_node_size * data_size;
 
 //  for(uint64_t i = 0; i < g_net_size; i++) {
       if(i != g_net_rank) {
           memcpy((void*)((uintptr_t)recvbuf + size * source),
-                  (void*)((uintptr_t)comm->mpi_rbuf + offset),
+                  (void*)((uintptr_t)comm->coll->mpi_rbuf + offset),
                   size);
       }
 //  }
 }
 //  barrier_cb(&comm->barr, g_node_rank, barrier_iprobe);
-t_barrier(comm->t_barr, g_node_rank);
+t_barrier(comm->coll->t_barr, g_node_rank);
 
   if(g_node_rank == 0) {
-      free((void*)comm->mpi_sbuf);
-      free((void*)comm->mpi_rbuf);
+      free((void*)comm->coll->mpi_sbuf);
+      free((void*)comm->coll->mpi_rbuf);
       //free(send_reqs);
       //free(recv_reqs);
       MPI_Type_free(&dt_send);
@@ -2362,83 +2365,86 @@ int HMPI_AlltoallBulk(void* sendbuf, int sendcount, MPI_Datatype sendtype, void*
 
   if(send_extent != send_size || recv_extent != recv_size) {
     printf("alltoall non-contiguous derived datatypes are not supported yet!\n");
-    MPI_Abort(comm->mpicomm, 0);
+    MPI_Abort(comm->comm, 0);
   }
 
   if(send_size * sendcount != recv_size * recvcount) {
     printf("different send and receive size is not supported!\n");
-    MPI_Abort(comm->mpicomm, 0);
+    MPI_Abort(comm->comm, 0);
   }
 #endif
 
 #ifdef DEBUG
-  printf("[%i] HMPI_Alltoall(%p, %i, %p, %p, %i, %p, %p)\n", g_net_rank*g_nthreads+g_node_rank, sendbuf, sendcount, sendtype, recvbuf, recvcount, recvtype, comm);
+  printf("[%i] HMPI_Alltoall(%p, %i, %p, %p, %i, %p, %p)\n", g_net_rank*g_node_size+g_node_rank, sendbuf, sendcount, sendtype, recvbuf, recvcount, recvtype, comm);
   fflush(stdout);
 #endif
 
-  uint64_t comm_size = g_nthreads * g_net_size;
+  uint64_t comm_size = g_node_size * g_net_size;
   uint64_t data_size = send_size * sendcount;
 
-  comm->sbuf[g_node_rank] = sendbuf;
+  comm->coll->sbuf[g_node_rank] = sendbuf;
 
   if(g_node_rank == 0) {
       //Alloc temp send/recv buffers
-      comm->mpi_sbuf = memalign(4096, data_size * g_nthreads * comm_size);
-      comm->mpi_rbuf = memalign(4096, data_size * g_nthreads * comm_size);
+      comm->coll->mpi_sbuf = memalign(4096, data_size * g_node_size * comm_size);
+      comm->coll->mpi_rbuf = memalign(4096, data_size * g_node_size * comm_size);
 
       send_reqs = (MPI_Request*)malloc(sizeof(MPI_Request) * g_net_size);
       recv_reqs = (MPI_Request*)malloc(sizeof(MPI_Request) * g_net_size);
 
       //Seems like we should multiply by comm_size, but alltoall already
-      // assumes one element per process.  We do have g_nthreads per process
+      // assumes one element per process.  We do have g_node_size per process
       // though, so we multiply by that.
-      MPI_Type_contiguous(sendcount * g_nthreads * g_nthreads, sendtype, &dt_send);
+      MPI_Type_contiguous(sendcount * g_node_size * g_node_size, sendtype, &dt_send);
       MPI_Type_commit(&dt_send);
 
-      MPI_Type_contiguous(recvcount * g_nthreads * g_nthreads, recvtype, &dt_recv);
+      MPI_Type_contiguous(recvcount * g_node_size * g_node_size, recvtype, &dt_recv);
       MPI_Type_commit(&dt_recv);
 
       //Post receives from each other rank, except self.
-      int len = data_size * g_nthreads * g_nthreads;
+      int len = data_size * g_node_size * g_node_size;
       for(int i = 0; i < g_net_size; i++) {
           if(i != g_net_rank) {
-              MPI_Irecv((void*)((uintptr_t)comm->mpi_rbuf + (len * i)), 1,
-                      dt_recv, i, HMPI_ALLTOALL_TAG, comm->mpicomm, &recv_reqs[i]);
+              MPI_Irecv((void*)((uintptr_t)comm->coll->mpi_rbuf + (len * i)), 1,
+                      dt_recv, i, HMPI_ALLTOALL_TAG, comm->comm, &recv_reqs[i]);
           }
       }
       recv_reqs[g_net_rank] = MPI_REQUEST_NULL;
   }
 
  // barrier_cb(&comm->barr, g_node_rank, barrier_iprobe);
- t_barrier(comm->t_barr, g_node_rank);
+ t_barrier(comm->coll->t_barr, g_node_rank);
 
-  //Copy into the shared send buffer on a stride by g_nthreads
+  //Copy into the shared send buffer on a stride by g_node_size
   //This way our temp buffer has all the data going to proc 0, then proc 1, etc
   uintptr_t offset = g_node_rank * data_size;
-  uintptr_t scale = data_size * g_nthreads;
+  uintptr_t scale = data_size * g_node_size;
 
   //Verified from (now missing) prints, this is correct
   //TODO - try staggering
   // Data is pushed here -- remote thread can't read it
   for(uintptr_t i = 0; i < comm_size; i++) {
-      if(!HMPI_Comm_local(comm, i)) {
+      int node_rank = MPI_UNDEFINED;
+      HMPI_Comm_node_rank(comm, i, &node_rank);
+      //if(!HMPI_Comm_local(comm, i)) {
+      if(node_rank != MPI_UNDEFINED) {
           //Copy to send buffer to go out over network
-          memcpy((void*)((uintptr_t)(comm->mpi_sbuf) + (scale * i) + offset),
+          memcpy((void*)((uintptr_t)(comm->coll->mpi_sbuf) + (scale * i) + offset),
                   (void*)((uintptr_t)sendbuf + data_size * i), data_size);
       }
   }
 
   //Start sends to each other rank
  // barrier_cb(&comm->barr, g_node_rank, barrier_iprobe);
- t_barrier(comm->t_barr, g_node_rank);
+ t_barrier(comm->coll->t_barr, g_node_rank);
 
   if(g_node_rank == 0) {
-      int len = data_size * g_nthreads * g_nthreads;
+      int len = data_size * g_node_size * g_node_size;
       for(int i = 1; i < g_net_size; i++) {
           int r = (g_net_rank + i) % g_net_size;
           if(r != g_net_rank) {
-              MPI_Isend((void*)((uintptr_t)comm->mpi_sbuf + (len * r)), 1,
-                      dt_send, r, HMPI_ALLTOALL_TAG, comm->mpicomm, &send_reqs[r]);
+              MPI_Isend((void*)((uintptr_t)comm->coll->mpi_sbuf + (len * r)), 1,
+                      dt_send, r, HMPI_ALLTOALL_TAG, comm->comm, &send_reqs[r]);
           }
       }
 
@@ -2447,12 +2453,12 @@ int HMPI_AlltoallBulk(void* sendbuf, int sendcount, MPI_Datatype sendtype, void*
 
   //Pull local data from other threads' send buffers.
   //For each thread, memcpy from their send buffer into my receive buffer.
-  int r = g_net_rank * g_nthreads; //Base rank
-  for(uintptr_t thr = 0; thr < g_nthreads; thr++) {
+  int r = g_net_rank * g_node_size; //Base rank
+  for(uintptr_t thr = 0; thr < g_node_size; thr++) {
       //Note careful use of addition by r to get the right offsets
-      int t = (g_node_rank + thr) % g_nthreads;
+      int t = (g_node_rank + thr) % g_node_size;
       memcpy((void*)((uintptr_t)recvbuf + ((r + t) * data_size)),
-             (void*)((uintptr_t)comm->sbuf[t] + ((r + g_node_rank) * data_size)),
+             (void*)((uintptr_t)comm->coll->sbuf[t] + ((r + g_node_rank) * data_size)),
              data_size);
   }
 
@@ -2465,28 +2471,28 @@ int HMPI_AlltoallBulk(void* sendbuf, int sendcount, MPI_Datatype sendtype, void*
   }
 
  // barrier_cb(&comm->barr, g_node_rank, barrier_iprobe);
- t_barrier(comm->t_barr, g_node_rank);
+ t_barrier(comm->coll->t_barr, g_node_rank);
 
   //Need to do g_net_size memcpy's -- one block of data per MPI process.
-  // We copy g_nthreads * data_size at a time.
-  offset = g_node_rank * data_size * g_nthreads;
-  scale = data_size * g_nthreads * g_nthreads;
-  size = g_nthreads * data_size;
+  // We copy g_node_size * data_size at a time.
+  offset = g_node_rank * data_size * g_node_size;
+  scale = data_size * g_node_size * g_node_size;
+  size = g_node_size * data_size;
 
   for(uint64_t i = 0; i < g_net_size; i++) {
       if(i != g_net_rank) {
           memcpy((void*)((uintptr_t)recvbuf + size * i),
-                  (void*)((uintptr_t)comm->mpi_rbuf + (scale * i) + offset),
+                  (void*)((uintptr_t)comm->coll->mpi_rbuf + (scale * i) + offset),
                   size);
       }
   }
 
 //  barrier_cb(&comm->barr, g_node_rank, barrier_iprobe);
-t_barrier(comm->t_barr, g_node_rank);
+t_barrier(comm->coll->t_barr, g_node_rank);
 
   if(g_node_rank == 0) {
-      free((void*)comm->mpi_sbuf);
-      free((void*)comm->mpi_rbuf);
+      free((void*)comm->coll->mpi_sbuf);
+      free((void*)comm->coll->mpi_rbuf);
       free(send_reqs);
       free(recv_reqs);
   }
@@ -2526,61 +2532,64 @@ int HMPI_Alltoall(void* sendbuf, int sendcount, MPI_Datatype sendtype, void* rec
 
   if(send_extent != send_size || recv_extent != recv_size) {
     printf("alltoall non-contiguous derived datatypes are not supported yet!\n");
-    MPI_Abort(comm->mpicomm, 0);
+    MPI_Abort(comm->comm, 0);
   }
 
   if(send_size * sendcount != recv_size * recvcount) {
     printf("different send and receive size is not supported!\n");
-    MPI_Abort(comm->mpicomm, 0);
+    MPI_Abort(comm->comm, 0);
   }
 #endif
 
 #ifdef DEBUG
-  printf("[%i] HMPI_Alltoall(%p, %i, %p, %p, %i, %p, %p)\n", g_net_rank*g_nthreads+g_node_rank, sendbuf, sendcount, sendtype, recvbuf, recvcount, recvtype, comm);
+  printf("[%i] HMPI_Alltoall(%p, %i, %p, %p, %i, %p, %p)\n", g_net_rank*g_node_size+g_node_rank, sendbuf, sendcount, sendtype, recvbuf, recvcount, recvtype, comm);
   fflush(stdout);
 #endif
-  uint64_t comm_size = g_nthreads * g_net_size;
+  uint64_t comm_size = g_node_size * g_net_size;
   uint64_t data_size = send_size * sendcount;
   uint64_t parcel_size;
-  comm->sbuf[g_node_rank] = sendbuf;
+  comm->coll->sbuf[g_node_rank] = sendbuf;
 
   if(g_node_rank == 0) {
       //Alloc temp send/recv buffers
-      comm->mpi_tmp = memalign(4096, data_size * g_nthreads * comm_size);
-      comm->mpi_sbuf = memalign(4096, data_size * g_nthreads * g_nthreads * g_net_size / 2);
-      comm->mpi_rbuf = memalign(4096, data_size * g_nthreads * g_nthreads * g_net_size / 2);
+      comm->coll->mpi_tmp = memalign(4096, data_size * g_node_size * comm_size);
+      comm->coll->mpi_sbuf = memalign(4096, data_size * g_node_size * g_node_size * g_net_size / 2);
+      comm->coll->mpi_rbuf = memalign(4096, data_size * g_node_size * g_node_size * g_net_size / 2);
 
       //send_reqs = (MPI_Request*)malloc(sizeof(MPI_Request) * g_net_size);
       //recv_reqs = (MPI_Request*)malloc(sizeof(MPI_Request) * g_net_size);
 
       //Seems like we should multiply by comm_size, but alltoall already
-      // assumes one element per process.  We do have g_nthreads per process
+      // assumes one element per process.  We do have g_node_size per process
       // though, so we multiply by that.
-      //MPI_Type_contiguous(sendcount * g_nthreads * g_nthreads, sendtype, &dt_send);
+      //MPI_Type_contiguous(sendcount * g_node_size * g_node_size, sendtype, &dt_send);
       //MPI_Type_commit(&dt_send);
 
-      //MPI_Type_contiguous(recvcount * g_nthreads * g_nthreads, recvtype, &dt_recv);
+      //MPI_Type_contiguous(recvcount * g_node_size * g_node_size, recvtype, &dt_recv);
       //MPI_Type_commit(&dt_recv);
 
       //Post receives from each other rank, except self.
-      //int len = data_size * g_nthreads * g_nthreads;
+      //int len = data_size * g_node_size * g_node_size;
       //for(int i = 0; i < g_net_size; i++) {
       //    if(i != g_net_rank) {
-      //        MPI_Irecv((void*)((uintptr_t)comm->mpi_rbuf + (len * i)), 1,
-      //                dt_recv, i, HMPI_ALLTOALL_TAG, comm->mpicomm, &recv_reqs[i]);
+      //        MPI_Irecv((void*)((uintptr_t)comm->coll->mpi_rbuf + (len * i)), 1,
+      //                dt_recv, i, HMPI_ALLTOALL_TAG, comm->comm, &recv_reqs[i]);
       //    }
       //}
       //recv_reqs[g_net_rank] = MPI_REQUEST_NULL;
   }
 
- t_barrier(comm->t_barr, g_node_rank);
+ t_barrier(comm->coll->t_barr, g_node_rank);
  uintptr_t offset = g_node_rank * data_size;
- uintptr_t scale = data_size * g_nthreads;
+ uintptr_t scale = data_size * g_node_size;
 
   for(uintptr_t i = 0; i < comm_size; i++) {
-      if(!HMPI_Comm_local(comm, i)) {
+      int node_rank = MPI_UNDEFINED;
+      HMPI_Comm_node_rank(comm, i, &node_rank);
+      //if(!HMPI_Comm_local(comm, i)) {
+      if(node_rank != MPI_UNDEFINED) {
           //Copy to send buffer to go out over network
-          memcpy((void*)((uintptr_t)(comm->mpi_tmp) + (scale * (((g_net_size-g_net_rank)*g_nthreads+i)%comm_size)) + offset),
+          memcpy((void*)((uintptr_t)(comm->coll->mpi_tmp) + (scale * (((g_net_size-g_net_rank)*g_node_size+i)%comm_size)) + offset),
                   (void*)((uintptr_t)sendbuf + data_size * i), data_size);
       }
   }
@@ -2589,32 +2598,32 @@ int HMPI_Alltoall(void* sendbuf, int sendcount, MPI_Datatype sendtype, void* rec
  {
   int t = (int)ceil(g_net_size/(int)pow(2,s));
   if(t%2 == 1)
-    parcel_size = t/2*2*(int)pow(2,s)*data_size * g_nthreads * g_nthreads;
+    parcel_size = t/2*2*(int)pow(2,s)*data_size * g_node_size * g_node_size;
   else
   {
     if(g_net_size/(int)pow(2,s)==0)
-	  parcel_size = g_net_size/2*data_size * g_nthreads * g_nthreads;
+	  parcel_size = g_net_size/2*data_size * g_node_size * g_node_size;
 	else
-	  parcel_size = (g_net_size-(int)pow(2,s)*t/2)*data_size * g_nthreads * g_nthreads;
+	  parcel_size = (g_net_size-(int)pow(2,s)*t/2)*data_size * g_node_size * g_node_size;
   }
 
   if(g_node_rank == 0) {
-      //int len = data_size * g_nthreads * g_nthreads;
+      //int len = data_size * g_node_size * g_node_size;
       //for(int i = 0; i < g_net_size; i++) {
           //if(i != g_net_rank) {
-              MPI_Irecv((void*)((uintptr_t)comm->mpi_rbuf), parcel_size/send_size,
-			  sendtype, (g_net_rank-(int)pow(2,s)+g_net_size)%g_net_size, HMPI_ALLTOALL_TAG, comm->mpicomm, &recv_reqs);
+              MPI_Irecv((void*)((uintptr_t)comm->coll->mpi_rbuf), parcel_size/send_size,
+			  sendtype, (g_net_rank-(int)pow(2,s)+g_net_size)%g_net_size, HMPI_ALLTOALL_TAG, comm->comm, &recv_reqs);
           //}
       //}
       //recv_reqs[g_net_rank] = MPI_REQUEST_NULL;
 	  }
  // barrier_cb(&comm->barr, g_node_rank, barrier_iprobe);
-// t_barrier(comm->t_barr, g_node_rank);
+// t_barrier(comm->coll->t_barr, g_node_rank);
 
-  //Copy into the shared send buffer on a stride by g_nthreads
+  //Copy into the shared send buffer on a stride by g_node_size
   //This way our temp buffer has all the data going to proc 0, then proc 1, etc
   //uintptr_t offset = g_node_rank * data_size;
-  //uintptr_t scale = data_size * g_nthreads;
+  //uintptr_t scale = data_size * g_node_size;
 
   //Verified from (now missing) prints, this is correct
   //TODO - try staggering
@@ -2622,7 +2631,7 @@ int HMPI_Alltoall(void* sendbuf, int sendcount, MPI_Datatype sendtype, void* rec
   //for(uintptr_t i = 0; i < comm_size; i++) {
   //    if(!HMPI_Comm_local(comm, i)) {
   //        //Copy to send buffer to go out over network
-  //        memcpy((void*)((uintptr_t)(comm->mpi_tmp) + (scale * (((g_net_size-g_net_rank)*g_nthreads+i)%comm_size)) + offset),
+  //        memcpy((void*)((uintptr_t)(comm->coll->mpi_tmp) + (scale * (((g_net_size-g_net_rank)*g_node_size+i)%comm_size)) + offset),
   //                (void*)((uintptr_t)sendbuf + data_size * i), data_size);
   //    }
   //}
@@ -2640,13 +2649,13 @@ int HMPI_Alltoall(void* sendbuf, int sendcount, MPI_Datatype sendtype, void* rec
    if(i%2 == 1)
    {
      offst1 += sz;
-       offst = i*(int)pow(2,s)*data_size * g_nthreads * g_nthreads;
+       offst = i*(int)pow(2,s)*data_size * g_node_size * g_node_size;
      if((g_net_size-i*(int)pow(2,s))<(int)pow(2,s))
-       sz = (g_net_size-i*(int)pow(2,s))*data_size * g_nthreads * g_nthreads;
-     else sz =(int)pow(2,s)*data_size * g_nthreads * g_nthreads;
+       sz = (g_net_size-i*(int)pow(2,s))*data_size * g_node_size * g_node_size;
+     else sz =(int)pow(2,s)*data_size * g_node_size * g_node_size;
      
-	 memcpy((void*)((uintptr_t)(comm->mpi_sbuf) + offst1),
-                  (void*)((uintptr_t)(comm->mpi_tmp) + offst), sz);
+	 memcpy((void*)((uintptr_t)(comm->coll->mpi_sbuf) + offst1),
+                  (void*)((uintptr_t)(comm->coll->mpi_tmp) + offst), sz);
    }
  
  }
@@ -2654,19 +2663,19 @@ int HMPI_Alltoall(void* sendbuf, int sendcount, MPI_Datatype sendtype, void* rec
   //for(uintptr_t i = 0; i < comm_size; i++) {
   //    if(!HMPI_Comm_local(comm, i)) {
   //        //Copy to send buffer to go out over network
-  //        memcpy((void*)((uintptr_t)(comm->mpi_tmp) + (scale * (((g_net_size-g_net_rank)*g_nthreads+i)%comm_size)) + offset),
+  //        memcpy((void*)((uintptr_t)(comm->coll->mpi_tmp) + (scale * (((g_net_size-g_net_rank)*g_node_size+i)%comm_size)) + offset),
   //                (void*)((uintptr_t)sendbuf + data_size * i), data_size);
   //    }
   //}
- t_barrier(comm->t_barr, g_node_rank);
+ t_barrier(comm->coll->t_barr, g_node_rank);
 
   if(g_node_rank == 0) {
-     // int len = data_size * g_nthreads * g_nthreads;
+     // int len = data_size * g_node_size * g_node_size;
      // for(int i = 1; i < g_net_size; i++) {
      //     int r = (g_net_rank + i) % g_net_size;
           //if(r != g_net_rank) {
-              MPI_Isend((void*)((uintptr_t)comm->mpi_sbuf), parcel_size/send_size,
-                      sendtype, (g_net_rank+(int)pow(2,s))%g_net_size, HMPI_ALLTOALL_TAG, comm->mpicomm, &send_reqs);
+              MPI_Isend((void*)((uintptr_t)comm->coll->mpi_sbuf), parcel_size/send_size,
+                      sendtype, (g_net_rank+(int)pow(2,s))%g_net_size, HMPI_ALLTOALL_TAG, comm->comm, &send_reqs);
           //}
       //}
 
@@ -2677,12 +2686,12 @@ int HMPI_Alltoall(void* sendbuf, int sendcount, MPI_Datatype sendtype, void* rec
   {
     //Pull local data from other threads' send buffers.
     //For each thread, memcpy from their send buffer into my receive buffer.
-    int r = g_net_rank * g_nthreads; //Base rank
-    for(uintptr_t thr = 0; thr < g_nthreads; thr++) {
+    int r = g_net_rank * g_node_size; //Base rank
+    for(uintptr_t thr = 0; thr < g_node_size; thr++) {
         //Note careful use of addition by r to get the right offsets
-        int t = (g_node_rank + thr) % g_nthreads;
+        int t = (g_node_rank + thr) % g_node_size;
         memcpy((void*)((uintptr_t)recvbuf + ((r + t) * data_size)),
-               (void*)((uintptr_t)comm->sbuf[t] + ((r + g_node_rank) * data_size)),
+               (void*)((uintptr_t)comm->coll->sbuf[t] + ((r + g_node_rank) * data_size)),
                data_size);
     }
    }
@@ -2708,13 +2717,13 @@ int HMPI_Alltoall(void* sendbuf, int sendcount, MPI_Datatype sendtype, void* rec
    if(i%2 == 1)
    {
      offst1 += sz;
-       offst = i*(int)pow(2,s)*data_size * g_nthreads * g_nthreads;
+       offst = i*(int)pow(2,s)*data_size * g_node_size * g_node_size;
      if((g_net_size-i*(int)pow(2,s))<(int)pow(2,s))
-       sz = (g_net_size-i*(int)pow(2,s))*data_size * g_nthreads * g_nthreads;
-     else sz =(int)pow(2,s)*data_size * g_nthreads * g_nthreads;
+       sz = (g_net_size-i*(int)pow(2,s))*data_size * g_node_size * g_node_size;
+     else sz =(int)pow(2,s)*data_size * g_node_size * g_node_size;
      
-	 memcpy((void*)((uintptr_t)(comm->mpi_tmp) + offst),
-                  (void*)((uintptr_t)(comm->mpi_rbuf) + offst1), sz);
+	 memcpy((void*)((uintptr_t)(comm->coll->mpi_tmp) + offst),
+                  (void*)((uintptr_t)(comm->coll->mpi_rbuf) + offst1), sz);
    }
  
  }
@@ -2723,29 +2732,29 @@ int HMPI_Alltoall(void* sendbuf, int sendcount, MPI_Datatype sendtype, void* rec
 
 }
  // barrier_cb(&comm->barr, g_node_rank, barrier_iprobe);
- t_barrier(comm->t_barr, g_node_rank);
+ t_barrier(comm->coll->t_barr, g_node_rank);
 
   //Need to do g_net_size memcpy's -- one block of data per MPI process.
-  // We copy g_nthreads * data_size at a time.
-  offset = g_node_rank * data_size * g_nthreads;
-  scale = data_size * g_nthreads * g_nthreads;
-  size = g_nthreads * data_size;
+  // We copy g_node_size * data_size at a time.
+  offset = g_node_rank * data_size * g_node_size;
+  scale = data_size * g_node_size * g_node_size;
+  size = g_node_size * data_size;
 
   for(uint64_t i = 0; i < g_net_size; i++) {
       if(i != g_net_rank) {
           memcpy((void*)((uintptr_t)recvbuf + size * i),
-                  (void*)((uintptr_t)comm->mpi_tmp + (scale * ((g_net_rank-i+g_net_size)%g_net_size)) + offset),
+                  (void*)((uintptr_t)comm->coll->mpi_tmp + (scale * ((g_net_rank-i+g_net_size)%g_net_size)) + offset),
                   size);
       }
   }
 
 //  barrier_cb(&comm->barr, g_node_rank, barrier_iprobe);
-t_barrier(comm->t_barr, g_node_rank);
+t_barrier(comm->coll->t_barr, g_node_rank);
 
   if(g_node_rank == 0) {
-      free((void*)comm->mpi_sbuf);
-      free((void*)comm->mpi_rbuf);
-      free((void*)comm->mpi_tmp);
+      free((void*)comm->coll->mpi_sbuf);
+      free((void*)comm->coll->mpi_rbuf);
+      free((void*)comm->coll->mpi_tmp);
       //free(send_reqs);
       //free(recv_reqs);
   }

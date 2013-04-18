@@ -98,6 +98,7 @@ int g_net_size=-1;                  //HMPI net size
 int g_numa_node=-1;                 //HMPI numa node (compute-node scope)
 int g_numa_root=-1;                 //HMPI root rank on same numa node
 int g_numa_rank=-1;                 //HMPI rank within numa node
+int g_numa_size=-1;                 //HMPI numa node size
 
 HMPI_Comm HMPI_COMM_WORLD;
 
@@ -696,6 +697,7 @@ int HMPI_Init(int *argc, char ***argv)
             &HMPI_COMM_WORLD->numa_comm);
 
     MPI_Comm_rank(HMPI_COMM_WORLD->numa_comm, &g_numa_rank);
+    MPI_Comm_size(HMPI_COMM_WORLD->numa_comm, &g_numa_size);
 
     {
         MPI_Group numa_group;
@@ -770,6 +772,49 @@ int HMPI_Init(int *argc, char ***argv)
 
     //print_numa();
 
+    hmpi_coll_t* coll = HMPI_COMM_WORLD->coll = MALLOC(hmpi_coll_t, 1);
+
+    MPI_Bcast(&HMPI_COMM_WORLD->coll, 1, MPI_LONG, 0,
+            HMPI_COMM_WORLD->node_comm);
+
+    if(g_node_rank == 0) {
+        coll->sbuf = MALLOC(volatile void*, g_node_size);
+        coll->rbuf = MALLOC(volatile void*, g_node_size);
+        coll->tmp = MALLOC(volatile void*, g_node_size);
+
+
+        for(int i=0; i<PTOP; i++) {
+            coll->ptop[i] = MALLOC(padptop, g_node_size);
+        }
+
+        // for(int i =0; i<g_node_size; i++)
+        // {
+        //   coll->ptop_0[i] = 0;
+        //   coll->ptop_1[i] = 0;
+        //   coll->ptop_2[i] = 0;
+        //   coll->ptop_3[i] = 0;
+        //   coll->ptop_4[i] = 0;
+        // }
+
+        for(int j = 0; j < PTOP; j++) {
+            for(int i = 0; i < g_node_size; i++) {
+                coll->ptop[j][i].ptopsense = 0;
+            }
+        }
+
+        //for(int i =0; i<g_node_size; i++)
+        //{
+        //  coll->ptop_0[i].ptopsense = 0;
+        //  coll->ptop_1[i].ptopsense = 0;
+        //  coll->ptop_2[i].ptopsense = 0;
+        //  coll->ptop_3[i].ptopsense = 0;
+        //  coll->ptop_4[i].ptopsense = 0;
+        //}
+
+        //FANINEQUAL1(t_barrier_init_fanin1(&coll->t_barr, g_node_size);) 
+        //PFANIN(t_barrier_init(&coll->t_barr, g_node_size););
+    }
+
 
 #ifdef ENABLE_OPI
     OPI_Init();
@@ -827,44 +872,6 @@ int HMPI_Finalize()
     MPI_Finalize();
     return 0;
 }
-
-
-#ifdef __bg__
-//BGQ speed hack assumes 64 ranks/node
-#define RANKS_NODE 64
-#define RANKS_NODE_SHIFT 6
-#define RANKS_NODE_MASK ((1 << RANKS_NODE_SHIFT) - 1)
-inline void HMPI_Comm_node_rank(HMPI_Comm comm, int rank, int* node_rank)
-{
-    //First determine if rank is on the same node.
-    if(rank >> RANKS_NODE_SHIFT == g_rank >> RANKS_NODE_SHIFT) {
-        *node_rank = rank & RANKS_NODE_MASK; 
-    } else {
-        *node_rank = MPI_UNDEFINED;
-    }
-}
-
-#else
-//Covers MPI_ANY_SOURCE, but no other special values like MPI_PROC_NULL.
-inline void HMPI_Comm_node_rank(HMPI_Comm comm, int rank, int* node_rank)
-{
-    if(rank == MPI_ANY_SOURCE) {
-        *node_rank = MPI_ANY_SOURCE;
-        return;
-    } 
-    
-    int diff = rank - comm->node_root;
-    
-    //if(rank >= comm->node_root &&
-    //        (diff = rank - comm->node_root) < comm->node_size) {
-    if(diff >= 0 && diff < comm->node_size) {
-        *node_rank = diff;
-        return;
-    }
-
-    *node_rank = MPI_UNDEFINED;
-}
-#endif
 
 
 //We assume req->type == HMPI_SEND
@@ -1529,6 +1536,44 @@ int HMPI_Probe(int source, int tag, HMPI_Comm comm, HMPI_Status* status)
 
     return MPI_SUCCESS;
 }
+
+
+#ifdef __bg__
+//BGQ speed hack assumes 64 ranks/node
+#define RANKS_NODE 64
+#define RANKS_NODE_SHIFT 6
+#define RANKS_NODE_MASK ((1 << RANKS_NODE_SHIFT) - 1)
+inline void HMPI_Comm_node_rank(HMPI_Comm comm, int rank, int* node_rank)
+{
+    //First determine if rank is on the same node.
+    if(rank >> RANKS_NODE_SHIFT == g_rank >> RANKS_NODE_SHIFT) {
+        *node_rank = rank & RANKS_NODE_MASK; 
+    } else {
+        *node_rank = MPI_UNDEFINED;
+    }
+}
+
+#else
+//Covers MPI_ANY_SOURCE, but no other special values like MPI_PROC_NULL.
+inline void HMPI_Comm_node_rank(HMPI_Comm comm, int rank, int* node_rank)
+{
+    if(rank == MPI_ANY_SOURCE) {
+        *node_rank = MPI_ANY_SOURCE;
+        return;
+    } 
+    
+    int diff = rank - comm->node_root;
+    
+    //if(rank >= comm->node_root &&
+    //        (diff = rank - comm->node_root) < comm->node_size) {
+    if(diff >= 0 && diff < comm->node_size) {
+        *node_rank = diff;
+        return;
+    }
+
+    *node_rank = MPI_UNDEFINED;
+}
+#endif
 
 
 int HMPI_Isend(void* buf, int count, MPI_Datatype datatype, int dest, int tag, HMPI_Comm comm, HMPI_Request *request)

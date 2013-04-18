@@ -15,7 +15,7 @@ INCS=-DUSE_NUMA=1 #-DENABLE_OPI=1 #-DHMPI_LOGCALLS=1 #-DHMPI_CHECKSUM=1 -DHMPI_L
 #INCS+=-DHMPI_LOGCALLS=1 #-DHMPI_CHECKSUM=1
 #INCS+=-D_PROFILE=1 -D_PROFILE_MPI=1 -D_PROFILE_PAPI_EVENTS=1 #-DFULL_PROFILE
 
-SRCS=hmpi.c hmpi_coll.c nbc_op.c #hmpi_opi.c
+SRCS=hmpi.c #hmpi_coll.c nbc_op.c #hmpi_opi.c
 SRCS+=sm_malloc.c
 USEQ_SRCS=#hmpi.c #hmpi_coll.c nbc_op.c
 MAIN=main.c

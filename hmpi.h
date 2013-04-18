@@ -4,8 +4,8 @@
 #include <unistd.h>
 #include <mpi.h>
 #include <assert.h>
-//#include "barrier.h"
 #include "lock.h"
+#include "barrier.h"
 #ifdef ENABLE_PSM
 #include "libpsm.h"
 #endif
@@ -20,10 +20,12 @@ extern "C" {
 
 //HMPI internal stuff
 
+//These really are internal, but they are used in publicly viewable structs.
 #define EAGER_LIMIT 256
+#define PTOP 5
+
 
 #ifdef HMPI_INTERNAL
-//#include <mm.h>
 
 #define printf(...) printf(__VA_ARGS__); fflush(stdout)
 
@@ -59,14 +61,28 @@ extern int g_net_size;                  //HMPI net size
 extern int g_numa_node;                 //HMPI numa node (compute-node scope)
 extern int g_numa_root;                 //HMPI root rank on same numa node
 extern int g_numa_rank;                 //HMPI rank within numa node
+extern int g_numa_size;                 //HMPI numa node size
 
 #endif
 
+typedef struct {
+    volatile int32_t ptopsense;
+    int32_t padding[15];
+} padptop;
 
+//Shared memory data used by collectives.
+//One of these structs is attached to a communicator.
 typedef struct hmpi_coll_t {
-    struct hmpi_coll_t* next;
-    void* buf;
-    //char pad[48];
+    volatile void** sbuf;
+    volatile void** rbuf;
+    volatile void** tmp;
+
+    volatile void* mpi_sbuf;
+    volatile void* mpi_rbuf;
+    volatile void* mpi_tmp;
+
+    padptop* ptop[PTOP];
+    hbarrier_record* t_barr;
 } hmpi_coll_t;
 
 
@@ -81,25 +97,12 @@ typedef struct {
   int node_root;        //Rank of first rank on this node
   int node_size;        //Number of ranks on this node
 
-  //barrier_t* barr;       //Barrier for local ranks in this comm
-  //treebarrier_t tbarr;
+  hmpi_coll_t* coll;
 
   //This mysteriously improves latency for netpipe.
   //I used to have more variables here; removing them slowed netpipe down.
-  char pad[40];
+  char pad[32];
 
-#if 0
-  //Used for intra-node sharing in various collectives
-  //TODO - many will need to be in shared mem
-  // Make a secondary shared comm struct?
-  volatile void** sbuf;
-  volatile int* scount;
-  volatile MPI_Datatype* stype;
-  volatile void** rbuf;
-  volatile int* rcount;
-  volatile MPI_Datatype* rtype;
-  hmpi_coll_t* coll;        //Used by allreduce
-#endif
 } HMPI_Comm_info;
 
 typedef HMPI_Comm_info* HMPI_Comm;

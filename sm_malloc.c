@@ -166,7 +166,7 @@ static int __sm_init_region(void)
 #ifdef USE_PSHM
 
 //#define MSPACE_SIZE (1024L * 1024L * 900L)
-#define MSPACE_SIZE (1024L * 1024L * 1024L * 4L)
+#define MSPACE_SIZE (1024L * 1024L * 1024L * 16L)
 #define DEFAULT_SIZE (MSPACE_SIZE * 16L + (long)getpagesize())
 //#define MSPACE_SIZE (1024L * 1024L * 128L)
 //#define DEFAULT_SIZE (1024L * 1024L * 1024L * 30 + (long)getpagesize())
