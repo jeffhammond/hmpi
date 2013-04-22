@@ -63,7 +63,7 @@ static mspace sm_mspace = NULL;
 #define TEMP_SIZE (1024 * 1024 * 2L) //Temporary mspace capacity
 
 //Keep this around for use with valgrind.
-//static char sm_temp[TEMP_SIZE] = {0};
+static char sm_temp[TEMP_SIZE] = {0};
 
 
 #ifdef USE_MMAP
@@ -286,14 +286,14 @@ static void __sm_init(void)
 
     //Set up a temporary area on the stack for malloc() calls during our
     // initialization process.
-    void* temp_space = alloca(TEMP_SIZE);
-    sm_region = create_mspace_with_base(temp_space, TEMP_SIZE, 0);
+    //void* temp_space = alloca(TEMP_SIZE);
+    //sm_region = create_mspace_with_base(temp_space, TEMP_SIZE, 0);
 
     //Keep this for use with valgrind.
-    //sm_region = create_mspace_with_base(sm_temp, TEMP_SIZE, 0);
-    //sm_region->brk = (intptr_t)sm_region + sizeof(struct sm_region);
+    sm_region = create_mspace_with_base(sm_temp, TEMP_SIZE, 0);
+    sm_region->brk = (intptr_t)sm_region + sizeof(struct sm_region);
 
-    sm_region->limit = TEMP_SIZE;
+    sm_region->limit = (intptr_t)sm_region + TEMP_SIZE;
 
     //Find the SM region size.
     //SM_SIZE environment variable is size per proc in megabytes.

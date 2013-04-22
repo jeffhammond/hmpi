@@ -595,7 +595,6 @@ int HMPI_Init(int *argc, char ***argv)
     MPI_Init(argc, argv);
     FULL_PROFILE_INIT();
 
-    printf("sizeof comm %d\n", sizeof(MPI_Comm));
 #ifdef __bg__
     //On BG/Q, we rely on BG_MAPCOMMONHEAP=1 to get shared memory.
     //Check that it is set before continuing.
