@@ -1,7 +1,7 @@
 #ifndef _LOCK_H_
 #define _LOCK_H_
 #include <stdio.h>
-//#include <mm.h>
+#include <stdlib.h>
 
 #define printf(...) printf(__VA_ARGS__); fflush(stdout)
 
@@ -108,7 +108,7 @@ static void LOCK_INIT(lock_t* __restrict l) {
     if(Kernel_L2AtomicsAllocate(l, sizeof(lock_t))) {
         printf("ERROR Unable to allocate L2 atomic memory\n");
         fflush(stdout);
-        assert(0);
+        abort();
     }
 
     L2_LockInit(l);
@@ -125,11 +125,6 @@ static inline long int LOCK_TRY(lock_t* __restrict l) {
 
 static inline void LOCK_RELEASE(lock_t* __restrict l) {
     L2_LockRelease(l);
-}
-
-static inline long int LOCK_GET(lock_t* __restrict l) {
-    assert(0); //I want to see if/when this is used; below may be wrong.
-    return !L2_LockIsBusy(l);
 }
 
 

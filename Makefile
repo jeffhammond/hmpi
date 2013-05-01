@@ -10,14 +10,15 @@ CFLAGS+=$(WARN)
 
 LIBS=-lrt -lnuma
 
-INCS=-DUSE_NUMA=1 #-DENABLE_OPI=1 #-DHMPI_LOGCALLS=1 #-DHMPI_CHECKSUM=1 -DHMPI_LOGCALLS=1 #-D_PROFILE=1 -D_PROFILE_MPI=1 -D_PROFILE_PAPI_EVENTS=1 #-DFULL_PROFILE
+INCS=#-D_PROFILE=1 -D_PROFILE_MPI=1 -D_PROFILE_PAPI_EVENTS=1 #-DFULL_PROFILE
+#INCS+=-DUSE_NUMA=1 
 #INCS+=-DENABLE_OPI=1
 #INCS+=-DHMPI_LOGCALLS=1 #-DHMPI_CHECKSUM=1
 #INCS+=-D_PROFILE=1 -D_PROFILE_MPI=1 -D_PROFILE_PAPI_EVENTS=1 #-DFULL_PROFILE
 
 SRCS=hmpi.c #hmpi_coll.c nbc_op.c #hmpi_opi.c
 SRCS+=sm_malloc.c
-USEQ_SRCS=#hmpi.c #hmpi_coll.c nbc_op.c
+USEQ_SRCS=hmpi.c #hmpi_coll.c nbc_op.c
 MAIN=main.c
 HDRS=hmpi.h barrier.h lock.h profile2.h
 
@@ -42,7 +43,7 @@ udawn: $(SRCS:%.c=%.o)
 	ranlib libhmpi.a
 
 useq: CC=mpixlc
-useq: CFLAGS=-O3 -qhot=novector -qsimd=auto $(INCLUDE)
+useq: CFLAGS=-O5 -qhot=novector -qsimd=auto $(INCLUDE) -qinline=auto:level=5 -qassert=refalign -qlibansi -qlibmpi -qipa -qhot  -qprefetch=aggressive
 useq: $(USEQ_SRCS:%.c=%.o)
 	ar r libhmpi.a $(USEQ_SRCS:%.c=%.o)
 	ranlib libhmpi.a

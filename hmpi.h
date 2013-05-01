@@ -103,7 +103,9 @@ typedef struct {
 
   //This mysteriously improves latency for netpipe.
   //I used to have more variables here; removing them slowed netpipe down.
+#ifndef __bg__
   char pad[44];
+#endif
 } HMPI_Comm_info;
 
 typedef HMPI_Comm_info* HMPI_Comm;
@@ -154,6 +156,7 @@ typedef struct HMPI_Request_info {
     int proc;           //Always the source's rank regardless of type.
     int tag;            //MPI tag
     size_t size;        //Message size in bytes
+
     void* buf;          //User buffer
 
 #ifdef HMPI_CHECKSUM
@@ -163,10 +166,9 @@ typedef struct HMPI_Request_info {
     MPI_Datatype datatype;      //MPI datatype
     volatile uint32_t match;    //Synchronization for sender/recver copying
 
-        //volatile ssize_t limit;
     union {
         struct HMPI_Request_info* match_req; //Use on local send req
-        volatile ssize_t offset;             //Copy offset, used on recv req
+        volatile size_t offset;              //Copy offset, used on recv req
         MPI_Request req;                     //Off-node send/recv
     } u;
 
@@ -190,7 +192,7 @@ typedef HMPI_Info_info* HMPI_Info;
 
 int HMPI_Init(int *argc, char ***argv);
 
-int HMPI_Finalize();
+int HMPI_Finalize(void);
 
 
 static int HMPI_Abort(HMPI_Comm comm, int errorcode) __attribute__((unused));
@@ -284,7 +286,7 @@ static int HMPI_Comm_create(HMPI_Comm comm, MPI_Group group, HMPI_Comm* newcomm)
 
 static int HMPI_Comm_create(HMPI_Comm comm, MPI_Group group, HMPI_Comm* newcomm)
 {
-    assert(0);
+    abort();
     return MPI_SUCCESS;
 }
 
