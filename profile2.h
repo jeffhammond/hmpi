@@ -26,6 +26,17 @@
 #include <pthread.h>
 #include <time.h>
 
+#define ERROR(s, ...)  { \
+    fprintf(stderr, "ERROR %s:%d " s "\n", \
+            __FILE__, __LINE__, ##__VA_ARGS__); \
+    abort(); \
+} while(0)
+
+#define WARNING(s, ...)  { \
+    fprintf(stderr, "WARNING %s:%d " s "\n", \
+            __FILE__, __LINE__, ##__VA_ARGS__); \
+} while(0)
+
 
 #ifdef __cplusplus
 extern "C" {
@@ -34,22 +45,18 @@ extern "C" {
 #if _PROFILE_PAPI_EVENTS == 1
 #include <papi.h>
 
-#if 0
-#define NUM_EVENTS 4
+//#include "papi_ctrs.h"
 
-static int _profile_events[NUM_EVENTS] =
-          //{ PAPI_L1_DCM, PAPI_L2_DCM, PAPI_STL_ICY, PAPI_TOT_INS};
-          //{ PAPI_L1_ICM, PAPI_TLB_DM, PAPI_TLB_IM, PAPI_TOT_INS};
-          //{ PAPI_L2_ICM, PAPI_L3_TCM, PAPI_BR_MSP, PAPI_BR_PRC};
-          { PAPI_L2_DCM, PAPI_TLB_IM, PAPI_L2_ICM, PAPI_TOT_INS};
+//Statically reserve space to handle 16 counters at once.
+#define MAX_EVENTS 16
 
-//int _profile_eventset = PAPI_NULL;
-#endif
-#include "papi_ctrs.h"
+//This is 8kb, why not just query the names when printing results?
+//static char _profile_event_names[MAX_EVENTS][PAPI_MAX_STR_LEN] = {{0}};
 
-static char _profile_event_names[NUM_EVENTS][128] = {{0}};
-
+extern uint64_t _profile_overhead;
 extern int _profile_eventset;
+extern int _profile_num_events;
+extern int _profile_event_codes[MAX_EVENTS];
 
 #if _PROFILE_PAPI_FILE == 1
 
@@ -58,13 +65,17 @@ extern FILE* _profile_fd;
 #define PROFILE_DECLARE() \
   uint64_t _profile_overhead = 0; \
   FILE* _profile_fd; \
-  int _profile_eventset = PAPI_NULL;
+  int _profile_eventset = PAPI_NULL; \
+  int _profile_num_events = 0; \
+  int _profile_event_codes[MAX_EVENTS];
 
-#else
+#else //_PROFILE_PAPI_FILE != 1
 #define PROFILE_DECLARE() \
   uint64_t _profile_overhead = 0; \
-  int _profile_eventset = PAPI_NULL;
-#endif
+  int _profile_eventset = PAPI_NULL; \
+  int _profile_num_events = 0; \
+  int _profile_event_codes[MAX_EVENTS];
+#endif //_PROFILE_PAPI_FILE != 1
 
 #else //_PROFILE_PAPI_EVENTS != 1
 
@@ -73,7 +84,6 @@ extern FILE* _profile_fd;
 
 #endif //_PROFILE_PAPI_EVENTS != 1
 
-extern uint64_t _profile_overhead;
 
 #ifdef __cplusplus
 }
@@ -89,10 +99,10 @@ typedef struct profile_vars_t {
     uint64_t max;
 #endif
 #if _PROFILE_PAPI_EVENTS == 1
-    uint64_t tmp_ctrs[NUM_EVENTS];  //Used during timing regions
-    uint64_t ctrs[NUM_EVENTS];
-    uint64_t ctr_min[NUM_EVENTS];
-    uint64_t ctr_max[NUM_EVENTS];
+    uint64_t tmp_ctrs[MAX_EVENTS];  //Used during timing regions
+    uint64_t ctrs[MAX_EVENTS];
+    uint64_t ctr_min[MAX_EVENTS];
+    uint64_t ctr_max[MAX_EVENTS];
 #endif
 } profile_vars_t;
 
@@ -109,11 +119,11 @@ typedef struct profile_results_t
 #endif
 
 #if _PROFILE_PAPI_EVENTS == 1
-    uint64_t total_ctrs[NUM_EVENTS];
-    double avg_ctrs[NUM_EVENTS];
+    uint64_t total_ctrs[MAX_EVENTS];
+    double avg_ctrs[MAX_EVENTS];
 #if _PROFILE_MAX_MIN
-    uint64_t max_ctrs[NUM_EVENTS];
-    uint64_t min_ctrs[NUM_EVENTS];
+    uint64_t max_ctrs[MAX_EVENTS];
+    uint64_t min_ctrs[MAX_EVENTS];
 #endif
 #endif
 } profile_results_t;
@@ -134,24 +144,18 @@ PROFILE_EXTERN(MPI_Other);
 static inline void __PROFILE_START(struct profile_vars_t* v);
 static inline void __PROFILE_STOP(const char* name, struct profile_vars_t* v);
 
-static void PROFILE_CALIBRATE()
+static void PROFILE_CALIBRATE(void)
 {
-    int i;
-    //int rank;
-    //uint64_t min;
     struct profile_vars_t v = {0};
 
-    for(i = 0; i < 100000; i++) {
+    for(int i = 0; i < 100000; i++) {
         __PROFILE_START(&v);
         __PROFILE_STOP("calibrate", &v);
     }
 
-    //MPI_Comm_rank(MPI_COMM_WORLD, &rank);
-    //MPI_Allreduce(&v.min, &min, 1,
-    //        MPI_UNSIGNED_LONG_LONG, MPI_MIN, MPI_COMM_WORLD);
-
     _profile_overhead = v.min;
 }
+
 
 static void PROFILE_INIT() __attribute__((unused));
 
@@ -167,64 +171,89 @@ static void PROFILE_INIT()
 
     PAPI_thread_init((long unsigned int (*)())pthread_self);
 
-    int num_hwcntrs = 0;
 
-    num_hwcntrs = PAPI_num_counters();
+    //TODO - move this check later.
+#if 0
+    int num_hwcntrs = PAPI_num_counters();
     if(num_hwcntrs < NUM_EVENTS) {
         printf("ERROR PAPI reported < %d events available\n", NUM_EVENTS);
         exit(-1);
     }
+#endif
 
     _profile_eventset = PAPI_NULL;
     ret = PAPI_create_eventset(&_profile_eventset);
     if(ret != PAPI_OK) {
-        printf("PAPI create eventset error %s\n", PAPI_strerror(ret));
-        fflush(stdout);
-        exit(-1);
+        //printf("PAPI create eventset error %s\n", PAPI_strerror(ret));
+        //fflush(stdout);
+        //exit(-1);
+        ERROR("PAPI_create_eventset %s", PAPI_strerror(ret));
     }
 
-    int i;
-    for(i = 0; i < NUM_EVENTS; i++) {
-        PAPI_event_info_t info;
-        if(PAPI_get_event_info(_profile_events[i], &info) != PAPI_OK) {
-            printf("ERROR PAPI_get_event_info %d\n", i);
-            //continue;
-        } else {
-            //printf("PAPI event %16s %s\n", info.symbol, info.long_descr);
-            strcpy(_profile_event_names[i], info.symbol);
+
+    //Check for an environment variable and parse it.
+    //Expect PROFILE_PAPI_EVENTS to be a space or comma separated list.
+    char* env_papi_events = getenv("PROFILE_PAPI_EVENTS");
+    char* sep = env_papi_events;
+
+    for(_profile_num_events = 0;
+            sep != NULL && _profile_num_events < MAX_EVENTS; 
+            _profile_num_events++) {
+        char* event_str = strsep(&sep, " \n\t,");
+
+        ret = PAPI_event_name_to_code(event_str,
+                &_profile_event_codes[_profile_num_events]);
+        if(ret != PAPI_OK) {
+//            printf("PAPI_event_name_to_code failed %s %s\n",
+//                    event_str, PAPI_strerror(ret));
+//            fflush(stdout);
+            WARNING("PAPI_event_name_to_code(%s) %s",
+                    event_str, PAPI_strerror(ret));
         }
 
-        ret = PAPI_add_event(_profile_eventset, _profile_events[i]);
+        ret = PAPI_add_event(_profile_eventset,
+                _profile_event_codes[_profile_num_events]);
         if(ret != PAPI_OK) {
-            printf("PAPI add event %d failed %s\n", i, PAPI_strerror(ret));
-            fflush(stdout);
-            exit(-1);
+//            printf("PAPI add event %s failed %s\n",
+//                    event_str, PAPI_strerror(ret));
+//            fflush(stdout);
+//            exit(-1);
+            ERROR("PAPI_add_event %s %s", event_str, PAPI_strerror(ret));
         }
+    }
+
+    if(_profile_num_events == MAX_EVENTS && sep != NULL) {
+        ERROR("Maximum of %d events are supported", MAX_EVENTS);
+    }
+
+    if(_profile_num_events == 0) {
+        ERROR("Must specify events via PROFILE_PAPI_EVENTS environment variable");
     }
 
 #if _PROFILE_PAPI_FILE == 1
-    char filename[128];
+    char filename[PAPI_MAX_STR_LEN] = {0};
 
     int rank;
     MPI_Comm_rank(MPI_COMM_WORLD, &rank);
-    sprintf(filename, "profile-%d-%d.out", tid, rank);
+    snprintf(filename, PAPI_MAX_STR_LEN, "profile-%d-%d.out", tid, rank);
 
     _profile_fd = fopen(filename, "w+");
     if(_profile_fd == NULL) {
-        printf("ERROR opening profile data file\n");
-        exit(-1);
+        //printf("ERROR opening profile data file\n");
+        //exit(-1);
+        ERROR("Unable to open profile data file for writing");
     }
 
     fprintf(_profile_fd, "VAR TIME");
-    for(i = 0; i < NUM_EVENTS; i++) {
+    for(i = 0; i < _profile_num_events; i++) {
         PAPI_event_info_t info;
-        if(PAPI_get_event_info(_profile_events[i], &info) != PAPI_OK) {
-            printf("ERROR PAPI_get_event_info %d\n", i);
-            continue;
-        }
 
-        printf("PAPI event %16s %s\n", info.symbol, info.long_descr);
-        fflush(stdout);
+        ret = PAPI_get_event_info(_profile_events[i], &info);
+        if(ret != PAPI_OK) {
+            //printf("ERROR PAPI_get_event_info %d\n", i);
+            //continue;
+            ERROR("PAPI_get_event_info %d %s", i, PAPI_strerror(ret));
+        }
 
         fprintf(_profile_fd, " %s", info.symbol);
     }
@@ -233,15 +262,15 @@ static void PROFILE_INIT()
 
     //Start the events now.  We leave them counting all the time, and use
     //PAPI_Read() to get the values.
-    int rc = PAPI_start(_profile_eventset);
-    if(rc != PAPI_OK) {
-        printf("papi start error %s\n", PAPI_strerror(rc)); fflush(stdout);
-        exit(-1);
+    ret = PAPI_start(_profile_eventset);
+    if(ret != PAPI_OK) {
+        //printf("papi start error %s\n", PAPI_strerror(rc)); fflush(stdout);
+        //exit(-1);
+        ERROR("PAPI_start %s", PAPI_strerror(ret));
     }
 
-#endif //_PROFILE_PAPI_EVENTS == 1
-
     PROFILE_CALIBRATE();
+#endif //_PROFILE_PAPI_EVENTS == 1
 }
 
 
@@ -288,8 +317,9 @@ static void __PROFILE_START(struct profile_vars_t* v)
 #endif
     int rc = PAPI_read(_profile_eventset, (long long*)v->tmp_ctrs);
     if(rc != PAPI_OK) {
-        printf("papi start read error %s\n", PAPI_strerror(rc)); fflush(stdout);
-        exit(-1);
+        //printf("papi start read error %s\n", PAPI_strerror(rc)); fflush(stdout);
+        //exit(-1);
+        ERROR("PAPI_read (start) %s", PAPI_strerror(rc));
     }
 #endif
 
@@ -325,7 +355,7 @@ static void __PROFILE_STOP(const char* name, struct profile_vars_t* v)
 
 #if _PROFILE_PAPI_EVENTS == 1
     //Grab counter values
-    uint64_t ctrs[NUM_EVENTS];
+    uint64_t ctrs[MAX_EVENTS];
 
 #if 0
     //int rc = PAPI_read_counters((long long*)ctrs, NUM_EVENTS);
@@ -338,8 +368,9 @@ static void __PROFILE_STOP(const char* name, struct profile_vars_t* v)
 
     int rc = PAPI_read(_profile_eventset, (long long*)ctrs);
     if(rc != PAPI_OK) {
-        printf("papi start read error %s\n", PAPI_strerror(rc)); fflush(stdout);
-        exit(-1);
+        //printf("papi stop read error %s\n", PAPI_strerror(rc)); fflush(stdout);
+        //exit(-1);
+        ERROR("PAPI_read (stop) %s", PAPI_strerror(rc));
     }
 #endif
 
@@ -375,7 +406,7 @@ static void __PROFILE_STOP(const char* name, struct profile_vars_t* v)
     int i;
 
     //Accumulate the counter values
-    for(i = 0; i < NUM_EVENTS; i++) {
+    for(i = 0; i < _profile_num_events; i++) {
         ctrs[i] -= v->tmp_ctrs[i];
 
         v->ctrs[i] += ctrs[i];
@@ -390,7 +421,7 @@ static void __PROFILE_STOP(const char* name, struct profile_vars_t* v)
 
 #if _PROFILE_PAPI_FILE == 1
     fprintf(_profile_fd, "%s %lu", name, t);
-    for(i = 0; i < NUM_EVENTS; i++) {
+    for(i = 0; i < _profile_num_events; i++) {
         fprintf(_profile_fd, " %lu", ctrs[i]);
     }
 
@@ -427,17 +458,17 @@ static void __PROFILE_RESULTS(const char* name, struct profile_vars_t* v, profil
 #if _PROFILE_PAPI_EVENTS == 1
     int i;
 
-    MPI_Allreduce(v->ctrs, r->total_ctrs, NUM_EVENTS,
+    MPI_Allreduce(v->ctrs, r->total_ctrs, _profile_num_events,
             MPI_UNSIGNED_LONG_LONG, MPI_SUM, MPI_COMM_WORLD);
 
 #if _PROFILE_MAX_MIN
-    MPI_Allreduce(v->ctr_max, r->max_ctrs, NUM_EVENTS,
+    MPI_Allreduce(v->ctr_max, r->max_ctrs, _profile_num_events,
             MPI_UNSIGNED_LONG_LONG, MPI_MAX, MPI_COMM_WORLD);
-    MPI_Allreduce(v->ctr_min, r->min_ctrs, NUM_EVENTS,
+    MPI_Allreduce(v->ctr_min, r->min_ctrs, _profile_num_events,
             MPI_UNSIGNED_LONG_LONG, MPI_MIN, MPI_COMM_WORLD);
 #endif //_PROFILE_MAX_MIN
 
-    for(i = 0; i < NUM_EVENTS; i++) {
+    for(i = 0; i < _profile_num_events; i++) {
         r->avg_ctrs[i] = (double)r->total_ctrs[i] / r->count;
     }
 
@@ -480,13 +511,20 @@ static void __PROFILE_SHOW(const char* name, struct profile_vars_t* v)
 #if _PROFILE_PAPI_EVENTS == 1
         int i;
 
-        for(i = 0; i < NUM_EVENTS; i++) {
+        for(i = 0; i < _profile_num_events; i++) {
+            PAPI_event_info_t info;
+
+            if(PAPI_get_event_info(_profile_event_codes[i], &info) != PAPI_OK) {
+                printf("ERROR PAPI_get_event_info %d\n",
+                        _profile_event_codes[i]);
+                abort();
+            }
 #if _PROFILE_MAX_MIN
-            printf("PAPI %20s %lu total %10.3f avg %lu max %lu min\n",
-                    _profile_event_names[i], r.total_ctrs[i], r.avg_ctrs[i],
+            printf("PAPI %20s %10lu total %14.3f avg %10lu max %10lu min\n",
+                    info.symbol, r.total_ctrs[i], r.avg_ctrs[i],
                     r.max_ctrs[i], r.min_ctrs[i]);
-#else
-            printf("PAPI %20s %lu total %10.3f avg\n",
+#else //!_PROFILE_MAX_MIN
+            printf("PAPI %20s %10lu total %14.3f avg\n",
                     _profile_event_names[i], r.total_ctrs[i], r.avg_ctrs[i]);
 #endif
         }
