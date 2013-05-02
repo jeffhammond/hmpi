@@ -11,7 +11,6 @@ CFLAGS+=$(WARN)
 LIBS=-lrt -lnuma
 
 INCS=#-D_PROFILE=1 -D_PROFILE_MPI=1 -D_PROFILE_PAPI_EVENTS=1 #-DFULL_PROFILE
-#INCS+=-DUSE_NUMA=1 
 #INCS+=-DENABLE_OPI=1
 #INCS+=-DHMPI_LOGCALLS=1 #-DHMPI_CHECKSUM=1
 #INCS+=-D_PROFILE=1 -D_PROFILE_MPI=1 -D_PROFILE_PAPI_EVENTS=1 #-DFULL_PROFILE
@@ -29,6 +28,7 @@ PSM_HDRS=hmpi_psm.h barrier.h lock.h profile2.h libpsm.h
 PSM_LIBS=$(LIBS) -lpsm_infinipath
 
 
+all: INCS+=-DUSE_NUMA=1 
 all: $(SRCS:%.c=%.o) 
 	ar r libhmpi.a $(SRCS:%.c=%.o)
 	ranlib libhmpi.a

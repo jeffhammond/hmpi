@@ -165,7 +165,7 @@ static int __sm_init_region(void)
 
 #ifdef USE_PSHM
 
-//#define MSPACE_SIZE (1024L * 1024L * 900L)
+//#define MSPACE_SIZE (1024L * 1024L * 700L)
 #define MSPACE_SIZE (1024L * 1024L * 1024L * 16L)
 #define DEFAULT_SIZE (MSPACE_SIZE * 16L + (long)getpagesize())
 //#define MSPACE_SIZE (1024L * 1024L * 128L)
@@ -333,6 +333,12 @@ static void __sm_init(void)
         void* volatile * brk_ptr = (void**)&sm_region->brk;
 
         while(*brk_ptr == NULL);
+
+        //Check that this process' region is mapped to the same address as the
+        //process that initialized the region.
+        if(sm_region->limit != (intptr_t)sm_region + DEFAULT_SIZE) {
+            abort();
+        }
     }
 
     //Create my own mspace.

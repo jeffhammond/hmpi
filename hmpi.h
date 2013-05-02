@@ -53,8 +53,8 @@ extern int g_rank;                      //HMPI world rank
 extern int g_size;                      //HMPI world size
 extern int g_node_rank;                 //HMPI node rank
 extern int g_node_size;                 //HMPI node size
-extern int g_net_rank;                  //HMPI net rank
-extern int g_net_size;                  //HMPI net size
+//extern int g_net_rank;                  //HMPI net rank
+//extern int g_net_size;                  //HMPI net size
 # if 0
 extern int g_numa_node;                 //HMPI numa node (compute-node scope)
 extern int g_numa_root;                 //HMPI root rank on same numa node
@@ -104,7 +104,7 @@ typedef struct {
   //This mysteriously improves latency for netpipe.
   //I used to have more variables here; removing them slowed netpipe down.
 #ifndef __bg__
-  char pad[44];
+  char pad[60];
 #endif
 } HMPI_Comm_info;
 
@@ -237,7 +237,6 @@ int HMPI_Waitany(int count, HMPI_Request* requests, int* index, HMPI_Status *sta
 
 int HMPI_Get_count(HMPI_Status* status, MPI_Datatype datatype, int* count);
 
-int HMPI_Type_size(MPI_Datatype datatype, int* size);
 
 //
 // Collectives

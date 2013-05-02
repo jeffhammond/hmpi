@@ -93,8 +93,8 @@ int g_rank=-1;                      //HMPI world rank
 int g_size=-1;                      //HMPI world size
 int g_node_rank=-1;                 //HMPI node rank
 int g_node_size=-1;                 //HMPI node size
-int g_net_rank=-1;                  //HMPI net rank
-int g_net_size=-1;                  //HMPI net size
+//int g_net_rank=-1;                  //HMPI net rank
+//int g_net_size=-1;                  //HMPI net size
 #if 0
 int g_numa_node=-1;                 //HMPI numa node (compute-node scope)
 int g_numa_root=-1;                 //HMPI root rank on same numa node
@@ -527,7 +527,8 @@ static inline int match_probe(int source, int tag, HMPI_Request* send_req) {
 }
 
 
-#ifndef __bg__
+//#ifndef __bg__
+#if 0
 #include <numa.h>
 #include <syscall.h>
 
@@ -673,11 +674,14 @@ int HMPI_Init(int *argc, char ***argv)
 
     //Create a comm that goes across the nodes.
     //This will contain only the procs with node rank 0, or node rank 1, etc.
-    MPI_Comm_split(MPI_COMM_WORLD,
-            g_node_rank, g_rank, &HMPI_COMM_WORLD->net_comm);
+    //MPI_Comm_split(MPI_COMM_WORLD,
+    //        g_node_rank, g_rank, &HMPI_COMM_WORLD->net_comm);
 
+
+#if 0
     MPI_Comm_rank(HMPI_COMM_WORLD->net_comm, &g_net_rank);
     MPI_Comm_size(HMPI_COMM_WORLD->net_comm, &g_net_size);
+#endif
 
 
 #if 0
@@ -726,6 +730,7 @@ int HMPI_Init(int *argc, char ***argv)
 
 
     //Ensure every rank on a node has the same shared region address.
+#if 0
 #ifndef __bg__
     {
         void* result = NULL;
@@ -746,6 +751,7 @@ int HMPI_Init(int *argc, char ***argv)
             MPI_Abort(MPI_COMM_WORLD, 0);
         }
     }
+#endif
 #endif
 
 
@@ -1594,42 +1600,21 @@ int HMPI_Probe(int source, int tag, HMPI_Comm comm, HMPI_Status* status)
 }
 
 
-#ifdef __bg__
-//BGQ speed hack assumes 64 ranks/node
-#define RANKS_NODE 64
-#define RANKS_NODE_SHIFT 6
-#define RANKS_NODE_MASK ((1 << RANKS_NODE_SHIFT) - 1)
-inline void HMPI_Comm_node_rank(HMPI_Comm comm, int rank, int* node_rank)
-{
-    //First determine if rank is on the same node.
-    if(rank >> RANKS_NODE_SHIFT == g_rank >> RANKS_NODE_SHIFT) {
-        *node_rank = rank & RANKS_NODE_MASK; 
-    } else {
-        *node_rank = MPI_UNDEFINED;
-    }
-}
-
-#else
-
-//Covers MPI_ANY_SOURCE, but no other special values like MPI_PROC_NULL.
+//Returns the translation of the world rank to it's local node rank,
+// or MPI_UNDEFINED otherwise.  MPI_ANY_SOURCE is translated to itself.
+//Other special values like MPI_PROC_NULL return MPI_UNDEFINED.
 void HMPI_Comm_node_rank(const HMPI_Comm comm, const int rank, int* node_rank)
 {
-    if(rank == MPI_ANY_SOURCE) {
-        *node_rank = MPI_ANY_SOURCE;
-        return;
-    } 
-    
     int diff = rank - comm->node_root;
-    
-    //if(rank >= comm->node_root &&
-    //        (diff = rank - comm->node_root) < comm->node_size) {
+
     if(diff >= 0 && diff < comm->node_size) {
         *node_rank = diff;
+    } else if(rank == MPI_ANY_SOURCE) {
+        *node_rank = MPI_ANY_SOURCE;
     } else {
         *node_rank = MPI_UNDEFINED;
     }
 }
-#endif
 
 
 int HMPI_Isend(void* buf, int count, MPI_Datatype datatype, int dest, int tag, HMPI_Comm comm, HMPI_Request *request)
@@ -1714,6 +1699,9 @@ int HMPI_Isend(void* buf, int count, MPI_Datatype datatype, int dest, int tag, H
         req->size = size;
         req->buf = buf;
 
+#ifdef HMPI_CHECKSUM
+        req->csum = compute_csum((uint8_t*)buf, size);
+#endif
         //For small messages, copy into the eager buffer.
         //If the user's send buffer is not in the SM region, allocate an SM buf
         // and copy the data over.
@@ -1780,7 +1768,6 @@ int HMPI_Irecv(void* buf, int count, MPI_Datatype datatype, int source, int tag,
 #endif 
 #endif
 
-#if 0
     if(unlikely(source == MPI_PROC_NULL)) { 
         req->type = HMPI_RECV;
         update_reqstat(req, HMPI_REQ_COMPLETE);
@@ -1788,7 +1775,6 @@ int HMPI_Irecv(void* buf, int count, MPI_Datatype datatype, int source, int tag,
         FULL_PROFILE_START(MPI_Other);
         return MPI_SUCCESS;
     }
-#endif
 
     int src_node_rank;
     HMPI_Comm_node_rank(comm, source, &src_node_rank);
@@ -1819,7 +1805,7 @@ int HMPI_Irecv(void* buf, int count, MPI_Datatype datatype, int source, int tag,
 
     if(src_node_rank != MPI_UNDEFINED) {
         int type_size;
-        HMPI_Type_size(datatype, &type_size);
+        MPI_Type_size(datatype, &type_size);
 
         if(unlikely(source == MPI_ANY_SOURCE)) {
             MPI_Irecv(buf, count, datatype,
@@ -1832,7 +1818,7 @@ int HMPI_Irecv(void* buf, int count, MPI_Datatype datatype, int source, int tag,
 
         req->proc = source; //Always sender's world-level rank
         req->tag = tag;
-        req->size = count * type_size;
+        req->size = (size_t)count * (size_t)type_size;
         req->buf = buf;
 
         add_recv_req(req);
