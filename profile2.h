@@ -25,17 +25,7 @@
 #include <string.h>
 #include <pthread.h>
 #include <time.h>
-
-#define ERROR(s, ...)  { \
-    fprintf(stderr, "ERROR %s:%d " s "\n", \
-            __FILE__, __LINE__, ##__VA_ARGS__); \
-    abort(); \
-} while(0)
-
-#define WARNING(s, ...)  { \
-    fprintf(stderr, "WARNING %s:%d " s "\n", \
-            __FILE__, __LINE__, ##__VA_ARGS__); \
-} while(0)
+#include "error.h"
 
 
 #ifdef __cplusplus

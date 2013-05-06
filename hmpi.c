@@ -27,6 +27,7 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
+#include "error.h"
 #include "lock.h"
 #ifdef __bg__
 #include <spi/include/kernel/memory.h>
@@ -204,7 +205,6 @@ static inline void update_reqstat(HMPI_Request req, int stat) {
 #endif
     req->stat = stat;
 }
-
 
 
 //TODO - Maybe send reqs should be allocated on the receiver.  How?
@@ -527,8 +527,7 @@ static inline int match_probe(int source, int tag, HMPI_Request* send_req) {
 }
 
 
-//#ifndef __bg__
-#if 0
+#ifndef __bg__
 #include <numa.h>
 #include <syscall.h>
 
@@ -604,8 +603,9 @@ int HMPI_Init(int *argc, char ***argv)
     //Check that it is set before continuing.
     char* tmp = getenv("BG_MAPCOMMONHEAP");
     if(tmp == NULL || atoi(tmp) != 1) {
-        printf("ERROR BG_MAPCOMMONHEAP not enabled\n");
-        MPI_Abort(MPI_COMM_WORLD, 0);
+        //printf("ERROR BG_MAPCOMMONHEAP not enabled\n");
+        //MPI_Abort(MPI_COMM_WORLD, 0);
+        ERROR("BG_MAPCOMMONHEAP not enabled");
     }
 #endif
 
@@ -676,6 +676,17 @@ int HMPI_Init(int *argc, char ***argv)
     //This will contain only the procs with node rank 0, or node rank 1, etc.
     //MPI_Comm_split(MPI_COMM_WORLD,
     //        g_node_rank, g_rank, &HMPI_COMM_WORLD->net_comm);
+#if 0
+    asm("nop\nnop\nnop\nnop\n");
+    asm("nop\nnop\nnop\nnop\n");
+    asm("nop\nnop\nnop\nnop\n");
+    asm("nop\nnop\nnop\nnop\n");
+
+    asm("nop\nnop\nnop\nnop\n");
+    asm("nop\nnop\nnop\nnop\n");
+    asm("nop\nnop\nnop\nnop\n");
+    asm("nop\nnop\nnop\nnop\n");
+#endif
 
 
 #if 0
@@ -947,8 +958,10 @@ static inline void HMPI_Complete_recv(HMPI_Request recv_req, HMPI_Request send_r
 
 #ifdef DEBUG
     if(unlikely(send_size > size)) {
-        printf("%d ERROR recv message from %d of size %ld truncated to %ld\n", g_rank, send_req->proc, send_size, size);
-        MPI_Abort(MPI_COMM_WORLD, 5);
+        //printf("%d ERROR recv message from %d of size %ld truncated to %ld\n", g_rank, send_req->proc, send_size, size);
+        //MPI_Abort(MPI_COMM_WORLD, 5);
+        ERROR("%d recv message from %d of size %ld truncated to %ld",
+                g_rank, send_req->proc, send_size, size);
     }
 #endif
 
@@ -1617,6 +1630,24 @@ void HMPI_Comm_node_rank(const HMPI_Comm comm, const int rank, int* node_rank)
 }
 
 
+int HMPI_Send(void* buf, int count, MPI_Datatype datatype, int dest, int tag, HMPI_Comm comm) {
+  HMPI_Request req;
+  HMPI_Isend(buf, count, datatype, dest, tag, comm, &req);
+  HMPI_Wait(&req, HMPI_STATUS_IGNORE);
+  return MPI_SUCCESS;
+}
+
+
+int HMPI_Recv(void* buf, int count, MPI_Datatype datatype, int source, int tag, HMPI_Comm comm, HMPI_Status *status)
+{
+    HMPI_Request req;
+
+    HMPI_Irecv(buf, count, datatype, source, tag, comm, &req);
+    HMPI_Wait(&req, status);
+    return MPI_SUCCESS;
+}
+
+
 int HMPI_Isend(void* buf, int count, MPI_Datatype datatype, int dest, int tag, HMPI_Comm comm, HMPI_Request *request)
 {
     FULL_PROFILE_STOP(MPI_Other);
@@ -1647,9 +1678,12 @@ int HMPI_Isend(void* buf, int count, MPI_Datatype datatype, int dest, int tag, H
 
 #if DEBUG
     if(dest < 0) {
-        printf("%d dest %d MPI_PROC_NULL %d MPI_ANY_SOURCE %d\n",
+        //printf("%d dest %d MPI_PROC_NULL %d MPI_ANY_SOURCE %d\n",
+        //        g_rank, dest, MPI_PROC_NULL, MPI_ANY_SOURCE);
+        //abort();
+        ERROR("%d dest %d MPI_PROC_NULL %d MPI_ANY_SOURCE %d",
                 g_rank, dest, MPI_PROC_NULL, MPI_ANY_SOURCE);
-        abort();
+
     }
 #endif
 
@@ -1734,14 +1768,6 @@ int HMPI_Isend(void* buf, int count, MPI_Datatype datatype, int dest, int tag, H
 }
 
 
-int HMPI_Send(void* buf, int count, MPI_Datatype datatype, int dest, int tag, HMPI_Comm comm) {
-  HMPI_Request req;
-  HMPI_Isend(buf, count, datatype, dest, tag, comm, &req);
-  HMPI_Wait(&req, HMPI_STATUS_IGNORE);
-  return MPI_SUCCESS;
-}
-
-
 int HMPI_Irecv(void* buf, int count, MPI_Datatype datatype, int source, int tag, HMPI_Comm comm, HMPI_Request *request)
 {
     FULL_PROFILE_STOP(MPI_Other);
@@ -1778,19 +1804,6 @@ int HMPI_Irecv(void* buf, int count, MPI_Datatype datatype, int source, int tag,
 
     int src_node_rank;
     HMPI_Comm_node_rank(comm, source, &src_node_rank);
-#if 0
-    if(source == MPI_ANY_SOURCE) {
-        src_node_rank = MPI_ANY_SOURCE;
-    } else {
-        int diff = source - comm->node_root;
-
-        if(diff >= 0 && diff < comm->node_size) {
-            src_node_rank = diff;
-        } else {
-            src_node_rank = MPI_UNDEFINED;
-        }
-    }
-#endif
 
 
     //update_reqstat() has a memory fence on BGQ, avoid it here.
@@ -1831,16 +1844,6 @@ int HMPI_Irecv(void* buf, int count, MPI_Datatype datatype, int source, int tag,
 
     FULL_PROFILE_STOP(MPI_Irecv);
     FULL_PROFILE_START(MPI_Other);
-    return MPI_SUCCESS;
-}
-
-
-int HMPI_Recv(void* buf, int count, MPI_Datatype datatype, int source, int tag, HMPI_Comm comm, HMPI_Status *status)
-{
-    HMPI_Request req;
-
-    HMPI_Irecv(buf, count, datatype, source, tag, comm, &req);
-    HMPI_Wait(&req, status);
     return MPI_SUCCESS;
 }
 
