@@ -13,9 +13,9 @@ LIBS=-lrt -lnuma
 INCS=#-D_PROFILE=1 -D_PROFILE_MPI=1 -D_PROFILE_PAPI_EVENTS=1 #-DFULL_PROFILE
 #INCS+=-DENABLE_OPI=1
 #INCS+=-DHMPI_LOGCALLS=1 #-DHMPI_CHECKSUM=1
-#INCS+=-D_PROFILE=1 -D_PROFILE_MPI=1 -D_PROFILE_PAPI_EVENTS=1 #-DFULL_PROFILE
+#INCS+=-D_PROFILE=1 -D_PROFILE_MPI=1 -DFULL_PROFILE #-D_PROFILE_PAPI_EVENTS=1
 
-SRCS=hmpi.c #hmpi_coll.c nbc_op.c #hmpi_opi.c
+SRCS=hmpi_p2p.c hmpi.c #hmpi_coll.c nbc_op.c #hmpi_opi.c
 SRCS+=sm_malloc.c
 USEQ_SRCS=hmpi.c #hmpi_coll.c nbc_op.c
 MAIN=main.c

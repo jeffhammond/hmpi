@@ -1,6 +1,7 @@
 #ifndef __ERROR_H_
 #define __ERROR_H_
 #include <stdarg.h>
+#include <stdio.h>
 
 static void __ERROR(const char* file, const int line, const char* fmt, ...) __attribute__ ((noreturn));
 static void __ERROR(const char* file, const int line, const char* fmt, ...)

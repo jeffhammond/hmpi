@@ -15,7 +15,7 @@
 #define _PROFILE_PAPI_FILE 0
 #endif
 
-#define _PROFILE_MAX_MIN 1
+//#define _PROFILE_MAX_MIN 1
 
 #if _PROFILE == 1
 
@@ -32,18 +32,14 @@
 extern "C" {
 #endif
 
+extern uint64_t _profile_overhead;
+
 #if _PROFILE_PAPI_EVENTS == 1
 #include <papi.h>
-
-//#include "papi_ctrs.h"
 
 //Statically reserve space to handle 16 counters at once.
 #define MAX_EVENTS 16
 
-//This is 8kb, why not just query the names when printing results?
-//static char _profile_event_names[MAX_EVENTS][PAPI_MAX_STR_LEN] = {{0}};
-
-extern uint64_t _profile_overhead;
 extern int _profile_eventset;
 extern int _profile_num_events;
 extern int _profile_event_codes[MAX_EVENTS];
@@ -137,13 +133,24 @@ static inline void __PROFILE_STOP(const char* name, struct profile_vars_t* v);
 static void PROFILE_CALIBRATE(void)
 {
     struct profile_vars_t v = {0};
+    uint64_t min = UINT64_MAX;
+    uint64_t old_time = 0;
+    uint64_t time;
+
 
     for(int i = 0; i < 100000; i++) {
+        old_time = v.time;
+
         __PROFILE_START(&v);
         __PROFILE_STOP("calibrate", &v);
+
+        time = v.time - old_time;
+        if(time < min) {
+            min = time;
+        }
     }
 
-    _profile_overhead = v.min;
+    _profile_overhead = min;
 }
 
 
@@ -259,8 +266,9 @@ static void PROFILE_INIT()
         ERROR("PAPI_start %s", PAPI_strerror(ret));
     }
 
-    PROFILE_CALIBRATE();
 #endif //_PROFILE_PAPI_EVENTS == 1
+
+    PROFILE_CALIBRATE();
 }
 
 
@@ -298,17 +306,8 @@ static inline uint64_t get_bgq_cycles()
 static void __PROFILE_START(struct profile_vars_t* v)
 {
 #if _PROFILE_PAPI_EVENTS == 1
-#if 0
-    int rc = PAPI_start(_profile_eventset);
-    if(rc != PAPI_OK) {
-        printf("papi start error %s\n", PAPI_strerror(rc)); fflush(stdout);
-        exit(-1);
-    }
-#endif
     int rc = PAPI_read(_profile_eventset, (long long*)v->tmp_ctrs);
     if(rc != PAPI_OK) {
-        //printf("papi start read error %s\n", PAPI_strerror(rc)); fflush(stdout);
-        //exit(-1);
         ERROR("PAPI_read (start) %s", PAPI_strerror(rc));
     }
 #endif
@@ -347,19 +346,8 @@ static void __PROFILE_STOP(const char* name, struct profile_vars_t* v)
     //Grab counter values
     uint64_t ctrs[MAX_EVENTS];
 
-#if 0
-    //int rc = PAPI_read_counters((long long*)ctrs, NUM_EVENTS);
-    int rc = PAPI_stop(_profile_eventset, (long long*)ctrs);
-    if(rc != PAPI_OK) {
-        printf("papi read error %s %s\n", PAPI_strerror(rc), name); fflush(stdout);
-        exit(-1);
-    }
-#endif
-
     int rc = PAPI_read(_profile_eventset, (long long*)ctrs);
     if(rc != PAPI_OK) {
-        //printf("papi stop read error %s\n", PAPI_strerror(rc)); fflush(stdout);
-        //exit(-1);
         ERROR("PAPI_read (stop) %s", PAPI_strerror(rc));
     }
 #endif
@@ -397,6 +385,8 @@ static void __PROFILE_STOP(const char* name, struct profile_vars_t* v)
 
     //Accumulate the counter values
     for(i = 0; i < _profile_num_events; i++) {
+        //The counters are continuous, so subtract off the count at which
+        // we started to get the count that occurred during the timing region.
         ctrs[i] -= v->tmp_ctrs[i];
 
         v->ctrs[i] += ctrs[i];
@@ -515,7 +505,7 @@ static void __PROFILE_SHOW(const char* name, struct profile_vars_t* v)
                     r.max_ctrs[i], r.min_ctrs[i]);
 #else //!_PROFILE_MAX_MIN
             printf("PAPI %20s %10lu total %14.3f avg\n",
-                    _profile_event_names[i], r.total_ctrs[i], r.avg_ctrs[i]);
+                    info.symbol, r.total_ctrs[i], r.avg_ctrs[i]);
 #endif
         }
 #endif
