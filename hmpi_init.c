@@ -96,7 +96,7 @@ extern HMPI_Comm HMPI_COMM_WORLD;
 
 
 #ifdef HMPI_LOGCALLS
-extern int g_log_fd;
+int g_log_fd = -1;
 
 #include <stdarg.h>
 #include <sys/types.h>
@@ -109,12 +109,16 @@ static void log_mpi_call(char* fmt, ...)
     va_list args;
     char str[1024];
 
+    if(g_log_fd) {
+        ERROR("Log file descriptor not initialized");
+    }
+
     va_start(args, fmt);
-    int len = vsnprintf(str, 1023, fmt, args);
+    int len = vsnprintf(str, 1024, fmt, args);
     va_end(args);
 
-    if(len >= 1023) {
-        len = 1022;
+    if(len >= 1024) {
+        len = 1023;
     }
 
     strcat(str, "\n");
@@ -136,14 +140,6 @@ static void log_mpi_call(char* fmt, ...)
 extern HMPI_Item g_recv_reqs_head;
 extern HMPI_Item* g_recv_reqs_tail;
 
-
-typedef struct HMPI_Request_list {
-    HMPI_Item head;
-    HMPI_Item* tail;
-
-    lock_t lock;
-    char padding[40];
-} HMPI_Request_list;
 
 #ifndef __bg__
 extern mcs_qnode_t* g_lock_q;                   //Q node for lock
@@ -233,8 +229,6 @@ int HMPI_Init(int *argc, char ***argv)
     //Check that it is set before continuing.
     char* tmp = getenv("BG_MAPCOMMONHEAP");
     if(tmp == NULL || atoi(tmp) != 1) {
-        //printf("ERROR BG_MAPCOMMONHEAP not enabled\n");
-        //MPI_Abort(MPI_COMM_WORLD, 0);
         ERROR("BG_MAPCOMMONHEAP not enabled");
     }
 #endif
@@ -367,32 +361,6 @@ int HMPI_Init(int *argc, char ***argv)
             getpid(), g_rank, g_size, g_node_rank, g_node_size,
             HMPI_COMM_WORLD->node_root, g_net_rank, g_net_size, g_numa_node,
             g_numa_root, g_numa_rank);
-#endif
-
-
-    //Ensure every rank on a node has the same shared region address.
-#if 0
-#ifndef __bg__
-    {
-        void* result = NULL;
-
-        MPI_Allreduce(&sm_lower, &result, 1, MPI_LONG,
-                MPI_MAX, HMPI_COMM_WORLD->node_comm);
-        if(result != sm_lower) {
-            printf("%d ERROR sm_lower %p doesn't agree with MAX %p\n",
-                    g_rank, sm_lower, result);
-            MPI_Abort(MPI_COMM_WORLD, 0);
-        }
-
-        MPI_Allreduce(&sm_upper, &result, 1, MPI_LONG,
-                MPI_MAX, HMPI_COMM_WORLD->node_comm);
-        if(result != sm_upper) {
-            printf("%d ERROR sm_upper %p doesn't agree with MAX %p\n",
-                    g_rank, sm_upper, result);
-            MPI_Abort(MPI_COMM_WORLD, 0);
-        }
-    }
-#endif
 #endif
 
 

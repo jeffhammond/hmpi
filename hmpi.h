@@ -21,6 +21,11 @@ extern "C" {
 #define EAGER_LIMIT 256
 #define PTOP 5
 
+typedef struct HMPI_Item {
+    struct HMPI_Item* next;
+} HMPI_Item;
+
+
 
 #ifdef HMPI_INTERNAL
 
@@ -47,6 +52,15 @@ extern void* sm_upper;
 
 #define likely(x)       __builtin_expect((x),1)
 #define unlikely(x)     __builtin_expect((x),0)
+
+
+typedef struct HMPI_Request_list {
+    HMPI_Item head;
+    HMPI_Item* tail;
+
+    lock_t lock;
+    char padding[40];
+} HMPI_Request_list;
 
 
 extern int g_rank;                      //HMPI world rank
@@ -140,11 +154,6 @@ typedef struct HMPI_Status {
 //ACTIVE and COMPLETE specifically chosen to match MPI test flags
 #define HMPI_REQ_ACTIVE 0
 #define HMPI_REQ_COMPLETE 1
-
-typedef struct HMPI_Item {
-    struct HMPI_Item* next;
-} HMPI_Item;
-
 
 //HMPI_Request is later defined as a pointer to this struct.
 typedef struct HMPI_Request_info {
