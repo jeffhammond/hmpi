@@ -130,6 +130,10 @@ PROFILE_EXTERN(MPI_Other);
 static inline void __PROFILE_START(struct profile_vars_t* v);
 static inline void __PROFILE_STOP(const char* name, struct profile_vars_t* v);
 
+#ifndef UINT64_MAX
+#define UINT64_MAX (uint64_t)-1
+#endif
+
 static void PROFILE_CALIBRATE(void)
 {
     struct profile_vars_t v = {0};
@@ -161,32 +165,17 @@ static void PROFILE_INIT()
 #if _PROFILE_PAPI_EVENTS == 1
     int ret = PAPI_library_init(PAPI_VER_CURRENT);
     if(ret < 0) {
-        printf("PAPI init failure %s\n", PAPI_strerror(ret));
-        fflush(stdout);
-        exit(-1);
+        ERROR("PAPI init failure %s", PAPI_strerror(ret));
     }
 
     PAPI_thread_init((long unsigned int (*)())pthread_self);
 
 
-    //TODO - move this check later.
-#if 0
-    int num_hwcntrs = PAPI_num_counters();
-    if(num_hwcntrs < NUM_EVENTS) {
-        printf("ERROR PAPI reported < %d events available\n", NUM_EVENTS);
-        exit(-1);
-    }
-#endif
-
     _profile_eventset = PAPI_NULL;
     ret = PAPI_create_eventset(&_profile_eventset);
     if(ret != PAPI_OK) {
-        //printf("PAPI create eventset error %s\n", PAPI_strerror(ret));
-        //fflush(stdout);
-        //exit(-1);
         ERROR("PAPI_create_eventset %s", PAPI_strerror(ret));
     }
-
 
     //Check for an environment variable and parse it.
     //Expect PROFILE_PAPI_EVENTS to be a space or comma separated list.
@@ -201,9 +190,6 @@ static void PROFILE_INIT()
         ret = PAPI_event_name_to_code(event_str,
                 &_profile_event_codes[_profile_num_events]);
         if(ret != PAPI_OK) {
-//            printf("PAPI_event_name_to_code failed %s %s\n",
-//                    event_str, PAPI_strerror(ret));
-//            fflush(stdout);
             WARNING("PAPI_event_name_to_code(%s) %s",
                     event_str, PAPI_strerror(ret));
         }
@@ -211,21 +197,24 @@ static void PROFILE_INIT()
         ret = PAPI_add_event(_profile_eventset,
                 _profile_event_codes[_profile_num_events]);
         if(ret != PAPI_OK) {
-//            printf("PAPI add event %s failed %s\n",
-//                    event_str, PAPI_strerror(ret));
-//            fflush(stdout);
-//            exit(-1);
             ERROR("PAPI_add_event %s %s", event_str, PAPI_strerror(ret));
         }
+    }
+
+    if(_profile_num_events == 0) {
+        ERROR("Must specify events via PROFILE_PAPI_EVENTS environment variable");
     }
 
     if(_profile_num_events == MAX_EVENTS && sep != NULL) {
         ERROR("Maximum of %d events are supported", MAX_EVENTS);
     }
 
-    if(_profile_num_events == 0) {
-        ERROR("Must specify events via PROFILE_PAPI_EVENTS environment variable");
+    int num_hwcntrs = PAPI_num_counters();
+    if(num_hwcntrs < _profile_num_events) {
+        ERROR("PAPI reported %d events available, %d events specified",
+                num_hwcntrs, _profile_num_events);
     }
+
 
 #if _PROFILE_PAPI_FILE == 1
     char filename[PAPI_MAX_STR_LEN] = {0};
@@ -236,8 +225,6 @@ static void PROFILE_INIT()
 
     _profile_fd = fopen(filename, "w+");
     if(_profile_fd == NULL) {
-        //printf("ERROR opening profile data file\n");
-        //exit(-1);
         ERROR("Unable to open profile data file for writing");
     }
 
@@ -247,8 +234,6 @@ static void PROFILE_INIT()
 
         ret = PAPI_get_event_info(_profile_events[i], &info);
         if(ret != PAPI_OK) {
-            //printf("ERROR PAPI_get_event_info %d\n", i);
-            //continue;
             ERROR("PAPI_get_event_info %d %s", i, PAPI_strerror(ret));
         }
 
@@ -261,8 +246,6 @@ static void PROFILE_INIT()
     //PAPI_Read() to get the values.
     ret = PAPI_start(_profile_eventset);
     if(ret != PAPI_OK) {
-        //printf("papi start error %s\n", PAPI_strerror(rc)); fflush(stdout);
-        //exit(-1);
         ERROR("PAPI_start %s", PAPI_strerror(ret));
     }
 

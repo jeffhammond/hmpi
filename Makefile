@@ -1,6 +1,4 @@
 CC=mpicc -std=gnu99 
-#CC=mpixlc
-
 
 WARN=-Wall -Wuninitialized -Winline #-Wno-unused-function
 CFLAGS+=$(WARN)
@@ -16,8 +14,6 @@ INCS=#-D_PROFILE=1 -D_PROFILE_MPI=1 -D_PROFILE_PAPI_EVENTS=1 #-DFULL_PROFILE
 #INCS+=-D_PROFILE=1 -D_PROFILE_MPI=1 -DFULL_PROFILE #-D_PROFILE_PAPI_EVENTS=1
 
 SRCS=hmpi_p2p.c hmpi_init.c #hmpi_coll.c nbc_op.c #hmpi_opi.c
-SRCS+=sm_malloc.c
-USEQ_SRCS=hmpi.c #hmpi_coll.c nbc_op.c
 MAIN=main.c
 HDRS=hmpi.h barrier.h lock.h profile2.h
 
@@ -29,6 +25,7 @@ PSM_LIBS=$(LIBS) -lpsm_infinipath
 
 
 all: INCS+=-DUSE_NUMA=1 
+all: SRCS+=sm_malloc.c
 all: $(SRCS:%.c=%.o) 
 	ar r libhmpi.a $(SRCS:%.c=%.o)
 	ranlib libhmpi.a
@@ -42,16 +39,17 @@ udawn: $(SRCS:%.c=%.o)
 	ar r libhmpi.a hmpi.o hmpi_coll.o nbc_op.o
 	ranlib libhmpi.a
 
-useq: CC=mpixlc
-useq: CFLAGS=-O5 -qhot=novector -qsimd=auto $(INCLUDE) -qinline=auto:level=5 -qassert=refalign -qlibansi -qlibmpi -qipa -qhot  -qprefetch=aggressive
-useq: $(USEQ_SRCS:%.c=%.o)
-	ar r libhmpi.a $(USEQ_SRCS:%.c=%.o)
-	ranlib libhmpi.a
+bgq: CC=mpixlc
+bgq: CFLAGS=-O5 -qhot=novector -qsimd=auto $(INCLUDE) -qinline=auto:level=5 -qassert=refalign -qlibansi -qlibmpi -qipa -qhot  -qprefetch=aggressive
+bgq: $(SRCS:%.c=%.o)
+	ar r libhmpi-bgq.a $(SRCS:%.c=%.o)
+	ranlib libhmpi-bgq.a
+	rm $(SRCS:%.c=%.o)
 
-useq_debug: LIBS =
-useq_debug: CC=mpixlc
-useq_debug: CFLAGS=-O0 -g -qhot=novector -qsimd=auto $(INCLUDE)
-useq_debug: $(USEQ_SRCS:%.c=%.o)
+bgq_debug: LIBS =
+bgq_debug: CC=mpixlc
+bgq_debug: CFLAGS=-O0 -g -qhot=novector -qsimd=auto $(INCLUDE)
+bgq_debug: $(USEQ_SRCS:%.c=%.o)
 	ar sr libhmpi.a $(USEQ_SRCS:%.c=%.o)
 
 #main: CFLAGS = -g -O -D_PROFILE=1 -D_PROFILE_HMPI=1
@@ -60,9 +58,9 @@ useq_debug: $(USEQ_SRCS:%.c=%.o)
 main: all $(MAIN:%.c=%.o)
 	$(CC) $(CFLAGS) $(LDFLAGS) -Wl,--allow-multiple-definition -o main main.o libhmpi.a $(LIBS)
 
-main_useq: CC=mpixlc
-main_useq: CFLAGS=-O2 -g $(INCLUDE)
-main_useq: useq $(MAIN:%.c=%.o)
+main_bgq: CC=mpixlc
+main_bgq: CFLAGS=-O2 -g $(INCLUDE)
+main_bgq: bgq $(MAIN:%.c=%.o)
 	$(CC) $(CFLAGS) $(LDFLAGS) -Wl,--allow-multiple-definition -o main main.o libhmpi.a $(LIBS)
 
 debug: CFLAGS = $(WARN) -g -O0 -rdynamic $(INCLUDE)
@@ -74,16 +72,19 @@ debug: $(SRCS:%.c=%.o)
 opi: all example_opi.c
 	$(CC) $(CCFLAGS) $(LDFLAGS) -o example_opi example_opi.o libhmpi.a  $(LIBS)
 
-opi_useq: LIBS =
-opi_useq: CC=mpixlc
-opi_useq: CFLAGS=-O3 -qhot=novector -qsimd=auto -qlist -qreport -qsource
-opi_useq: OPI_SRCS += example_opi.c
-opi_useq: all $(OPI_SRCS:%.c=%.o) opi.h
+opi_bgq: LIBS =
+opi_bgq: CC=mpixlc
+opi_bgq: CFLAGS=-O3 -qhot=novector -qsimd=auto -qlist -qreport -qsource
+opi_bgq: OPI_SRCS += example_opi.c
+opi_bgq: all $(OPI_SRCS:%.c=%.o) opi.h
 	$(CC) $(CCFLAGS) $(LDFLAGS) -o example_opi $(OPI_SRCS:%.c=%.o) libhmpi.a  $(LIBS)
 
 .c.o: $(HDRS)
 	$(CC) $(INCS) $(CFLAGS) $(CPPFLAGS) -c $<
 
 clean:
-	rm -f *.o *.a
+	rm -f *.o libhmpi.a
+
+clean_bgq:
+	rm -f *.o libhmpi-bgq.a
 
