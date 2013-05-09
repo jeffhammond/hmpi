@@ -17,12 +17,6 @@ SRCS=hmpi_p2p.c hmpi.c #hmpi_coll.c nbc_op.c #hmpi_opi.c
 MAIN=main.c
 HDRS=hmpi.h barrier.h lock.h profile2.h
 
-OPI_SRCS=#opi.c
-
-PSM_SRCS=hmpi_psm.c hmpi_coll.c nbc_op.c libpsm.c
-PSM_HDRS=hmpi_psm.h barrier.h lock.h profile2.h libpsm.h
-PSM_LIBS=$(LIBS) -lpsm_infinipath
-
 
 all: INCS+=-DUSE_NUMA=1 
 all: SRCS+=sm_malloc.c
@@ -64,7 +58,8 @@ main_bgq: bgq $(MAIN:%.c=%.o)
 	$(CC) $(CFLAGS) $(LDFLAGS) -Wl,--allow-multiple-definition -o main main.o libhmpi.a $(LIBS)
 
 debug: CFLAGS = $(WARN) -g -O0 -rdynamic $(INCLUDE)
-debug: $(SRCS:%.c=%.o) 
+debug: SRCS+=sm_malloc.c
+debug: $(SRCS:%.c=%.o)  sm_malloc.o
 	ar r libhmpi.a $(SRCS:%.c=%.o)
 	ranlib libhmpi.a
 #	$(CC) $(INCS) $(CFLAGS) $(LDFLAGS) -o $(PROG) $(SRCS:%.c=%.o) $(LIBS)

@@ -260,21 +260,33 @@ void init_communicator(HMPI_Comm comm)
         //MPI says color must be non-negative.
         color &= 0x7FFFFFFF;
 
-        MPI_Comm_split(MPI_COMM_WORLD, color, HMPI_COMM_WORLD->comm_rank,
-                &HMPI_COMM_WORLD->node_comm);
+        MPI_Comm_split(comm->comm, color, comm->comm_rank,
+                &comm->node_comm);
     }
 
-    MPI_Comm_rank(HMPI_COMM_WORLD->node_comm, &HMPI_COMM_WORLD->node_rank);
-    MPI_Comm_size(HMPI_COMM_WORLD->node_comm, &HMPI_COMM_WORLD->node_size);
+    MPI_Comm_rank(comm->node_comm, &comm->node_rank);
+    MPI_Comm_size(comm->node_comm, &comm->node_size);
 
+    //Translate rank 0 in the node comm into its rank in the main comm.
+    //Used by HMPI_Comm_node_rank().
+    {
+        MPI_Group node_group;
+        MPI_Group comm_group;
+        MPI_Comm_group(comm->node_comm, &node_group);
+        MPI_Comm_group(comm->comm, &comm_group);
+
+        int base_rank = 0;
+        MPI_Group_translate_ranks(node_group, 1,
+                &base_rank, comm_group, &comm->node_root);
+    }
 
     //Create a comm that goes across the nodes.
     //This will contain only the procs with node rank 0, or node rank 1, etc.
-    MPI_Comm_split(MPI_COMM_WORLD,
-            HMPI_COMM_WORLD->node_rank, HMPI_COMM_WORLD->comm_rank, &HMPI_COMM_WORLD->net_comm);
+    MPI_Comm_split(comm->comm,
+            comm->node_rank, comm->comm_rank, &comm->net_comm);
 
-    //MPI_Comm_rank(HMPI_COMM_WORLD->net_comm, &comm->net_rank);
-    //MPI_Comm_size(HMPI_COMM_WORLD->net_comm, &comm->net_size);
+    //MPI_Comm_rank(comm->net_comm, &comm->net_rank);
+    //MPI_Comm_size(comm->net_comm, &comm->net_size);
 
 
 #if 0
@@ -287,24 +299,24 @@ void init_communicator(HMPI_Comm comm)
     ret = numa_move_pages(0, 1, &page, NULL, &g_numa_node, 0);
     if(ret != 0) {
         printf("ERROR numa_move_pages %s\n", strerror(ret));
-        MPI_Abort(MPI_COMM_WORLD, 0);
+        MPI_Abort(comm, 0);
     }
 #else
     //Without a way to find the local NUMA node, assume one NUMA node.
     g_numa_node = 0;
 #endif //USE_NUMA
 
-    MPI_Comm_split(HMPI_COMM_WORLD->node_comm, g_numa_node, HMPI_COMM_WORLD->node_rank,
-            &HMPI_COMM_WORLD->numa_comm);
+    MPI_Comm_split(comm->node_comm, g_numa_node, comm->node_rank,
+            &comm->numa_comm);
 
-    MPI_Comm_rank(HMPI_COMM_WORLD->numa_comm, &g_numa_rank);
-    MPI_Comm_size(HMPI_COMM_WORLD->numa_comm, &g_numa_size);
+    MPI_Comm_rank(comm->numa_comm, &g_numa_rank);
+    MPI_Comm_size(comm->numa_comm, &g_numa_size);
 
     {
         MPI_Group numa_group;
         MPI_Group world_group;
-        MPI_Comm_group(HMPI_COMM_WORLD->numa_comm, &numa_group);
-        MPI_Comm_group(HMPI_COMM_WORLD->comm, &world_group);
+        MPI_Comm_group(comm->numa_comm, &numa_group);
+        MPI_Comm_group(comm->comm, &world_group);
 
         int base_rank = 0;
         MPI_Group_translate_ranks(numa_group, 1,
@@ -335,23 +347,24 @@ void init_communicator(HMPI_Comm comm)
 
     MPI_Bcast(&comm->context, 1, MPI_INT, 0, comm->node_comm);
 
+    comm->coll = NULL;
 #if 0
-    hmpi_coll_t* coll = HMPI_COMM_WORLD->coll = MALLOC(hmpi_coll_t, 1);
+    hmpi_coll_t* coll = comm->coll = MALLOC(hmpi_coll_t, 1);
 
-    MPI_Bcast(&HMPI_COMM_WORLD->coll, 1, MPI_LONG, 0,
-            HMPI_COMM_WORLD->node_comm);
+    MPI_Bcast(&comm->coll, 1, MPI_LONG, 0,
+            comm->node_comm);
 
-    if(HMPI_COMM_WORLD->node_rank == 0) {
-        coll->sbuf = MALLOC(volatile void*, HMPI_COMM_WORLD->node_size);
-        coll->rbuf = MALLOC(volatile void*, HMPI_COMM_WORLD->node_size);
-        coll->tmp = MALLOC(volatile void*, HMPI_COMM_WORLD->node_size);
+    if(comm->node_rank == 0) {
+        coll->sbuf = MALLOC(volatile void*, comm->node_size);
+        coll->rbuf = MALLOC(volatile void*, comm->node_size);
+        coll->tmp = MALLOC(volatile void*, comm->node_size);
 
 
         for(int i=0; i<PTOP; i++) {
-            coll->ptop[i] = MALLOC(padptop, HMPI_COMM_WORLD->node_size);
+            coll->ptop[i] = MALLOC(padptop, comm->node_size);
         }
 
-        // for(int i =0; i<HMPI_COMM_WORLD->node_size; i++)
+        // for(int i =0; i<comm->node_size; i++)
         // {
         //   coll->ptop_0[i] = 0;
         //   coll->ptop_1[i] = 0;
@@ -361,12 +374,12 @@ void init_communicator(HMPI_Comm comm)
         // }
 
         for(int j = 0; j < PTOP; j++) {
-            for(int i = 0; i < HMPI_COMM_WORLD->node_size; i++) {
+            for(int i = 0; i < comm->node_size; i++) {
                 coll->ptop[j][i].ptopsense = 0;
             }
         }
 
-        //for(int i =0; i<HMPI_COMM_WORLD->node_size; i++)
+        //for(int i =0; i<comm->node_size; i++)
         //{
         //  coll->ptop_0[i].ptopsense = 0;
         //  coll->ptop_1[i].ptopsense = 0;
@@ -375,8 +388,8 @@ void init_communicator(HMPI_Comm comm)
         //  coll->ptop_4[i].ptopsense = 0;
         //}
 
-        //FANINEQUAL1(t_barrier_init_fanin1(&coll->t_barr, HMPI_COMM_WORLD->node_size);) 
-        //PFANIN(t_barrier_init(&coll->t_barr, HMPI_COMM_WORLD->node_size););
+        //FANINEQUAL1(t_barrier_init_fanin1(&coll->t_barr, comm->node_size);) 
+        //PFANIN(t_barrier_init(&coll->t_barr, comm->node_size););
     }
 #endif
 
@@ -497,4 +510,53 @@ int HMPI_Finalize(void)
 }
 
 
+int HMPI_Comm_create(HMPI_Comm comm, MPI_Group group, HMPI_Comm* newcomm)
+{
+    //Allocate a new HMPI communicator.
+    HMPI_Comm c = MALLOC(HMPI_Comm_info, 1);
+
+    //Create an MPI comm from the group.
+    MPI_Comm_create(comm->comm, group, &c->comm);
+
+    //Initialize the rest of the HMPI comm.
+    init_communicator(c);
+
+    *newcomm = c;
+    return MPI_SUCCESS;
+}
+
+
+int HMPI_Comm_dup(HMPI_Comm comm, HMPI_Comm* newcomm)
+{
+    //Allocate a new HMPI communicator.
+    HMPI_Comm c = MALLOC(HMPI_Comm_info, 1);
+
+    //Duplicate the old comm's MPI comm into the new HMPI comm.
+    MPI_Comm_dup(comm->comm, &c->comm);
+
+    //Initialize the rest of the HMPI comm.
+    init_communicator(c);
+
+    *newcomm = c;
+    return MPI_SUCCESS;
+}
+
+
+int HMPI_Comm_free(HMPI_Comm* comm)
+{
+    HMPI_Comm c = *comm;
+
+    //Free malloc'd resources on the comm.
+
+    //Free all the MPI communicators (main, node, net, numa).
+    MPI_Comm_free(&c->net_comm);
+    MPI_Comm_free(&c->node_comm);
+    MPI_Comm_free(&c->comm);
+
+    //Free the comm structure itself.
+    free(c);
+    *comm = HMPI_COMM_NULL;
+
+    return MPI_SUCCESS;
+}
 

@@ -42,6 +42,7 @@ typedef struct HMPI_Item {
 //Everything is shared on BG/Q
 #define IS_SM_BUF(p) (1)
 #else
+#warning "Using SM Malloc"
 extern void* sm_lower;
 extern void* sm_upper;
 
@@ -116,8 +117,8 @@ typedef struct {
   int comm_rank;        //Rank in full communicator
   //int comm_size;      //Currently unused
   int node_rank;        //Rank within node_comm
-  int node_root;        //Comm rank of first node rank on this node
   int node_size;        //Number of ranks on this node
+  int node_root;        //Comm rank of first node rank on this node
   //int net_rank;
   //int net_size;
 
@@ -131,6 +132,8 @@ typedef struct {
 } HMPI_Comm_info;
 
 typedef HMPI_Comm_info* HMPI_Comm;
+
+#define HMPI_COMM_NULL NULL
 
 extern HMPI_Comm HMPI_COMM_WORLD;
 extern HMPI_Comm HMPI_COMM_NODE;
@@ -298,16 +301,13 @@ int HMPI_Alltoall_local(void* sendbuf, int sendcount, MPI_Datatype sendtype, voi
 
 #endif
 
+
+int HMPI_Comm_create(HMPI_Comm comm, MPI_Group group, HMPI_Comm* newcomm);
+int HMPI_Comm_dup(HMPI_Comm comm, HMPI_Comm* newcomm);
+int HMPI_Comm_free(HMPI_Comm* comm);
+
 //TODO NOT IMPLEMENTED YET
 // Added to catch apps that call these routines.
-
-static int HMPI_Comm_create(HMPI_Comm comm, MPI_Group group, HMPI_Comm* newcomm) __attribute__((unused));
-
-static int HMPI_Comm_create(HMPI_Comm comm, MPI_Group group, HMPI_Comm* newcomm)
-{
-    abort();
-    return MPI_SUCCESS;
-}
 
 static int HMPI_Comm_group(HMPI_Comm comm, HMPI_Group* group) __attribute__((unused));
 
@@ -335,6 +335,10 @@ int OPI_Take(void** ptr, int count, MPI_Datatype datatype, int rank, int tag, HM
 
 #define MPI_Comm HMPI_Comm
 
+#ifdef MPI_COMM_NULL
+#undef MPI_COMM_NULL
+#endif
+
 #ifdef MPI_COMM_WORLD
 #undef MPI_COMM_WORLD
 #endif
@@ -356,6 +360,8 @@ int OPI_Take(void** ptr, int count, MPI_Datatype datatype, int rank, int tag, HM
 #ifdef MPI_STATUSES_IGNORE
 #undef MPI_STATUSES_IGNORE
 #endif
+
+#define MPI_COMM_NULL HMPI_COMM_NULL
 
 #define MPI_INFO_NULL HMPI_INFO_NULL
 
@@ -396,6 +402,10 @@ int OPI_Take(void** ptr, int count, MPI_Datatype datatype, int rank, int tag, HM
 #define MPI_Waitany HMPI_Waitany
 
 #define MPI_Get_count HMPI_Get_count
+
+#define MPI_Comm_create HMPI_Comm_create
+#define MPI_Comm_dup HMPI_Comm_dup
+#define MPI_Comm_free HMPI_Comm_free
 
 //#define MPI_Barrier HMPI_Barrier
 //#define MPI_Reduce HMPI_Reduce
@@ -463,7 +473,6 @@ int OPI_Take(void** ptr, int count, MPI_Datatype datatype, int rank, int tag, HM
 
 //TODO NOT IMPLEMENTED YET
 // Added to catch apps that call these routines.
-#define MPI_Comm_create HMPI_Comm_create
 #define MPI_Comm_group HMPI_Comm_group
 
 #endif //HMPI_INTERNAL
