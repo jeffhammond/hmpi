@@ -510,6 +510,38 @@ int HMPI_Finalize(void)
 }
 
 
+
+int HMPI_Cart_create(HMPI_Comm comm_old, int ndims, int* dims, int* periods,
+        int reorder, HMPI_Comm* comm_cart)
+{
+    //Allocate a new HMPI communicator.
+    HMPI_Comm c = MALLOC(HMPI_Comm_info, 1);
+
+    //Create an MPI comm.
+    MPI_Cart_create(comm_old->comm, ndims, dims, periods, reorder, &c->comm);
+
+    //Initialize the rest of the HMPI comm.
+    init_communicator(c);
+
+    *comm_cart = c;
+    return MPI_SUCCESS;
+}
+
+int HMPI_Cart_sub(HMPI_Comm comm, int* remain_dims, HMPI_Comm* newcomm)
+{
+    //Allocate a new HMPI communicator.
+    HMPI_Comm c = MALLOC(HMPI_Comm_info, 1);
+
+    //Create an MPI comm.
+    MPI_Cart_sub(comm->comm, remain_dims, &c->comm);
+
+    //Initialize the rest of the HMPI comm.
+    init_communicator(c);
+
+    *newcomm = c;
+    return MPI_SUCCESS;
+}
+
 int HMPI_Comm_create(HMPI_Comm comm, MPI_Group group, HMPI_Comm* newcomm)
 {
     //Allocate a new HMPI communicator.

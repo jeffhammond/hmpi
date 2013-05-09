@@ -221,7 +221,7 @@ int HMPI_Finalize(void);
 static int HMPI_Abort(HMPI_Comm comm, int errorcode) __attribute__((unused));
 
 static int HMPI_Abort(HMPI_Comm comm, int errorcode) {
-  printf("HMPI: user code called MPI_Abort!\n");
+  fprintf(stderr, "HMPI: user code called MPI_Abort!\n");
   return MPI_Abort(comm->comm, errorcode);
 }
 
@@ -301,6 +301,10 @@ int HMPI_Alltoall_local(void* sendbuf, int sendcount, MPI_Datatype sendtype, voi
 
 #endif
 
+
+int HMPI_Cart_create(HMPI_Comm comm_old, int ndims, int* dims, int* periods,
+        int reorder, HMPI_Comm* comm_cart);
+int HMPI_Cart_sub(HMPI_Comm comm, int* remain_dims, HMPI_Comm* newcomm);
 
 int HMPI_Comm_create(HMPI_Comm comm, MPI_Group group, HMPI_Comm* newcomm);
 int HMPI_Comm_dup(HMPI_Comm comm, HMPI_Comm* newcomm);
@@ -418,6 +422,22 @@ int OPI_Take(void** ptr, int count, MPI_Datatype datatype, int rank, int tag, HM
 //#define MPI_Allgather HMPI_Allgather
 //#define MPI_Allgatherv HMPI_Allgatherv
 //#define MPI_Alltoall HMPI_Alltoall
+
+#define MPI_Cart_coords(comm, rank, maxdims, coords) \
+    MPI_Cart_coords((comm)->comm, rank, maxdims, coords)
+
+#define MPI_Cart_get(comm, maxdims, dims, periods, coords) \
+    MPI_Cart_get((comm)->comm, maxdims, dims, periods, coords)
+
+#define MPI_Cart_map(comm, ndims, dims, periods, newrank) \
+    MPI_Cart_map((comm)->comm, ndims, dims, periods, newrank)
+
+#define MPI_Cart_rank(comm, coords, rank) \
+    MPI_Cart_rank((comm)->comm, coords, rank)
+
+#define MPI_Cart_shift(comm, direction, disp, rank_source, rank_dest) \
+    MPI_Cart_shift((comm)->comm, direction, disp, rank_source, rank_dest)
+
 
 #define MPI_Barrier(c) MPI_Barrier((c)->comm)
 
