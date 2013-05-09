@@ -113,8 +113,13 @@ typedef struct {
   MPI_Comm net_comm;    //Contains one rank from each node
   MPI_Comm numa_comm;   //Contains only ranks in this comm on the same NUMA
   int context;          //Communicator context value, valid only in this node.
-  int node_root;        //Rank of first rank on this node
+  int comm_rank;        //Rank in full communicator
+  //int comm_size;      //Currently unused
+  int node_rank;        //Rank within node_comm
+  int node_root;        //Comm rank of first node rank on this node
   int node_size;        //Number of ranks on this node
+  //int net_rank;
+  //int net_size;
 
   hmpi_coll_t* coll;
 

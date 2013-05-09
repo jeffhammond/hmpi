@@ -85,10 +85,10 @@ void OPI_Finalize(void);
 // differentiate communicators.
 static int* g_comm_context = NULL;
                             
-extern int g_rank;                      //HMPI world rank
-extern int g_size;                      //HMPI world size
-extern int g_node_rank;                 //HMPI node rank
-extern int g_node_size;                 //HMPI node size
+//extern int g_rank;                      //HMPI world rank
+//extern int g_size;                      //HMPI world size
+//extern int g_node_rank;                 //HMPI node rank
+//extern int g_node_size;                 //HMPI node size
 //extern int g_net_rank=-1;                  //HMPI net rank
 //extern int g_net_size=-1;                  //HMPI net size
 #if 0
@@ -230,7 +230,127 @@ void print_numa(void)
 //MPI communicator.  All other values will be filled in based on the MPI comm.
 void init_communicator(HMPI_Comm comm)
 {
+    WARNING("w00t");
+    //Fill in the cached comm variables.
+    MPI_Comm_rank(comm->comm, &comm->comm_rank);
+    //MPI_Comm_size(comm, &comm->comm_size);
 
+    //Split into comms containing ranks on the same nodes.
+    //TODO - use MPI3 comm_split_type
+    {
+#ifdef __bg__
+        MPIX_Hardware_t hw;
+
+        MPIX_Hardware(&hw);
+
+        //printf("%d prank %d psize %d ppn %d coreID %d MHz %d memSize %d\n",
+        //        comm->comm_rank, hw.prank, hw.psize, hw.ppn, hw.coreID,
+        //        hw.clockMHz, hw.memSize);
+        int color = 0;
+        for(int i = 0; i < hw.torus_dimension; i++) {
+            color = (color * hw.Size[i]) + hw.Coords[i];
+        }
+
+#else
+        //Hash our processor name into a color for Comm_split()
+        char proc_name[MPI_MAX_PROCESSOR_NAME];
+        int proc_name_len;
+        MPI_Get_processor_name(proc_name, &proc_name_len);
+
+        int color = 0;
+        for(char* s = proc_name; *s != '\0'; s++) {
+            color = *s + 31 * color;
+        }
+#endif
+
+        //MPI says color must be non-negative.
+        color &= 0x7FFFFFFF;
+
+        MPI_Comm_split(MPI_COMM_WORLD, color, HMPI_COMM_WORLD->comm_rank,
+                &HMPI_COMM_WORLD->node_comm);
+    }
+
+    MPI_Comm_rank(HMPI_COMM_WORLD->node_comm, &HMPI_COMM_WORLD->node_rank);
+    MPI_Comm_size(HMPI_COMM_WORLD->node_comm, &HMPI_COMM_WORLD->node_size);
+
+
+    //Create a comm that goes across the nodes.
+    //This will contain only the procs with node rank 0, or node rank 1, etc.
+    MPI_Comm_split(MPI_COMM_WORLD,
+            HMPI_COMM_WORLD->node_rank, HMPI_COMM_WORLD->comm_rank, &HMPI_COMM_WORLD->net_comm);
+#if 0
+    asm("nop\nnop\nnop\nnop\n");
+    asm("nop\nnop\nnop\nnop\n");
+    asm("nop\nnop\nnop\nnop\n");
+    asm("nop\nnop\nnop\nnop\n");
+
+    asm("nop\nnop\nnop\nnop\n");
+    asm("nop\nnop\nnop\nnop\n");
+    asm("nop\nnop\nnop\nnop\n");
+    asm("nop\nnop\nnop\nnop\n");
+#endif
+
+    //MPI_Comm_rank(HMPI_COMM_WORLD->net_comm, &comm->net_rank);
+    //MPI_Comm_size(HMPI_COMM_WORLD->net_comm, &comm->net_size);
+
+
+#if 0
+#ifdef USE_NUMA
+    //Split the node comm into per-NUMA-domain (ie socket) comms.
+    //Look up the NUMA node of a stack page -- this should be local.
+    int ret = 0;
+    void* page = &ret;
+
+    ret = numa_move_pages(0, 1, &page, NULL, &g_numa_node, 0);
+    if(ret != 0) {
+        printf("ERROR numa_move_pages %s\n", strerror(ret));
+        MPI_Abort(MPI_COMM_WORLD, 0);
+    }
+#else
+    //Without a way to find the local NUMA node, assume one NUMA node.
+    g_numa_node = 0;
+#endif //USE_NUMA
+
+    MPI_Comm_split(HMPI_COMM_WORLD->node_comm, g_numa_node, HMPI_COMM_WORLD->node_rank,
+            &HMPI_COMM_WORLD->numa_comm);
+
+    MPI_Comm_rank(HMPI_COMM_WORLD->numa_comm, &g_numa_rank);
+    MPI_Comm_size(HMPI_COMM_WORLD->numa_comm, &g_numa_size);
+
+    {
+        MPI_Group numa_group;
+        MPI_Group world_group;
+        MPI_Comm_group(HMPI_COMM_WORLD->numa_comm, &numa_group);
+        MPI_Comm_group(HMPI_COMM_WORLD->comm, &world_group);
+
+        int base_rank = 0;
+        MPI_Group_translate_ranks(numa_group, 1,
+                &base_rank, world_group, &g_numa_root);
+    }
+#endif
+
+    //If g_comm_counter is NULL, initialize it using HMPI_COMM_WORLD directly.
+    //If NULL and we're here, that means COMM_WORLD is set up, so we can use
+    //the node comm.
+    if(g_comm_context == NULL) {
+        if(HMPI_COMM_WORLD->node_rank == 0) {
+            //One global context counter value.
+            g_comm_context = MALLOC(int, 1);
+            *g_comm_context = 0;
+        }
+
+        MPI_Bcast(&g_comm_context, 1, MPI_LONG, 0, HMPI_COMM_WORLD->node_comm);
+    }
+
+    //Node rank 0 grabs a new context.  Even though communicator creation is
+    // collective, it's still possible to split up the communicators and have
+    // multiple creations occurring within a node at the same time. So use
+    // FETCH_ADD32 to be safe.
+    if(comm->node_rank == 0) {
+        comm->context = FETCH_ADD32(g_comm_context, 1);
+    }
+
+    MPI_Bcast(&comm->context, 1, MPI_INT, 0, comm->node_comm);
 }
 
 
@@ -251,17 +371,24 @@ int HMPI_Init(int *argc, char ***argv)
     //Set up communicators
     //TODO - this needs to be pulled out into its own routine.
     // A lot of the g_* variables should be moved into the comm struct.
-    MPI_Comm_rank(MPI_COMM_WORLD, &g_rank);
-    MPI_Comm_size(MPI_COMM_WORLD, &g_size);
+    //MPI_Comm_rank(MPI_COMM_WORLD, &g_rank);
+    //MPI_Comm_size(MPI_COMM_WORLD, &g_size);
 
-    if(g_rank == 0) {
-        WARNING("sizeof req %d", sizeof(HMPI_Request_info));
-        WARNING("sizeof comm %d", sizeof(HMPI_Comm_info));
-    }
-    
     HMPI_COMM_WORLD = (HMPI_Comm_info*)MALLOC(HMPI_Comm_info, 1);
     HMPI_COMM_WORLD->comm = MPI_COMM_WORLD;
+    init_communicator(HMPI_COMM_WORLD);
+
+#if 0
     HMPI_COMM_WORLD->context = 0;
+
+    MPI_Comm_rank(MPI_COMM_WORLD, &HMPI_COMM_WORLD->comm_rank);
+    //MPI_Comm_size(MPI_COMM_WORLD, &HMPI_COMM_WORLD->comm_size);
+
+    if(HMPI_COMM_WORLD->comm_rank == 0) {
+        WARNING("sizeof req %ld", sizeof(HMPI_Request_info));
+        WARNING("sizeof comm %ld", sizeof(HMPI_Comm_info));
+    }
+    
 
     //Split into comms containing ranks on the same nodes.
     {
@@ -293,11 +420,11 @@ int HMPI_Init(int *argc, char ***argv)
         //MPI says color must be non-negative.
         color &= 0x7FFFFFFF;
 
-        MPI_Comm_split(MPI_COMM_WORLD, color, g_rank,
+        MPI_Comm_split(MPI_COMM_WORLD, color, HMPI_COMM_WORLD->comm_rank,
                 &HMPI_COMM_WORLD->node_comm);
     }
 
-    //Used in HMPI_Comm_node_rank().
+    MPI_Comm_rank(HMPI_COMM_WORLD->node_comm, &HMPI_COMM_WORLD->node_rank);
     MPI_Comm_size(HMPI_COMM_WORLD->node_comm, &HMPI_COMM_WORLD->node_size);
 
     {
@@ -313,14 +440,14 @@ int HMPI_Init(int *argc, char ***argv)
     }
 
 
-    MPI_Comm_rank(HMPI_COMM_WORLD->node_comm, &g_node_rank);
-    MPI_Comm_size(HMPI_COMM_WORLD->node_comm, &g_node_size);
+    //MPI_Comm_rank(HMPI_COMM_WORLD->node_comm, &g_node_rank);
+    //MPI_Comm_size(HMPI_COMM_WORLD->node_comm, &g_node_size);
 
 
     //Create a comm that goes across the nodes.
     //This will contain only the procs with node rank 0, or node rank 1, etc.
     MPI_Comm_split(MPI_COMM_WORLD,
-            g_node_rank, g_rank, &HMPI_COMM_WORLD->net_comm);
+            HMPI_COMM_WORLD->node_rank, HMPI_COMM_WORLD->comm_rank, &HMPI_COMM_WORLD->net_comm);
 #if 0
     asm("nop\nnop\nnop\nnop\n");
     asm("nop\nnop\nnop\nnop\n");
@@ -357,7 +484,7 @@ int HMPI_Init(int *argc, char ***argv)
     g_numa_node = 0;
 #endif //USE_NUMA
 
-    MPI_Comm_split(HMPI_COMM_WORLD->node_comm, g_numa_node, g_node_rank,
+    MPI_Comm_split(HMPI_COMM_WORLD->node_comm, g_numa_node, HMPI_COMM_WORLD->node_rank,
             &HMPI_COMM_WORLD->numa_comm);
 
     MPI_Comm_rank(HMPI_COMM_WORLD->numa_comm, &g_numa_rank);
@@ -379,26 +506,19 @@ int HMPI_Init(int *argc, char ***argv)
     printf("%5d rank=%3d size=%3d node_rank=%2d node_size=%2d node_root=%4d "
             "net_rank=%2d net_size=%2d numa_node=%d numa_root=%3d "
             "numa_rank=%2d\n",
-            getpid(), g_rank, g_size, g_node_rank, g_node_size,
-            HMPI_COMM_WORLD->node_root, g_net_rank, g_net_size, g_numa_node,
-            g_numa_root, g_numa_rank);
+            getpid(), HMPI_COMM_WORLD->comm_rank, g_size, HMPI_COMM_WORLD->node_rank,
+            HMPI_COMM_WORLD->node_size, HMPI_COMM_WORLD->node_root, g_net_rank, g_net_size,
+            g_numa_node, g_numa_root, g_numa_rank);
+#endif
 #endif
 
-
     //Set up intra-node shared memory structures.
-    if(g_node_rank == 0) {
+    if(HMPI_COMM_WORLD->node_rank == 0) {
         //One rank per node allocates shared send request lists.
-        g_send_reqs = MALLOC(HMPI_Request_list, g_node_size);
-
-        //One global context counter value.
-        g_comm_context = MALLOC(int, 1);
-
-        //HMPI_COMM_WORLD has context 0.
-        *g_comm_context = 4;
+        g_send_reqs = MALLOC(HMPI_Request_list, HMPI_COMM_WORLD->node_size);
     }
 
     MPI_Bcast(&g_send_reqs, 1, MPI_LONG, 0, HMPI_COMM_WORLD->node_comm);
-    MPI_Bcast(&g_comm_context, 1, MPI_LONG, 0, HMPI_COMM_WORLD->node_comm);
 
 
     // Initialize request lists and lock
@@ -411,11 +531,11 @@ int HMPI_Init(int *argc, char ***argv)
     memset(g_lock_q, 0, sizeof(mcs_qnode_t));
 #endif
 
-    g_send_reqs[g_node_rank].head.next = NULL;
-    g_send_reqs[g_node_rank].tail = &g_send_reqs[g_node_rank].head;
+    g_send_reqs[HMPI_COMM_WORLD->node_rank].head.next = NULL;
+    g_send_reqs[HMPI_COMM_WORLD->node_rank].tail = &g_send_reqs[HMPI_COMM_WORLD->node_rank].head;
 
-    g_tl_my_send_reqs = &g_send_reqs[g_node_rank];
-    LOCK_INIT(&g_send_reqs[g_node_rank].lock);
+    g_tl_my_send_reqs = &g_send_reqs[HMPI_COMM_WORLD->node_rank];
+    LOCK_INIT(&g_send_reqs[HMPI_COMM_WORLD->node_rank].lock);
 
     g_tl_send_reqs.head.next = NULL;
     g_tl_send_reqs.tail = &g_tl_send_reqs.head;
@@ -428,17 +548,17 @@ int HMPI_Init(int *argc, char ***argv)
     MPI_Bcast(&HMPI_COMM_WORLD->coll, 1, MPI_LONG, 0,
             HMPI_COMM_WORLD->node_comm);
 
-    if(g_node_rank == 0) {
-        coll->sbuf = MALLOC(volatile void*, g_node_size);
-        coll->rbuf = MALLOC(volatile void*, g_node_size);
-        coll->tmp = MALLOC(volatile void*, g_node_size);
+    if(HMPI_COMM_WORLD->node_rank == 0) {
+        coll->sbuf = MALLOC(volatile void*, HMPI_COMM_WORLD->node_size);
+        coll->rbuf = MALLOC(volatile void*, HMPI_COMM_WORLD->node_size);
+        coll->tmp = MALLOC(volatile void*, HMPI_COMM_WORLD->node_size);
 
 
         for(int i=0; i<PTOP; i++) {
-            coll->ptop[i] = MALLOC(padptop, g_node_size);
+            coll->ptop[i] = MALLOC(padptop, HMPI_COMM_WORLD->node_size);
         }
 
-        // for(int i =0; i<g_node_size; i++)
+        // for(int i =0; i<HMPI_COMM_WORLD->node_size; i++)
         // {
         //   coll->ptop_0[i] = 0;
         //   coll->ptop_1[i] = 0;
@@ -448,12 +568,12 @@ int HMPI_Init(int *argc, char ***argv)
         // }
 
         for(int j = 0; j < PTOP; j++) {
-            for(int i = 0; i < g_node_size; i++) {
+            for(int i = 0; i < HMPI_COMM_WORLD->node_size; i++) {
                 coll->ptop[j][i].ptopsense = 0;
             }
         }
 
-        //for(int i =0; i<g_node_size; i++)
+        //for(int i =0; i<HMPI_COMM_WORLD->node_size; i++)
         //{
         //  coll->ptop_0[i].ptopsense = 0;
         //  coll->ptop_1[i].ptopsense = 0;
@@ -462,8 +582,8 @@ int HMPI_Init(int *argc, char ***argv)
         //  coll->ptop_4[i].ptopsense = 0;
         //}
 
-        //FANINEQUAL1(t_barrier_init_fanin1(&coll->t_barr, g_node_size);) 
-        //PFANIN(t_barrier_init(&coll->t_barr, g_node_size););
+        //FANINEQUAL1(t_barrier_init_fanin1(&coll->t_barr, HMPI_COMM_WORLD->node_size);) 
+        //PFANIN(t_barrier_init(&coll->t_barr, HMPI_COMM_WORLD->node_size););
     }
 #endif
 
