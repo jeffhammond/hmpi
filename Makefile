@@ -13,7 +13,7 @@ INCS=#-D_PROFILE=1 -D_PROFILE_MPI=1 -D_PROFILE_PAPI_EVENTS=1 #-DFULL_PROFILE
 #INCS+=-DHMPI_LOGCALLS=1 #-DHMPI_CHECKSUM=1
 #INCS+=-D_PROFILE=1 -D_PROFILE_MPI=1 -DFULL_PROFILE #-D_PROFILE_PAPI_EVENTS=1
 
-SRCS=hmpi_p2p.c hmpi_init.c #hmpi_coll.c nbc_op.c #hmpi_opi.c
+SRCS=hmpi_p2p.c hmpi.c #hmpi_coll.c nbc_op.c #hmpi_opi.c
 MAIN=main.c
 HDRS=hmpi.h barrier.h lock.h profile2.h
 
@@ -26,7 +26,7 @@ PSM_LIBS=$(LIBS) -lpsm_infinipath
 
 all: INCS+=-DUSE_NUMA=1 
 all: SRCS+=sm_malloc.c
-all: $(SRCS:%.c=%.o) 
+all: $(SRCS:%.c=%.o) sm_malloc.o
 	ar r libhmpi.a $(SRCS:%.c=%.o)
 	ranlib libhmpi.a
 

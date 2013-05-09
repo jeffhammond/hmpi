@@ -32,7 +32,9 @@ typedef struct HMPI_Item {
 #define printf(...) printf(__VA_ARGS__); fflush(stdout)
 
 //#define MALLOC(t, s) (t*)__builtin_assume_aligned(memalign(64, sizeof(t) * s), 64)
-#define MALLOC(t, s) (t*)memalign(64, sizeof(t) * s)
+//Aligning to 64 bytes seems to cause some weird latency.
+//#define MALLOC(t, s) (t*)memalign(64, sizeof(t) * s)
+#define MALLOC(t, s) (t*)memalign(8, sizeof(t) * s)
 
 
 //Conditional to check if a pointer points to a SM buffer.
@@ -84,6 +86,7 @@ typedef struct {
     volatile int32_t ptopsense;
     int32_t padding[15];
 } padptop;
+#endif
 
 //Shared memory data used by collectives.
 //One of these structs is attached to a communicator.
@@ -96,10 +99,9 @@ typedef struct hmpi_coll_t {
     volatile void* mpi_rbuf;
     volatile void* mpi_tmp;
 
-    padptop* ptop[PTOP];
-    hbarrier_record* t_barr;
+//    padptop* ptop[PTOP];
+//    hbarrier_record* t_barr;
 } hmpi_coll_t;
-#endif
 
 
 //Placeholder typedef - groups aren't implemented yet
@@ -109,16 +111,17 @@ typedef struct {
   MPI_Comm comm;        //Underyling MPI communicator: MUST BE FIRST
   MPI_Comm node_comm;   //Contains only ranks in this comm on the same node
   MPI_Comm net_comm;    //Contains one rank from each node
-//  MPI_Comm numa_comm;   //Contains only ranks in this comm on the same NUMA
+  MPI_Comm numa_comm;   //Contains only ranks in this comm on the same NUMA
+  int context;          //Communicator context value, valid only in this node.
   int node_root;        //Rank of first rank on this node
   int node_size;        //Number of ranks on this node
 
-  //hmpi_coll_t* coll;
+  hmpi_coll_t* coll;
 
   //This mysteriously improves latency for netpipe.
   //I used to have more variables here; removing them slowed netpipe down.
 #ifndef __bg__
-  char pad[60];
+  //char pad[60];
 #endif
 } HMPI_Comm_info;
 
@@ -159,14 +162,17 @@ typedef struct HMPI_Status {
 typedef struct HMPI_Request_info {
     HMPI_Item item; //Linked list subtype
 
-    volatile uint32_t stat;    //Request state
-    uint8_t type;       //Request type
-    uint8_t do_free;    //Used for internally-allocated SM regions on send side.
+    size_t size;        //Message size in bytes
+    void* buf;          //User buffer
+
     int proc;           //Always the source's rank regardless of type.
     int tag;            //MPI tag
-    size_t size;        //Message size in bytes
+    int context;        //Communicator context
 
-    void* buf;          //User buffer
+    volatile uint32_t stat;    //Request state
+    uint32_t type;      //Request type
+    uint32_t do_free;   //Used for internally-allocated SM regions on send side.
+
 
 #ifdef HMPI_CHECKSUM
     uint32_t csum;

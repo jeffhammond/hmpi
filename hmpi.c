@@ -79,6 +79,12 @@ void OPI_Finalize(void);
 #endif
 
 
+//Pointer to a shared context counter.  This counter is used to obtain new
+// context ID's when communicators are created, so that every communicator
+// used in a node has its own context.  The context is used in matching to
+// differentiate communicators.
+static int* g_comm_context = NULL;
+                            
 extern int g_rank;                      //HMPI world rank
 extern int g_size;                      //HMPI world size
 extern int g_node_rank;                 //HMPI node rank
@@ -219,6 +225,15 @@ void print_numa(void)
 #endif
 
 
+//Initialize a new communicator structure.
+//Assumes the base MPI communicator (comm->comm) is already set to a valid
+//MPI communicator.  All other values will be filled in based on the MPI comm.
+void init_communicator(HMPI_Comm comm)
+{
+
+}
+
+
 int HMPI_Init(int *argc, char ***argv)
 {
     MPI_Init(argc, argv);
@@ -238,9 +253,15 @@ int HMPI_Init(int *argc, char ***argv)
     // A lot of the g_* variables should be moved into the comm struct.
     MPI_Comm_rank(MPI_COMM_WORLD, &g_rank);
     MPI_Comm_size(MPI_COMM_WORLD, &g_size);
+
+    if(g_rank == 0) {
+        WARNING("sizeof req %d", sizeof(HMPI_Request_info));
+        WARNING("sizeof comm %d", sizeof(HMPI_Comm_info));
+    }
     
     HMPI_COMM_WORLD = (HMPI_Comm_info*)MALLOC(HMPI_Comm_info, 1);
     HMPI_COMM_WORLD->comm = MPI_COMM_WORLD;
+    HMPI_COMM_WORLD->context = 0;
 
     //Split into comms containing ranks on the same nodes.
     {
@@ -298,8 +319,8 @@ int HMPI_Init(int *argc, char ***argv)
 
     //Create a comm that goes across the nodes.
     //This will contain only the procs with node rank 0, or node rank 1, etc.
-    //MPI_Comm_split(MPI_COMM_WORLD,
-    //        g_node_rank, g_rank, &HMPI_COMM_WORLD->net_comm);
+    MPI_Comm_split(MPI_COMM_WORLD,
+            g_node_rank, g_rank, &HMPI_COMM_WORLD->net_comm);
 #if 0
     asm("nop\nnop\nnop\nnop\n");
     asm("nop\nnop\nnop\nnop\n");
@@ -368,9 +389,16 @@ int HMPI_Init(int *argc, char ***argv)
     if(g_node_rank == 0) {
         //One rank per node allocates shared send request lists.
         g_send_reqs = MALLOC(HMPI_Request_list, g_node_size);
+
+        //One global context counter value.
+        g_comm_context = MALLOC(int, 1);
+
+        //HMPI_COMM_WORLD has context 0.
+        *g_comm_context = 4;
     }
 
     MPI_Bcast(&g_send_reqs, 1, MPI_LONG, 0, HMPI_COMM_WORLD->node_comm);
+    MPI_Bcast(&g_comm_context, 1, MPI_LONG, 0, HMPI_COMM_WORLD->node_comm);
 
 
     // Initialize request lists and lock
