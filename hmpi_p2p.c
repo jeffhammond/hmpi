@@ -10,7 +10,7 @@
 #undef MPI
 #endif
 
-#include "profile2.h"
+#include "profile.h"
 
 
 //Block size to use when using the accelerated sender-receiver copy.
@@ -97,6 +97,8 @@ HMPI_Comm HMPI_COMM_WORLD;
 // Debugging functionality
 
 #include <execinfo.h>
+
+static void show_backtrace(void) __attribute__((unused));
 
 static void show_backtrace(void)
 {
@@ -204,7 +206,7 @@ static inline void release_req(HMPI_Request req)
         req->do_free = 0;
     }
 #endif
-#endif
+#endif //ifndef __bg__
 
     item->next = g_free_reqs;
     g_free_reqs = item;
@@ -708,7 +710,7 @@ static int HMPI_Progress_mpi(HMPI_Request req)
         MPI_Get_count(&status, req->datatype, &count);
         MPI_Type_size(req->datatype, &type_size);
 
-        //req->proc = status.MPI_SOURCE;
+        req->proc = status.MPI_SOURCE;
 
         req->tag = status.MPI_TAG;
         req->size = count * type_size;

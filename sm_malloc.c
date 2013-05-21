@@ -10,6 +10,7 @@
 #include <sys/ipc.h>
 #include <sys/stat.h>
 #include <fcntl.h>
+#include "error.h"
 //#include "hmpi.h"
 //#include "profile2.h"
 
@@ -63,7 +64,7 @@ static mspace sm_mspace = NULL;
 #define TEMP_SIZE (1024 * 1024 * 2L) //Temporary mspace capacity
 
 //Keep this around for use with valgrind.
-static char sm_temp[TEMP_SIZE] = {0};
+//static char sm_temp[TEMP_SIZE] = {0};
 
 
 #ifdef USE_MMAP
@@ -165,15 +166,10 @@ static int __sm_init_region(void)
 
 #ifdef USE_PSHM
 
-//#define MSPACE_SIZE (1024L * 1024L * 700L)
 #define MSPACE_SIZE (1024L * 1024L * 1024L * 16L)
 #define DEFAULT_SIZE (MSPACE_SIZE * 16L + (long)getpagesize())
-//#define MSPACE_SIZE (1024L * 1024L * 128L)
-//#define DEFAULT_SIZE (1024L * 1024L * 1024L * 30 + (long)getpagesize())
 
-//On the LC machines, /tmp is a tmpfs, limiting us to half of the free memory.
 static char* sm_filename = "hmpismfile";
-//static char sm_filename[256] = {0};
 
 
 static void __sm_destroy(void)
@@ -280,20 +276,21 @@ static int __sm_init_region(void)
 #endif
 
 
-static void __sm_init(void)
+static void __attribute__((noinline)) __sm_init(void)
 {
     int do_init; //Whether to do initialization
 
     //Set up a temporary area on the stack for malloc() calls during our
     // initialization process.
-    //void* temp_space = alloca(TEMP_SIZE);
-    //sm_region = create_mspace_with_base(temp_space, TEMP_SIZE, 0);
+    void* temp_space = alloca(TEMP_SIZE);
+    sm_region = create_mspace_with_base(temp_space, TEMP_SIZE, 0);
 
     //Keep this for use with valgrind.
-    sm_region = create_mspace_with_base(sm_temp, TEMP_SIZE, 0);
-    sm_region->brk = (intptr_t)sm_region + sizeof(struct sm_region);
+    //sm_region = create_mspace_with_base(sm_temp, TEMP_SIZE, 0);
+    //sm_region->brk = (intptr_t)sm_region + sizeof(struct sm_region);
 
     sm_region->limit = (intptr_t)sm_region + TEMP_SIZE;
+
 
     //Find the SM region size.
     //SM_SIZE environment variable is size per proc in megabytes.
@@ -311,12 +308,11 @@ static void __sm_init(void)
     //Set up the SM region using one of mmap/sysv/pshm
     do_init = __sm_init_region();
 
+
     //Only the process creating the file should initialize.
     if(do_init) {
         //Only the initializing process registers the shutdown handler.
         atexit(__sm_destroy);
-
-        //memset(sm_region, 0, DEFAULT_SIZE);
 
         sm_region->limit = (intptr_t)sm_region + DEFAULT_SIZE;
 
@@ -341,9 +337,14 @@ static void __sm_init(void)
         }
     }
 
+    sm_lower = sm_region;
+    sm_upper = (void*)sm_region->limit;
+
     //Create my own mspace.
-    void* base = sm_morecore(MSPACE_SIZE);
-    if(base == (void*)-1) {
+    //void* base = sm_morecore(MSPACE_SIZE);
+    void* base = (void*)__sync_fetch_and_add(&sm_region->brk, MSPACE_SIZE);
+    //if(base == (void*)-1) {
+    if(base < sm_lower || base >= sm_upper) {
         abort();
     }
 
@@ -353,8 +354,6 @@ static void __sm_init(void)
 
     sm_mspace = create_mspace_with_base(base, MSPACE_SIZE, 0);
 
-    sm_lower = sm_region;
-    sm_upper = (void*)sm_region->limit;
 
     //This should go last so it can use proper malloc and friends.
     //PROFILE_INIT();
@@ -363,6 +362,7 @@ static void __sm_init(void)
 
 void* sm_morecore(intptr_t increment)
 {
+    abort();
     void* oldbrk = (void*)__sync_fetch_and_add(&sm_region->brk, increment);
 
 /*    printf("%d sm_morecore incr %ld brk %p limit %p\n",

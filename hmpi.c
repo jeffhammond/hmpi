@@ -10,7 +10,7 @@
 #undef MPI
 #endif
 
-#include "profile2.h"
+#include "profile.h"
 
 #include <malloc.h>
 #include <stdlib.h>
@@ -161,7 +161,7 @@ extern HMPI_Item* g_free_reqs;
 void print_numa(void)
 {
     if(numa_available() == -1) {
-        ERROR("%d NUMA library not available", g_rank);
+        ERROR("%d NUMA library not available", HMPI_COMM_WORLD->comm_rank);
     }
 
     //printf("%d numa_max_node %d\n", g_rank, numa_max_node());
@@ -201,11 +201,11 @@ void print_numa(void)
 
     int ret = numa_move_pages(0, 4, pages, NULL, status, 0);
     if(ret > 0) {
-        WARNING("%d move_pages couldn't move some pages %d", g_rank, ret);
+        WARNING("%d move_pages couldn't move some pages %d", HMPI_COMM_WORLD->comm_rank, ret);
         return;
     } else if(ret < 0) {
         //printf("%d ERROR move pages %d\n", g_rank, ret);
-        WARNING("%d move_pages returned %d", g_rank, ret);
+        WARNING("%d move_pages returned %d", HMPI_COMM_WORLD->comm_rank, ret);
     }
 
     //for(int i = 0; i < 4; i++) {

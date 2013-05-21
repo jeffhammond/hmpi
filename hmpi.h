@@ -42,7 +42,6 @@ typedef struct HMPI_Item {
 //Everything is shared on BG/Q
 #define IS_SM_BUF(p) (1)
 #else
-#warning "Using SM Malloc"
 extern void* sm_lower;
 extern void* sm_upper;
 
@@ -66,10 +65,10 @@ typedef struct HMPI_Request_list {
 } HMPI_Request_list;
 
 
-extern int g_rank;                      //HMPI world rank
-extern int g_size;                      //HMPI world size
-extern int g_node_rank;                 //HMPI node rank
-extern int g_node_size;                 //HMPI node size
+//extern int g_rank;                      //HMPI world rank
+//extern int g_size;                      //HMPI world size
+//extern int g_node_rank;                 //HMPI node rank
+//extern int g_node_size;                 //HMPI node size
 //extern int g_net_rank;                  //HMPI net rank
 //extern int g_net_size;                  //HMPI net size
 # if 0

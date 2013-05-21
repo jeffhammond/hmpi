@@ -540,6 +540,7 @@ int sm_munmap(void* addr, size_t len);
 
 //#define MALLOC_ALIGNMENT ((size_t)64U)
 
+#define DEBUG 1
 #define INSECURE 0
 #define MSPACES 1
 #define ONLY_MSPACES 1
@@ -5443,6 +5444,8 @@ static mstate init_user_mstate(char* tbase, size_t tsize) {
   return m;
 }
 
+mspace create_mspace(size_t capacity, int locked) __attribute__((unused));
+
 mspace create_mspace(size_t capacity, int locked) {
   mstate m = 0;
   size_t msize;
@@ -5462,6 +5465,8 @@ mspace create_mspace(size_t capacity, int locked) {
   return (mspace)m;
 }
 
+mspace create_mspace_with_base(void* base, size_t capacity, int locked) __attribute__((unused));
+
 mspace create_mspace_with_base(void* base, size_t capacity, int locked) {
   mstate m = 0;
   size_t msize;
@@ -5475,6 +5480,8 @@ mspace create_mspace_with_base(void* base, size_t capacity, int locked) {
   }
   return (mspace)m;
 }
+
+int mspace_track_large_chunks(mspace msp, int enable) __attribute__((unused));
 
 int mspace_track_large_chunks(mspace msp, int enable) {
   int ret = 0;
@@ -5492,6 +5499,8 @@ int mspace_track_large_chunks(mspace msp, int enable) {
   }
   return ret;
 }
+
+size_t destroy_mspace(mspace msp) __attribute__((unused));
 
 size_t destroy_mspace(mspace msp) {
   size_t freed = 0;
@@ -5845,6 +5854,9 @@ static inline void* mspace_memalign(mspace msp, size_t alignment, size_t bytes) 
 }
 
 void** mspace_independent_calloc(mspace msp, size_t n_elements,
+                                 size_t elem_size, void* chunks[]) __attribute__((unused));
+
+void** mspace_independent_calloc(mspace msp, size_t n_elements,
                                  size_t elem_size, void* chunks[]) {
   size_t sz = elem_size; /* serves as 1-element array */
   mstate ms = (mstate)msp;
@@ -5854,6 +5866,9 @@ void** mspace_independent_calloc(mspace msp, size_t n_elements,
   }
   return ialloc(ms, n_elements, &sz, 3, chunks);
 }
+
+void** mspace_independent_comalloc(mspace msp, size_t n_elements,
+                                   size_t sizes[], void* chunks[]) __attribute__((unused));
 
 void** mspace_independent_comalloc(mspace msp, size_t n_elements,
                                    size_t sizes[], void* chunks[]) {
@@ -5889,6 +5904,8 @@ void mspace_inspect_all(mspace msp,
 }
 #endif /* MALLOC_INSPECT_ALL */
 
+int mspace_trim(mspace msp, size_t pad) __attribute__((unused));
+
 int mspace_trim(mspace msp, size_t pad) {
   int result = 0;
   mstate ms = (mstate)msp;
@@ -5905,6 +5922,8 @@ int mspace_trim(mspace msp, size_t pad) {
 }
 
 #if !NO_MALLOC_STATS
+void mspace_malloc_stats(mspace msp) __attribute__((unused));
+
 void mspace_malloc_stats(mspace msp) {
   mstate ms = (mstate)msp;
   if (ok_magic(ms)) {
@@ -5915,6 +5934,8 @@ void mspace_malloc_stats(mspace msp) {
   }
 }
 #endif /* NO_MALLOC_STATS */
+
+size_t mspace_footprint(mspace msp) __attribute__((unused));
 
 size_t mspace_footprint(mspace msp) {
   size_t result = 0;
@@ -5927,6 +5948,8 @@ size_t mspace_footprint(mspace msp) {
   }
   return result;
 }
+
+size_t mspace_max_footprint(mspace msp) __attribute__((unused));
 
 size_t mspace_max_footprint(mspace msp) {
   size_t result = 0;
@@ -5972,6 +5995,8 @@ size_t mspace_set_footprint_limit(mspace msp, size_t bytes) {
 }
 
 #if !NO_MALLINFO
+struct mallinfo mspace_mallinfo(mspace msp) __attribute__((unused));
+
 struct mallinfo mspace_mallinfo(mspace msp) {
   mstate ms = (mstate)msp;
   if (!ok_magic(ms)) {
@@ -5981,6 +6006,8 @@ struct mallinfo mspace_mallinfo(mspace msp) {
 }
 #endif /* NO_MALLINFO */
 
+size_t mspace_usable_size(const void* mem) __attribute__((unused));
+
 size_t mspace_usable_size(const void* mem) {
   if (mem != 0) {
     mchunkptr p = mem2chunk(mem);
@@ -5989,6 +6016,9 @@ size_t mspace_usable_size(const void* mem) {
   }
   return 0;
 }
+
+
+int mspace_mallopt(int param_number, int value) __attribute__((unused));
 
 int mspace_mallopt(int param_number, int value) {
   return change_mparam(param_number, value);

@@ -140,9 +140,9 @@ static void PROFILE_CALIBRATE(void)
     uint64_t min = UINT64_MAX;
     uint64_t old_time = 0;
     uint64_t time;
+    int i;
 
-
-    for(int i = 0; i < 100000; i++) {
+    for(i = 0; i < 100000; i++) {
         old_time = v.time;
 
         __PROFILE_START(&v);
@@ -291,7 +291,7 @@ static void __PROFILE_START(struct profile_vars_t* v)
 #if _PROFILE_PAPI_EVENTS == 1
     int rc = PAPI_read(_profile_eventset, (long long*)v->tmp_ctrs);
     if(rc != PAPI_OK) {
-        ERROR("PAPI_read (start) %s", PAPI_strerror(rc));
+        ERROR("PAPI_read (start) (did you call PROFILE_INIT?) %s", PAPI_strerror(rc));
     }
 #endif
 

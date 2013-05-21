@@ -1,7 +1,7 @@
 CC=mpicc -std=gnu99 
 
 WARN=-Wall -Wuninitialized -Winline #-Wno-unused-function
-CFLAGS+=$(WARN)
+CFLAGS+=$(WARN) -fno-builtin-malloc -fno-builtin-calloc -fno-builtin-realloc -fno-builtin-free
 #CFLAGS=$(WARN) -O3 -mcpu=power7 -fomit-frame-pointer
 #CFLAGS=$(WARN) $(INCLUDE) -O3 -march=native -fomit-frame-pointer
 #CFLAGS=$(WARN) -O0 -g
@@ -19,7 +19,7 @@ HDRS=hmpi.h barrier.h lock.h profile2.h
 
 
 all: INCS+=-DUSE_NUMA=1 
-all: SRCS+=sm_malloc.c
+#all: SRCS+=sm_malloc.c
 all: $(SRCS:%.c=%.o) sm_malloc.o
 	ar r libhmpi.a $(SRCS:%.c=%.o)
 	ranlib libhmpi.a
@@ -33,8 +33,9 @@ udawn: $(SRCS:%.c=%.o)
 	ar r libhmpi.a hmpi.o hmpi_coll.o nbc_op.o
 	ranlib libhmpi.a
 
+#bgq: CFLAGS=-O3 -qhot=novector -qsimd=auto $(INCLUDE) -qinline=auto:level=5 -qassert=refalign -qlibansi -qlibmpi -qipa -qhot  -qprefetch=aggressive
 bgq: CC=mpixlc
-bgq: CFLAGS=-O5 -qhot=novector -qsimd=auto $(INCLUDE) -qinline=auto:level=5 -qassert=refalign -qlibansi -qlibmpi -qipa -qhot  -qprefetch=aggressive
+bgq: CFLAGS=-O3 -qhot=novector -qsimd=auto $(INCLUDE)
 bgq: $(SRCS:%.c=%.o)
 	ar r libhmpi-bgq.a $(SRCS:%.c=%.o)
 	ranlib libhmpi-bgq.a
@@ -58,7 +59,7 @@ main_bgq: bgq $(MAIN:%.c=%.o)
 	$(CC) $(CFLAGS) $(LDFLAGS) -Wl,--allow-multiple-definition -o main main.o libhmpi.a $(LIBS)
 
 debug: CFLAGS = $(WARN) -g -O0 -rdynamic $(INCLUDE)
-debug: SRCS+=sm_malloc.c
+#debug: SRCS+=sm_malloc.c
 debug: $(SRCS:%.c=%.o)  sm_malloc.o
 	ar r libhmpi.a $(SRCS:%.c=%.o)
 	ranlib libhmpi.a
