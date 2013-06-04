@@ -8,10 +8,12 @@ CFLAGS+=$(WARN) -fno-builtin-malloc -fno-builtin-calloc -fno-builtin-realloc -fn
 
 LIBS=-lrt -lnuma
 
-INCS=#-D_PROFILE=1 -D_PROFILE_MPI=1 -D_PROFILE_PAPI_EVENTS=1 #-DFULL_PROFILE
+INCS=
 #INCS+=-DENABLE_OPI=1
 #INCS+=-DHMPI_LOGCALLS=1 #-DHMPI_CHECKSUM=1
-#INCS+=-D_PROFILE=1 -D_PROFILE_MPI=1 -DFULL_PROFILE #-D_PROFILE_PAPI_EVENTS=1
+#INCS+=-D_PROFILE=1 -D_PROFILE_MPI=1
+#INCS+=-DFULL_PROFILE
+#INCS+=-D_PROFILE_PAPI_EVENTS=1
 
 SRCS=hmpi_p2p.c hmpi.c #hmpi_coll.c nbc_op.c #hmpi_opi.c
 MAIN=main.c
@@ -37,15 +39,21 @@ udawn: $(SRCS:%.c=%.o)
 bgq: CC=mpixlc
 bgq: CFLAGS=-O3 -qhot=novector -qsimd=auto $(INCLUDE)
 bgq: $(SRCS:%.c=%.o)
-	ar r libhmpi-bgq.a $(SRCS:%.c=%.o)
-	ranlib libhmpi-bgq.a
+	ar sr libhmpi-bgq.a $(SRCS:%.c=%.o)
+	rm $(SRCS:%.c=%.o)
+
+bgq-gcc: CC=mpicc
+bgq-gcc: CFLAGS=-O3 -fomit-frame-pointer -m64 -std=gnu99 $(INCLUDE)
+bgq-gcc: $(SRCS:%.c=%.o)
+	ar sr libhmpi-bgq.a $(SRCS:%.c=%.o)
 	rm $(SRCS:%.c=%.o)
 
 bgq_debug: LIBS =
 bgq_debug: CC=mpixlc
 bgq_debug: CFLAGS=-O0 -g -qhot=novector -qsimd=auto $(INCLUDE)
-bgq_debug: $(USEQ_SRCS:%.c=%.o)
-	ar sr libhmpi.a $(USEQ_SRCS:%.c=%.o)
+bgq_debug: $(SRCS:%.c=%.o)
+	ar sr libhmpi-bgq.a $(SRCS:%.c=%.o)
+	rm $(SRCS:%.c=%.o)
 
 #main: CFLAGS = -g -O -D_PROFILE=1 -D_PROFILE_HMPI=1
 #main: CFLAGS+=-D_PROFILE=1 -D_PROFILE_HMPI=1

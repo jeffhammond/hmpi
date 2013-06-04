@@ -17,6 +17,15 @@ extern "C" {
 
 //HMPI internal stuff
 
+//BGQ is crazy!  Inserting nop's in some placed reduces NetPIPE latency.
+//Use this macro to insert nop's only on BGQ.
+#ifdef __bg__
+#define BGQ_NOP __asm__("nop\n")
+#else
+#define BGQ_NOP while(0)
+#endif
+
+
 //These really are internal, but they are used in publicly viewable structs.
 #define EAGER_LIMIT 256
 #define PTOP 5
@@ -32,9 +41,17 @@ typedef struct HMPI_Item {
 #define printf(...) printf(__VA_ARGS__); fflush(stdout)
 
 //#define MALLOC(t, s) (t*)__builtin_assume_aligned(memalign(64, sizeof(t) * s), 64)
-//Aligning to 64 bytes seems to cause some weird latency.
 //#define MALLOC(t, s) (t*)memalign(64, sizeof(t) * s)
-#define MALLOC(t, s) (t*)memalign(8, sizeof(t) * s)
+#ifdef __bg__
+//PPCA2 issues a single load/store for accesses within a 32-byte aligned block.
+#define MALLOC(t, s) (t*)memalign(32, sizeof(t) * s)
+#else
+//Aligning to 64 bytes seems to cause some weird latency without adding pad
+// elements to structs.
+//__builtin_assume_aligned is a GCC extension.
+#define MALLOC(t, s) (t*)__builtin_assume_aligned(memalign(8, sizeof(t) * s), 8)
+#endif
+
 
 
 //Conditional to check if a pointer points to a SM buffer.
@@ -59,9 +76,14 @@ extern void* sm_upper;
 typedef struct HMPI_Request_list {
     HMPI_Item head;
     HMPI_Item* tail;
+#ifdef __bg__
+    char padding[64];
+#endif
 
     lock_t lock;
-    char padding[40];
+#ifdef __bg__
+    char padding2[64];
+#endif
 } HMPI_Request_list;
 
 
@@ -151,14 +173,15 @@ typedef struct HMPI_Status {
 //HMPI request types
 #define HMPI_SEND 1
 #define HMPI_RECV 2
-#define MPI_SEND 3
-#define MPI_RECV 4
-#define HMPI_RECV_ANY_SOURCE 5
-#ifdef ENABLE_OPI
-#define OPI_GIVE 6
-#define OPI_TAKE 7
-#define OPI_TAKE_ANY_SOURCE 8
-#endif
+#define MPI_SEND 4
+#define MPI_RECV 8
+#define HMPI_RECV_ANY_SOURCE 0x10
+
+//Doesn't hurt to leave these on without OPI enabled.
+#define OPI_GIVE 0x20
+#define OPI_TAKE 0x40
+#define OPI_TAKE_ANY_SOURCE 0x80
+
 
 //HMPI request states
 //ACTIVE and COMPLETE specifically chosen to match MPI test flags
@@ -194,6 +217,7 @@ typedef struct HMPI_Request_info {
         MPI_Request req;                     //Off-node send/recv
     } u;
 
+    //struct HMPI_Request_info* extra_req;
 #ifndef __bg__
     char eager[EAGER_LIMIT];
 #endif
