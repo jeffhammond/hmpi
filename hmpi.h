@@ -7,6 +7,7 @@
 #include "lock.h"
 //#include "barrier.h"
 
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -66,11 +67,29 @@ extern void* sm_upper;
 #endif
 
 
-
 //Wrappers to GCC/ICC extensions
 
 #define likely(x)       __builtin_expect((x),1)
 #define unlikely(x)     __builtin_expect((x),0)
+
+
+//HMPI request types
+#define HMPI_SEND 1
+#define HMPI_RECV 2
+#define MPI_SEND 4
+#define MPI_RECV 8
+#define HMPI_RECV_ANY_SOURCE 0x10
+
+//Doesn't hurt to leave these on without OPI enabled.
+#define OPI_GIVE 0x20
+#define OPI_TAKE 0x40
+#define OPI_TAKE_ANY_SOURCE 0x80
+
+
+//HMPI request states
+//ACTIVE and COMPLETE specifically chosen to match MPI test flags
+#define HMPI_REQ_ACTIVE 0
+#define HMPI_REQ_COMPLETE 1
 
 
 typedef struct HMPI_Request_list {
@@ -169,24 +188,6 @@ typedef struct HMPI_Status {
     int MPI_ERROR;
 } HMPI_Status;
 
-
-//HMPI request types
-#define HMPI_SEND 1
-#define HMPI_RECV 2
-#define MPI_SEND 4
-#define MPI_RECV 8
-#define HMPI_RECV_ANY_SOURCE 0x10
-
-//Doesn't hurt to leave these on without OPI enabled.
-#define OPI_GIVE 0x20
-#define OPI_TAKE 0x40
-#define OPI_TAKE_ANY_SOURCE 0x80
-
-
-//HMPI request states
-//ACTIVE and COMPLETE specifically chosen to match MPI test flags
-#define HMPI_REQ_ACTIVE 0
-#define HMPI_REQ_COMPLETE 1
 
 //HMPI_Request is later defined as a pointer to this struct.
 typedef struct HMPI_Request_info {

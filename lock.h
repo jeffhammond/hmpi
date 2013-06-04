@@ -3,7 +3,6 @@
 #include <stdio.h>
 #include <stdlib.h>
 
-#define printf(...) printf(__VA_ARGS__); fflush(stdout)
 
 //AWF - I made my own primitives for several reasons:
 // - Referencing the OPA atomic types requires a pointer dereference.  The
