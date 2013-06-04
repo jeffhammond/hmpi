@@ -805,6 +805,8 @@ static void HMPI_Progress(HMPI_Item* recv_reqs_head,
 
 
 
+//TODO - factor the testing part out of HMPI_Test.
+// Design it so we can call progress once, then test all the reqs.
 int HMPI_Test(HMPI_Request *request, int *flag, HMPI_Status *status)
 {
     FULL_PROFILE_STOP(MPI_Other);
@@ -889,11 +891,39 @@ int HMPI_Testall(int count, HMPI_Request *requests, int* flag, HMPI_Status *stat
         }
 
         if(!(*flag)) {
-            FULL_PROFILE_STOP(MPI_Testall);
-            FULL_PROFILE_START(MPI_Other);
-            return MPI_SUCCESS;
+            break;
         }
     }
+
+    FULL_PROFILE_STOP(MPI_Testall);
+    FULL_PROFILE_START(MPI_Other);
+    return MPI_SUCCESS;
+}
+
+
+int HMPI_Testsome(int incount, HMPI_Request* array_of_requests, int *outcount,
+                  int* array_of_indices, HMPI_Status* array_of_statuses)
+{
+    FULL_PROFILE_STOP(MPI_Other);
+    FULL_PROFILE_START(MPI_Testall);
+    LOG_MPI_CALL(
+            "MPI_Testall(count=%d, requests=%p, flag=%p, statuses=%p)",
+            count, requests, flag, statuses);
+
+    int count = 0;
+    int flag;
+
+    //TODO - factor the testing part out of HMPI_Test.
+    // Design it so we can call progress once, then test all the reqs.
+    for(int i = 0; i < incount; i++) {
+        HMPI_Test(&array_of_requests[i], &flag, &array_of_statuses[count]);
+        if(flag) {
+            array_of_indices[count] = i;
+            count += 1;
+        }
+    }
+
+    *outcount = count;
 
     FULL_PROFILE_STOP(MPI_Testall);
     FULL_PROFILE_START(MPI_Other);

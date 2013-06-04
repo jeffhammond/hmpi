@@ -22,8 +22,7 @@ extern int g_rank;
 #endif
 
 
-//#if (defined __IBMC__ || defined __IBMCPP__) && defined __64BIT__ && defined __bg__
-#if defined __bg__
+#if (defined __IBMC__ || defined __IBMCPP__) && defined __64BIT__ && defined __bg__
 #warning "Using BlueGene/Q (64bit) primitives"
 
 //fetch-add for send-recv offset support:
@@ -93,7 +92,7 @@ static inline int FETCH_ADD64(long int* ptr, long int val)
 
 static inline void* FETCH_STORE(void** ptr, void* val)
 {
-    return (void*)__fetch_and_swaplp((volatile long*)ptr, val);
+    return (void*)__fetch_and_swaplp((volatile long*)ptr, (long)val);
 }
 
 

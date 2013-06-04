@@ -277,6 +277,8 @@ int HMPI_Probe(int source, int tag, HMPI_Comm comm, HMPI_Status* status);
 
 int HMPI_Test(HMPI_Request *request, int *flag, HMPI_Status *status);
 int HMPI_Testall(int count, HMPI_Request *requests, int* flag, HMPI_Status *statuses);
+int HMPI_Testsome(int incount, HMPI_Request* array_of_requests, int *outcount,
+                  int* array_of_indices, HMPI_Status* array_of_statuses);
 int HMPI_Wait(HMPI_Request *request, HMPI_Status *status);
 int HMPI_Waitall(int count, HMPI_Request* requests, HMPI_Status* statuses);
 int HMPI_Waitany(int count, HMPI_Request* requests, int* index, HMPI_Status *status);
@@ -423,6 +425,7 @@ int OPI_Take(void** ptr, int count, MPI_Datatype datatype, int rank, int tag, HM
 
 #define MPI_Test HMPI_Test
 #define MPI_Testall HMPI_Testall
+#define MPI_Testsome HMPI_Testsome
 
 #define MPI_Wait HMPI_Wait
 #define MPI_Waitall HMPI_Waitall
