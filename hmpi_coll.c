@@ -10,7 +10,7 @@
 //#define _PROFILE_PAPI_EVENTS 1
 #include "profile2.h"
 //PROFILE_DECLARE();
-//PROFILE_VAR(allreduce);
+//PROFILE_TIMER(allreduce);
 #include <malloc.h>
 #include <stdlib.h>
 #include <stdio.h>

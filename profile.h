@@ -76,7 +76,7 @@ extern FILE* _profile_fd;
 #endif
 
 
-typedef struct profile_vars_t {
+typedef struct profile_timer_t {
     uint64_t count;
     uint64_t time;  //Measured in nanoseconds
     uint64_t start; //Measured in nanoseconds
@@ -90,10 +90,10 @@ typedef struct profile_vars_t {
     uint64_t ctr_min[MAX_EVENTS];
     uint64_t ctr_max[MAX_EVENTS];
 #endif
-} profile_vars_t;
+} profile_timer_t;
 
 
-typedef struct profile_results_t
+typedef struct profile_timer_results_t
 {
     uint64_t count;
     double total; //Measured in microseconds
@@ -112,23 +112,54 @@ typedef struct profile_results_t
     uint64_t min_ctrs[MAX_EVENTS];
 #endif
 #endif
-} profile_results_t;
+} profile_timer_results_t;
 
 
-#define PROFILE_VAR(v) \
-    profile_vars_t _profile_ ## v = {0}
+typedef struct profile_counter_t {
+    uint64_t count;
+    uint64_t total;
+#if _PROFILE_MAX_MIN
+    uint64_t min;
+    uint64_t max;
+#endif
+} profile_counter_t;
 
-#define PROFILE_EXTERN(v) \
-    extern profile_vars_t _profile_ ## v
 
-#define PROFILE_RESET(v) \
-    memset(&_profile_ ## v, 0, sizeof(profile_vars_t))
+typedef struct profile_counter_results_t
+{
+    uint64_t count;
+    uint64_t total;
+    double avg;
+
+#if _PROFILE_MAX_MIN
+    uint64_t min;
+    uint64_t max;
+#endif
+} profile_counter_results_t;
 
 
-PROFILE_EXTERN(MPI_Other);
+#define PROFILE_TIMER(v) \
+    profile_timer_t _profile_timer_ ## v = {0}
 
-static inline void __PROFILE_START(struct profile_vars_t* v);
-static inline void __PROFILE_STOP(const char* name, struct profile_vars_t* v);
+#define PROFILE_TIMER_EXTERN(v) \
+    extern profile_timer_t _profile_timer_ ## v
+
+#define PROFILE_TIMER_RESET(v) \
+    memset(&_profile_timer_ ## v, 0, sizeof(profile_timer_t))
+
+
+#define PROFILE_COUNTER(v) \
+    profile_counter_t _profile_counter_ ## v = {0}
+
+#define PROFILE_COUNTER_EXTERN(v) \
+    extern profile_counter_t _profile_counter_ ## v
+
+#define PROFILE_COUNTER_RESET(v) \
+    memset(&_profile_counter_ ## v, 0, sizeof(profile_counter_t))
+
+
+static inline void __PROFILE_START(struct profile_timer_t* v);
+static inline void __PROFILE_STOP(const char* name, struct profile_timer_t* v);
 
 #ifndef UINT64_MAX
 #define UINT64_MAX (uint64_t)-1
@@ -136,7 +167,7 @@ static inline void __PROFILE_STOP(const char* name, struct profile_vars_t* v);
 
 static void PROFILE_CALIBRATE(void)
 {
-    struct profile_vars_t v = {0};
+    struct profile_timer_t v = {0};
     uint64_t min = UINT64_MAX;
     uint64_t old_time = 0;
     uint64_t time;
@@ -158,10 +189,13 @@ static void PROFILE_CALIBRATE(void)
 }
 
 
-static void PROFILE_INIT() __attribute__((unused));
-
-static void PROFILE_INIT()
+static __attribute__((unused)) void PROFILE_INIT()
 {
+    //Prevent multiple initializations.
+    if(_profile_overhead != 0) {
+        return;
+    }
+
 #if _PROFILE_PAPI_EVENTS == 1
     int ret = PAPI_library_init(PAPI_VER_CURRENT);
     if(ret < 0) {
@@ -284,9 +318,9 @@ static inline uint64_t get_bgq_cycles()
 
 #endif
 
-#define PROFILE_START(v) __PROFILE_START(&(_profile_ ## v))
+#define PROFILE_START(v) __PROFILE_START(&(_profile_timer_ ## v))
 
-static void __PROFILE_START(struct profile_vars_t* v)
+static void __PROFILE_START(struct profile_timer_t* v)
 {
 #if _PROFILE_PAPI_EVENTS == 1
     int rc = PAPI_read(_profile_eventset, (long long*)v->tmp_ctrs);
@@ -310,9 +344,9 @@ static void __PROFILE_START(struct profile_vars_t* v)
 
 
 
-#define PROFILE_STOP(v) __PROFILE_STOP(#v, &_profile_ ## v)
+#define PROFILE_STOP(v) __PROFILE_STOP(#v, &_profile_timer_ ## v)
 
-static void __PROFILE_STOP(const char* name, struct profile_vars_t* v)
+static void __PROFILE_STOP(const char* name, struct profile_timer_t* v)
 {
     //Grab the time right away
     //Do as little as possible until time and PAPI counters are grabbed.
@@ -394,11 +428,9 @@ static void __PROFILE_STOP(const char* name, struct profile_vars_t* v)
 }
 
 
-#define PROFILE_RESULTS(v, result) __PROFILE_RESULTS(#v, &_profile_ ## v, result)
+#define PROFILE_TIMER_RESULTS(v, result) __PROFILE_TIMER_RESULTS(#v, &_profile_timer_ ## v, result)
 
-static void __PROFILE_RESULTS(const char* name, struct profile_vars_t* v, profile_results_t* r) __attribute__((unused));
-
-static void __PROFILE_RESULTS(const char* name, struct profile_vars_t* v, profile_results_t* r)
+static __attribute((unused)) void __PROFILE_TIMER_RESULTS(const char* name, struct profile_timer_t* v, profile_timer_results_t* r)
 {
     uint64_t r_total;
 #if _PROFILE_MAX_MIN
@@ -448,16 +480,14 @@ static void __PROFILE_RESULTS(const char* name, struct profile_vars_t* v, profil
 }
 
 
-#define PROFILE_SHOW(v) __PROFILE_SHOW(#v, &_profile_ ## v)
+#define PROFILE_TIMER_SHOW(v) __PROFILE_TIMER_SHOW(#v, &_profile_timer_ ## v)
 
-static void __PROFILE_SHOW(const char* name, struct profile_vars_t* v) __attribute__((unused));
-
-static void __PROFILE_SHOW(const char* name, struct profile_vars_t* v)
+static __attribute__((unused)) void __PROFILE_TIMER_SHOW(const char* name, struct profile_timer_t* v)
 {
-    profile_results_t r;
+    profile_timer_results_t r;
     int rank;
 
-    __PROFILE_RESULTS(name, v, &r);
+    __PROFILE_TIMER_RESULTS(name, v, &r);
 
     MPI_Comm_rank(MPI_COMM_WORLD, &rank);
 
@@ -497,6 +527,81 @@ static void __PROFILE_SHOW(const char* name, struct profile_vars_t* v)
 }
 
 
+#define PROFILE_ACCUMULATE(v, a)  \
+    __PROFILE_ACCUMULATE(&(_profile_counter_ ## v), (a))
+
+static void __PROFILE_ACCUMULATE(struct profile_counter_t* v, uint64_t amount)
+{
+    v->total += amount;
+    v->count += 1;
+
+#if _PROFILE_MAX_MIN
+    if(amount < v->min || v->min == 0) {
+        v->min = amount;
+    }
+
+    if(amount > v->max) {
+        v->max = amount;
+#endif
+}
+
+
+#define PROFILE_COUNTER_RESULTS(v, result) \
+    __PROFILE_COUNTER_RESULTS(#v, &_profile_timer_ ## v, result)
+
+static __attribute((unused)) void __PROFILE_COUNTER_RESULTS(const char* name,
+        struct profile_counter_t* v, profile_counter_results_t* r)
+{
+    MPI_Allreduce(&v->count, &r->count, 1,
+            MPI_UNSIGNED_LONG_LONG, MPI_SUM, MPI_COMM_WORLD);
+    MPI_Allreduce(&v->total, &r->total, 1,
+            MPI_UNSIGNED_LONG_LONG, MPI_SUM, MPI_COMM_WORLD);
+
+#if _PROFILE_MAX_MIN
+    MPI_Allreduce(&v->max, &r->max, 1,
+            MPI_UNSIGNED_LONG_LONG, MPI_MAX, MPI_COMM_WORLD);
+    MPI_Allreduce(&v->min, &r->min, 1,
+            MPI_UNSIGNED_LONG_LONG, MPI_MIN, MPI_COMM_WORLD);
+#endif //_PROFILE_MAX_MIN
+
+    r->avg = (double)r->total / (double)r->count;
+}
+
+
+#define PROFILE_COUNTER_SHOW(v) \
+    __PROFILE_COUNTER_SHOW(#v, &_profile_counter_ ## v)
+
+static __attribute__((unused)) void __PROFILE_COUNTER_SHOW(const char* name,
+        struct profile_counter_t* v)
+{
+    profile_counter_results_t r;
+    int rank;
+
+    __PROFILE_COUNTER_RESULTS(name, v, &r);
+
+    MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+
+    if(rank == 0 && r.count > 0) {
+        if(r.count == r.total) {
+            //This really was just a simple counter: no need for avg/min/max.
+            printf("COUNT %15s cnt %-7lu\n", name, r.count);
+        } else {
+#if _PROFILE_MAX_MIN
+            printf("COUNT %15s cnt %-7lu amt %-8lu total %13.6f avg %-8lu max %-8lu min\n",
+                    name, r.count, r.total, r.avg,
+                    r.max, r.min);
+#else
+            printf("COUNT %15s cnt %-7lu amt %-8lu total %13.6f avg\n",
+                    name, r.count, r.total, r.avg);
+#endif
+        }
+
+        fflush(stdout);
+    }
+}
+
+
+
 
 #warning "PROFILING ON"
 
@@ -504,12 +609,12 @@ static void __PROFILE_SHOW(const char* name, struct profile_vars_t* v)
 #define PROFILE_DECLARE()
 static inline void PROFILE_INIT(void) {}
 static inline void PROFILE_FINALIZE(void) {}
-#define PROFILE_VAR(var)
-#define PROFILE_EXTERN(var)
+#define PROFILE_TIMER(var)
+#define PROFILE_TIMER_EXTERN(var)
 #define PROFILE_START(var)
 #define PROFILE_STOP(var)
-#define PROFILE_RESULTS(var)
-#define PROFILE_SHOW(var)
+#define PROFILE_TIMER_RESULTS(var)
+#define PROFILE_TIMER_SHOW(var)
 //#warning "PROFILING OFF"
 #endif
 

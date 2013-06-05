@@ -36,51 +36,79 @@
 
 #ifdef FULL_PROFILE
 #define FULL_PROFILE_INIT() PROFILE_INIT()
-#define FULL_PROFILE_VAR(v) PROFILE_VAR(v)
-#define FULL_PROFILE_EXTERN(v) PROFILE_EXTERN(v)
+#define FULL_PROFILE_TIMER(v) PROFILE_TIMER(v)
+#define FULL_PROFILE_TIMER_EXTERN(v) PROFILE_TIMER_EXTERN(v)
 #define FULL_PROFILE_START(v) PROFILE_START(v)
 #define FULL_PROFILE_STOP(v) PROFILE_STOP(v)
-#define FULL_PROFILE_RESET(v) PROFILE_RESET(v)
-#define FULL_PROFILE_SHOW(v) PROFILE_SHOW(v)
+#define FULL_PROFILE_TIMER_RESET(v) PROFILE_TIMER_RESET(v)
+#define FULL_PROFILE_TIMER_SHOW(v) PROFILE_TIMER_SHOW(v)
 #else
 #define FULL_PROFILE_INIT()
-#define FULL_PROFILE_VAR(v)
-#define FULL_PROFILE_EXTERN(v)
+#define FULL_PROFILE_TIMER(v)
+#define FULL_PROFILE_TIMER_EXTERN(v)
 #define FULL_PROFILE_START(v)
 #define FULL_PROFILE_STOP(v)
-#define FULL_PROFILE_RESET(v)
-#define FULL_PROFILE_SHOW(v)
+#define FULL_PROFILE_TIMER_RESET(v)
+#define FULL_PROFILE_TIMER_SHOW(v)
 #endif
 
-FULL_PROFILE_EXTERN(MPI_Other);
-FULL_PROFILE_EXTERN(MPI_Isend);
-FULL_PROFILE_EXTERN(MPI_Irecv);
-FULL_PROFILE_EXTERN(MPI_Test);
-FULL_PROFILE_EXTERN(MPI_Testall);
-FULL_PROFILE_EXTERN(MPI_Wait);
-FULL_PROFILE_EXTERN(MPI_Waitall);
-FULL_PROFILE_EXTERN(MPI_Waitany);
-FULL_PROFILE_EXTERN(MPI_Iprobe);
+FULL_PROFILE_TIMER_EXTERN(MPI_Other);
+FULL_PROFILE_TIMER_EXTERN(MPI_Send);
+FULL_PROFILE_TIMER_EXTERN(MPI_Recv);
+FULL_PROFILE_TIMER_EXTERN(MPI_Isend);
+FULL_PROFILE_TIMER_EXTERN(MPI_Irecv);
+FULL_PROFILE_TIMER_EXTERN(MPI_Test);
+FULL_PROFILE_TIMER_EXTERN(MPI_Testall);
+FULL_PROFILE_TIMER_EXTERN(MPI_Wait);
+FULL_PROFILE_TIMER_EXTERN(MPI_Waitall);
+FULL_PROFILE_TIMER_EXTERN(MPI_Waitany);
+FULL_PROFILE_TIMER_EXTERN(MPI_Iprobe);
 
-FULL_PROFILE_EXTERN(MPI_Barrier);
-FULL_PROFILE_EXTERN(MPI_Reduce);
-FULL_PROFILE_EXTERN(MPI_Allreduce);
-FULL_PROFILE_EXTERN(MPI_Scan);
-FULL_PROFILE_EXTERN(MPI_Bcast);
-FULL_PROFILE_EXTERN(MPI_Scatter);
-FULL_PROFILE_EXTERN(MPI_Gather);
-FULL_PROFILE_EXTERN(MPI_Gatherv);
-FULL_PROFILE_EXTERN(MPI_Allgather);
-FULL_PROFILE_EXTERN(MPI_Allgatherv);
-FULL_PROFILE_EXTERN(MPI_Alltoall);
-
+FULL_PROFILE_TIMER_EXTERN(MPI_Barrier);
+FULL_PROFILE_TIMER_EXTERN(MPI_Reduce);
+FULL_PROFILE_TIMER_EXTERN(MPI_Allreduce);
+FULL_PROFILE_TIMER_EXTERN(MPI_Scan);
+FULL_PROFILE_TIMER_EXTERN(MPI_Bcast);
+FULL_PROFILE_TIMER_EXTERN(MPI_Scatter);
+FULL_PROFILE_TIMER_EXTERN(MPI_Gather);
+FULL_PROFILE_TIMER_EXTERN(MPI_Gatherv);
+FULL_PROFILE_TIMER_EXTERN(MPI_Allgather);
+FULL_PROFILE_TIMER_EXTERN(MPI_Allgatherv);
+FULL_PROFILE_TIMER_EXTERN(MPI_Alltoall);
 
 #ifdef ENABLE_OPI
-FULL_PROFILE_EXTERN(OPI_Alloc);
-FULL_PROFILE_EXTERN(OPI_Free);
-FULL_PROFILE_EXTERN(OPI_Give);
-FULL_PROFILE_EXTERN(OPI_Take);
+FULL_PROFILE_TIMER_EXTERN(OPI_Alloc);
+FULL_PROFILE_TIMER_EXTERN(OPI_Free);
+FULL_PROFILE_TIMER_EXTERN(OPI_Give);
+FULL_PROFILE_TIMER_EXTERN(OPI_Take);
 #endif
+
+
+//Statistics on message size, counts.
+#ifdef HMPI_STATS
+#define HMPI_STATS_INIT() PROFILE_INIT()
+#define HMPI_STATS_COUNTER(v) PROFILE_COUNTER(v)
+#define HMPI_STATS_COUNTER_EXTERN(v) PROFILE_COUNTER_EXTERN(v)
+#define HMPI_STATS_ACCUMULATE(v, c) PROFILE_ACCUMULATE(v, c)
+#define HMPI_STATS_COUNTER_RESET(v) PROFILE_COUNTER_RESET(v)
+#define HMPI_STATS_COUNTER_SHOW(v) PROFILE_COUNTER_SHOW(v)
+#else
+#define HMPI_STATS_INIT()
+#define HMPI_STATS_COUNTER(v)
+#define HMPI_STATS_COUNTER_EXTERN(v)
+#define HMPI_STATS_ACCUMULATE(v, c)
+#define HMPI_STATS_COUNTER_RESET(v)
+#define HMPI_STATS_COUNTER_SHOW(v)
+#endif
+
+HMPI_STATS_COUNTER_EXTERN(send_size);
+HMPI_STATS_COUNTER_EXTERN(send_local);
+HMPI_STATS_COUNTER_EXTERN(send_remote);
+HMPI_STATS_COUNTER_EXTERN(send_syn);
+HMPI_STATS_COUNTER_EXTERN(recv_syn);
+HMPI_STATS_COUNTER_EXTERN(recv_mem);
+HMPI_STATS_COUNTER_EXTERN(recv_anysrc);
+
 
 
 #if 0
@@ -549,6 +577,7 @@ static inline int HMPI_Progress_send(const HMPI_Request send_req)
         //TODO: test the performance with and without this on say AMG.
         while(get_reqstat(send_req) != HMPI_REQ_COMPLETE);
 
+        HMPI_STATS_ACCUMULATE(send_syn, 1);
         return HMPI_REQ_COMPLETE;
     }
 
@@ -587,6 +616,7 @@ static inline void HMPI_Complete_recv(HMPI_Request recv_req, HMPI_Request send_r
         // in the SM region.  On the recv path, buf is always the user's recv
         // buf, whether it's an SM region or not.
         memcpy((void*)rbuf, (void*)sbuf, size);
+        HMPI_STATS_ACCUMULATE(recv_mem, 1);
     } else {
         //The setting of send_req->match_req signals to sender that they can
         // start doing copying as well, if they are testing the req.
@@ -614,6 +644,7 @@ static inline void HMPI_Complete_recv(HMPI_Request recv_req, HMPI_Request send_r
 
         //Wait if the sender is copying.
         while(!CAS_T_BOOL(volatile uint32_t, &send_req->match, 1, 0));
+        HMPI_STATS_ACCUMULATE(recv_syn, 1);
     }
 
 #ifdef HMPI_CHECKSUM
@@ -870,12 +901,13 @@ int HMPI_Test(HMPI_Request *request, int *flag, HMPI_Status *status)
     LOG_MPI_CALL("MPI_Test(request=%p, flag=%p, status=%p) type=%d",
             request, flag, status, req);
 
+#if 0
     HMPI_Progress(&g_recv_reqs_head, &g_tl_send_reqs, g_tl_my_send_reqs);
 
     //HMPI req state is chosen to match MPI test flags.
     *flag = HMPI_Test_internal(request, status);
+#endif
 
-#if 0
     if(unlikely(req == HMPI_REQUEST_NULL)) {
         if(status != HMPI_STATUS_IGNORE) {
             //Make Get_count return 0 count
@@ -922,7 +954,6 @@ int HMPI_Test(HMPI_Request *request, int *flag, HMPI_Status *status)
     release_req(req);
     *request = HMPI_REQUEST_NULL;
     *flag = 1;
-#endif
 
     FULL_PROFILE_STOP(MPI_Test);
     FULL_PROFILE_START(MPI_Other);
@@ -947,6 +978,7 @@ int HMPI_Testall(int count, HMPI_Request *requests, int* flag, HMPI_Status *stat
     for(int i = 0; i < count && *flag; i++) {
         if(requests[i] == HMPI_REQUEST_NULL) {
             continue;
+#if 0
         } else {
             HMPI_Status* status;
 
@@ -961,8 +993,8 @@ int HMPI_Testall(int count, HMPI_Request *requests, int* flag, HMPI_Status *stat
                 break;
             }
         }
+#endif
 
-#if 0
         } else if(statuses == HMPI_STATUSES_IGNORE) {
             HMPI_Test(&requests[i], flag, HMPI_STATUS_IGNORE);
         } else {
@@ -972,7 +1004,6 @@ int HMPI_Testall(int count, HMPI_Request *requests, int* flag, HMPI_Status *stat
         if(!(*flag)) {
             break;
         }
-#endif
     }
 
     FULL_PROFILE_STOP(MPI_Testall);
@@ -1050,19 +1081,23 @@ int HMPI_Wait(HMPI_Request *request, HMPI_Status *status)
         int flag;
         MPI_Status status;
 
-#if 0
+        HMPI_Item* recv_reqs_head = &g_recv_reqs_head;
+        HMPI_Request_list* local_list = &g_tl_send_reqs;
+        HMPI_Request_list* shared_list = g_tl_my_send_reqs;
+
         do {
             HMPI_Progress(recv_reqs_head, local_list, shared_list);
-            for(int i = 0; i < 1000; i++) {
+            //for(int i = 0; i < 1000; i++) {
                 MPI_Test(&req->u.req, &flag, &status);
-                if(flag) break;
-            }
+            //    if(flag) break;
+            //}
         } while(flag == 0);
-#endif
+#if 0
         BGQ_NOP;
         BGQ_NOP;
 
         MPI_Wait(&req->u.req, &status);
+#endif
 
         //Update status
         int count;
@@ -1372,6 +1407,8 @@ void HMPI_Comm_node_rank(const HMPI_Comm comm, const int rank, int* node_rank)
 
 static void HMPI_Local_isend(void* buf, int count, MPI_Datatype datatype, int dest, int tag, HMPI_Comm comm, HMPI_Request req)
 {
+    HMPI_STATS_ACCUMULATE(send_local, 1);
+
     //Request must be allocated before calling this routine!
     //HMPI_Request req = *request;
 
@@ -1395,6 +1432,7 @@ static void HMPI_Local_isend(void* buf, int count, MPI_Datatype datatype, int de
 
     //Two integer size conversions up to 64bit here.
     size_t size = (size_t)count * (size_t)type_size;
+    HMPI_STATS_ACCUMULATE(send_size, size);
 
     req->proc = HMPI_COMM_WORLD->comm_rank; // always sender's world-level rank
     req->tag = tag;
@@ -1414,6 +1452,8 @@ static void HMPI_Local_isend(void* buf, int count, MPI_Datatype datatype, int de
     if(size < EAGER_LIMIT) {
         memcpy(req->eager, buf, size);
         req->buf = req->eager;
+
+        HMPI_STATS_ACCUMULATE(send_imm, 1);
     } else if(buf != NULL && !IS_SM_BUF(buf)) {
         //printf("%d warning, non-SM buf %p size %ld\n",
         //       HMPI_COMM_WORLD->comm_rank, buf, size);
@@ -1435,6 +1475,13 @@ int HMPI_Send(void* buf, int count, MPI_Datatype datatype, int dest, int tag, HM
     LOG_MPI_CALL("HMPI_Send(buf=%p, count=%d, datatype=%d, dest=%d, tag=%d, comm=%p)",
             buf, count, datatype, dest, tag, comm);
 
+    HMPI_Request req;
+
+    HMPI_Isend(buf, count, datatype, dest, tag, comm, &req);
+    HMPI_Wait(&req, HMPI_STATUS_IGNORE);
+    return MPI_SUCCESS;
+
+#if 0
     //Cutting this out hurts latency on BGQ!
     if(unlikely(dest == MPI_PROC_NULL)) { 
         return MPI_SUCCESS;
@@ -1454,13 +1501,10 @@ int HMPI_Send(void* buf, int count, MPI_Datatype datatype, int dest, int tag, HM
     HMPI_Comm_node_rank(comm, dest, &dest_node_rank);
 
     if(dest_node_rank != MPI_UNDEFINED) {
+
         //HMPI_Request req = alloca(sizeof(HMPI_Request_info));
         HMPI_Request req = acquire_req();
-        req->match = 0;
-
-#ifndef __bg__
-        req->do_free = 0;
-#endif
+        //req->match = 0;
 
         //BGQ - if I pass dest instead of dest_node_rank, latency drops
         // from 3.69 to 3.56.. but that's a bug, how can I regain that time?
@@ -1476,24 +1520,48 @@ int HMPI_Send(void* buf, int count, MPI_Datatype datatype, int dest, int tag, HM
         } while(HMPI_Progress_send(req) != HMPI_REQ_COMPLETE);
 
         release_req(req);
+        FULL_PROFILE_STOP(MPI_Send);
+        FULL_PROFILE_START(MPI_Other);
         return MPI_SUCCESS;
     } else {
         //As you would hope, blocking send is faster than Isend/Wait on BGQ.
         //TODO - test on x86
-#if 0
         MPI_Request req;
+        int flag;
+
         MPI_Isend(buf, count, datatype, dest, tag, comm->comm, &req);
-        MPI_Wait(&req, MPI_STATUS_IGNORE);
+
+        HMPI_Item* recv_reqs_head = &g_recv_reqs_head;
+        HMPI_Request_list* local_list = &g_tl_send_reqs;
+        HMPI_Request_list* shared_list = g_tl_my_send_reqs;
+
+        do {
+            HMPI_Progress(recv_reqs_head, local_list, shared_list);
+                MPI_Test(&req, &flag, MPI_STATUS_IGNORE);
+        } while(flag == 0);
+
+        //MPI_Wait(&req, MPI_STATUS_IGNORE);
         return MPI_SUCCESS;
+//        int ret = MPI_Send(buf, count, datatype, dest, tag, comm->comm);
+
+#ifdef HMPI_STATS
+        {
+            int type_size;
+            MPI_Type_size(datatype, &type_size);
+
+            //Two integer size conversions up to 64bit here.
+            HMPI_STATS_ACCUMULATE(send_size, (size_t)count * (size_t)type_size);
+        }
 #endif
-        int ret = MPI_Send(buf, count, datatype, dest, tag, comm->comm);
-        FULL_PROFILE_STOP(MPI_Other);
-        FULL_PROFILE_START(MPI_Send);
 
         //Returning separately in each branch resulted in lower netpipe
         // latency on BGQ.
-        return ret;
+        FULL_PROFILE_STOP(MPI_Send);
+        FULL_PROFILE_START(MPI_Other);
+        HMPI_STATS_ACCUMULATE(send_remote, 1);
+        return MPI_SUCCESS;
     }
+#endif
 }
 
 
@@ -1539,10 +1607,11 @@ int HMPI_Isend(void* buf, int count, MPI_Datatype datatype, int dest, int tag, H
 
         //update_reqstat() has a memory fence on BGQ, avoid it here.
         req->stat = HMPI_REQ_ACTIVE;
-        req->context = comm->context; //Not needed but faster on BGQ
+        //req->context = comm->context; //Not needed but faster on BGQ
         req->datatype = datatype;
 
         req->type = MPI_SEND;
+        HMPI_STATS_ACCUMULATE(send_remote, 1);
     }
 
     FULL_PROFILE_STOP(MPI_Isend);
@@ -1579,6 +1648,7 @@ static void HMPI_Local_irecv(void* buf, int count, MPI_Datatype datatype, int so
                 source, tag, comm->comm, &req->u.req);
 
         req->type = HMPI_RECV_ANY_SOURCE;
+        HMPI_STATS_ACCUMULATE(recv_anysrc, 1);
     } else /*if(src_node_rank != MPI_UNDEFINED)*/ {
         req->type = HMPI_RECV;
     }
@@ -1604,6 +1674,12 @@ int HMPI_Recv(void* buf, int count, MPI_Datatype datatype, int source, int tag, 
     }
 #endif
 
+        HMPI_Request req;
+
+        HMPI_Irecv(buf, count, datatype, source, tag, comm, &req);
+        HMPI_Wait(&req, status);
+        return MPI_SUCCESS;
+#if 0
     int src_node_rank;
     HMPI_Comm_node_rank(comm, source, &src_node_rank);
 
@@ -1617,17 +1693,29 @@ int HMPI_Recv(void* buf, int count, MPI_Datatype datatype, int source, int tag, 
 
         HMPI_Local_irecv(buf, count, datatype, src_node_rank, tag, comm, req);
         return HMPI_Wait(&req, status);
-#if 0
-        HMPI_Request req;
-
-        HMPI_Irecv(buf, count, datatype, source, tag, comm, &req);
-        HMPI_Wait(&req, status);
-        return MPI_SUCCESS;
-#endif
     } else {
-        return MPI_Recv(buf, count, datatype, source, tag, comm->comm, MPI_STATUS_IGNORE);
-    }
+#ifdef HMPI_STATS
+        if(source == MPI_ANY_SOURCE) {
+            HMPI_STATS_ACCUMULATE(recv_anysrc, 1);
+        }
+#endif
+        //return MPI_Recv(buf, count, datatype, source, tag, comm->comm, MPI_STATUS_IGNORE);
 
+        MPI_Request req;
+        int flag;
+
+        MPI_Irecv(buf, count, datatype, source, tag, comm->comm, &req);
+
+        HMPI_Item* recv_reqs_head = &g_recv_reqs_head;
+        HMPI_Request_list* local_list = &g_tl_send_reqs;
+        HMPI_Request_list* shared_list = g_tl_my_send_reqs;
+
+        do {
+            HMPI_Progress(recv_reqs_head, local_list, shared_list);
+                MPI_Test(&req, &flag, MPI_STATUS_IGNORE);
+        } while(flag == 0);
+    }
+#endif
 }
 
 
@@ -1664,6 +1752,11 @@ int HMPI_Irecv(void* buf, int count, MPI_Datatype datatype, int source, int tag,
                 source, tag, comm->comm, &req->u.req);
 
         req->type = MPI_RECV;
+#ifdef HMPI_STATS
+        if(source == MPI_ANY_SOURCE) {
+            HMPI_STATS_ACCUMULATE(recv_anysrc, 1);
+        }
+#endif
     }
 
     FULL_PROFILE_STOP(MPI_Irecv);

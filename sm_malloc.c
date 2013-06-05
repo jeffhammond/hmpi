@@ -22,22 +22,22 @@
 
 #if 0
 PROFILE_DECLARE();
-PROFILE_VAR(malloc);
-PROFILE_VAR(calloc);
-PROFILE_VAR(free);
-PROFILE_VAR(realloc);
-PROFILE_VAR(memalign);
-PROFILE_VAR(mmap);
+PROFILE_TIMER(malloc);
+PROFILE_TIMER(calloc);
+PROFILE_TIMER(free);
+PROFILE_TIMER(realloc);
+PROFILE_TIMER(memalign);
+PROFILE_TIMER(mmap);
 
 void sm_profile_show(void)
 {
 #if 0
-    PROFILE_SHOW(malloc);
-    PROFILE_SHOW(calloc);
-    PROFILE_SHOW(free);
-    PROFILE_SHOW(realloc);
-    PROFILE_SHOW(memalign);
-    PROFILE_SHOW(mmap);
+    PROFILE_TIMER_SHOW(malloc);
+    PROFILE_TIMER_SHOW(calloc);
+    PROFILE_TIMER_SHOW(free);
+    PROFILE_TIMER_SHOW(realloc);
+    PROFILE_TIMER_SHOW(memalign);
+    PROFILE_TIMER_SHOW(mmap);
 #endif
 }
 #endif
