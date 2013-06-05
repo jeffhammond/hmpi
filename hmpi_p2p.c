@@ -546,6 +546,7 @@ static inline int HMPI_Progress_send(const HMPI_Request send_req)
         send_req->match = 1;
 
         //Receiver will set completion soon, wait rather than running off.
+        //TODO: test the performance with and without this on say AMG.
         while(get_reqstat(send_req) != HMPI_REQ_COMPLETE);
 
         return HMPI_REQ_COMPLETE;
@@ -725,9 +726,10 @@ static int HMPI_Progress_mpi(HMPI_Request req)
         req->tag = status.MPI_TAG;
         req->size = count * type_size;
         update_reqstat(req, HMPI_REQ_COMPLETE);
+        return HMPI_REQ_COMPLETE;
     }
 
-    return flag;
+    return HMPI_REQ_ACTIVE;
 }
 
 
@@ -805,6 +807,58 @@ static void HMPI_Progress(HMPI_Item* recv_reqs_head,
 
 
 
+//Internal function to test completion of a request.
+//Does not call progress, but may progress local sends, or underlying MPI.
+//TODO - can i remove the MPI progress, too?
+// Not easily -- maybe I should maintain a list of MPI reqs.
+// I can have a general MPI progress where I call Testsome and complete them.
+// Then in places like this, I can just check completion of the request by
+// looking at the state.
+// Should save calling down into MPI and progressing many times.
+//Returns 1 if request was completed, 0 otherwise.
+static int HMPI_Test_internal(HMPI_Request* request, HMPI_Status* status)
+{
+    HMPI_Request req = *request;
+
+    if(unlikely(req == HMPI_REQUEST_NULL)) {
+        if(status != HMPI_STATUS_IGNORE) {
+            //Make Get_count return 0 count
+            status->size = 0;
+        }
+
+        return 1;
+    } 
+   
+    int state = get_reqstat(req);
+
+    if(state != HMPI_REQ_COMPLETE) {
+        //Poll local sends and MPI for completion.
+        if(req->type == HMPI_SEND) {
+            state = HMPI_Progress_send(req);
+        } else if(req->type & (MPI_SEND | MPI_RECV)) {
+            state = HMPI_Progress_mpi(req);
+        }
+    }
+
+    //Careful here -- the above branches can result in flipping the state over
+    //to COMPLETE, so an 'else' is not appropriate.
+
+    if(state == HMPI_REQ_COMPLETE) {
+        if(status != HMPI_STATUS_IGNORE) {
+            status->size = req->size;
+            status->MPI_SOURCE = req->proc;
+            status->MPI_TAG = req->tag;
+            status->MPI_ERROR = MPI_SUCCESS;
+        }
+
+        release_req(req);
+        *request = HMPI_REQUEST_NULL;
+    }
+
+    return state;
+}
+
+
 //TODO - factor the testing part out of HMPI_Test.
 // Design it so we can call progress once, then test all the reqs.
 int HMPI_Test(HMPI_Request *request, int *flag, HMPI_Status *status)
@@ -816,6 +870,12 @@ int HMPI_Test(HMPI_Request *request, int *flag, HMPI_Status *status)
     LOG_MPI_CALL("MPI_Test(request=%p, flag=%p, status=%p) type=%d",
             request, flag, status, req);
 
+    HMPI_Progress(&g_recv_reqs_head, &g_tl_send_reqs, g_tl_my_send_reqs);
+
+    //HMPI req state is chosen to match MPI test flags.
+    *flag = HMPI_Test_internal(request, status);
+
+#if 0
     if(unlikely(req == HMPI_REQUEST_NULL)) {
         if(status != HMPI_STATUS_IGNORE) {
             //Make Get_count return 0 count
@@ -862,6 +922,7 @@ int HMPI_Test(HMPI_Request *request, int *flag, HMPI_Status *status)
     release_req(req);
     *request = HMPI_REQUEST_NULL;
     *flag = 1;
+#endif
 
     FULL_PROFILE_STOP(MPI_Test);
     FULL_PROFILE_START(MPI_Other);
@@ -877,6 +938,8 @@ int HMPI_Testall(int count, HMPI_Request *requests, int* flag, HMPI_Status *stat
             "MPI_Testall(count=%d, requests=%p, flag=%p, statuses=%p)",
             count, requests, flag, statuses);
 
+    HMPI_Progress(&g_recv_reqs_head, &g_tl_send_reqs, g_tl_my_send_reqs);
+    
     *flag = 1;
 
     //Return as soon as any one request isn't complete.
@@ -884,6 +947,22 @@ int HMPI_Testall(int count, HMPI_Request *requests, int* flag, HMPI_Status *stat
     for(int i = 0; i < count && *flag; i++) {
         if(requests[i] == HMPI_REQUEST_NULL) {
             continue;
+        } else {
+            HMPI_Status* status;
+
+            if(statuses == HMPI_STATUSES_IGNORE) {
+                status = HMPI_STATUS_IGNORE;
+            } else {
+                status = &statuses[i];
+            }
+
+            if(!HMPI_Test_internal(&requests[i], status)) {
+                *flag = 0;
+                break;
+            }
+        }
+
+#if 0
         } else if(statuses == HMPI_STATUSES_IGNORE) {
             HMPI_Test(&requests[i], flag, HMPI_STATUS_IGNORE);
         } else {
@@ -893,6 +972,7 @@ int HMPI_Testall(int count, HMPI_Request *requests, int* flag, HMPI_Status *stat
         if(!(*flag)) {
             break;
         }
+#endif
     }
 
     FULL_PROFILE_STOP(MPI_Testall);
@@ -906,17 +986,19 @@ int HMPI_Testsome(int incount, HMPI_Request* array_of_requests, int *outcount,
 {
     FULL_PROFILE_STOP(MPI_Other);
     FULL_PROFILE_START(MPI_Testall);
-    LOG_MPI_CALL(
-            "MPI_Testall(count=%d, requests=%p, flag=%p, statuses=%p)",
-            count, requests, flag, statuses);
+    LOG_MPI_CALL("MPI_Testsome(incount=%d, array_of_requests=%p, outcount=%p, "
+                 "array_of_indices=%p, array_of_statuses=%p)",
+                 incount, array_of_requests, outcount, array_of_indices,
+                 array_of_statuses);
+
+    HMPI_Progress(&g_recv_reqs_head, &g_tl_send_reqs, g_tl_my_send_reqs);
 
     int count = 0;
     int flag;
 
-    //TODO - factor the testing part out of HMPI_Test.
-    // Design it so we can call progress once, then test all the reqs.
     for(int i = 0; i < incount; i++) {
-        HMPI_Test(&array_of_requests[i], &flag, &array_of_statuses[count]);
+        flag = HMPI_Test_internal(&array_of_requests[i],
+                &array_of_statuses[count]);
         if(flag) {
             array_of_indices[count] = i;
             count += 1;
@@ -956,8 +1038,8 @@ int HMPI_Wait(HMPI_Request *request, HMPI_Status *status)
             status->size = 0;
         }
 
-        //FULL_PROFILE_STOP(MPI_Wait);
-        //FULL_PROFILE_START(MPI_Other);
+        FULL_PROFILE_STOP(MPI_Wait);
+        FULL_PROFILE_START(MPI_Other);
         return MPI_SUCCESS;
     }
 
