@@ -1405,7 +1405,9 @@ void HMPI_Comm_node_rank(const HMPI_Comm comm, const int rank, int* node_rank)
 }
 
 
-static void HMPI_Local_isend(void* buf, int count, MPI_Datatype datatype, int dest, int tag, HMPI_Comm comm, HMPI_Request req)
+//This routine takes a NODE-scope dest rank, NOT a world-scope rank!
+static void HMPI_Local_isend(void* buf, int count, MPI_Datatype datatype,
+        int dest, int tag, HMPI_Comm comm, HMPI_Request req)
 {
     HMPI_STATS_ACCUMULATE(send_local, 1);
 
@@ -1475,19 +1477,20 @@ int HMPI_Send(void* buf, int count, MPI_Datatype datatype, int dest, int tag, HM
     LOG_MPI_CALL("HMPI_Send(buf=%p, count=%d, datatype=%d, dest=%d, tag=%d, comm=%p)",
             buf, count, datatype, dest, tag, comm);
 
+#if 0
     HMPI_Request req;
 
     HMPI_Isend(buf, count, datatype, dest, tag, comm, &req);
     HMPI_Wait(&req, HMPI_STATUS_IGNORE);
     return MPI_SUCCESS;
+#endif
 
 #if 0
-    //Cutting this out hurts latency on BGQ!
     if(unlikely(dest == MPI_PROC_NULL)) { 
         return MPI_SUCCESS;
     }
+#endif
 
-    //Including this improves latency on BGQ!
 #if DEBUG
     if(dest < 0) {
         ERROR("%d dest %d MPI_PROC_NULL %d MPI_ANY_SOURCE %d",
@@ -1502,9 +1505,10 @@ int HMPI_Send(void* buf, int count, MPI_Datatype datatype, int dest, int tag, HM
 
     if(dest_node_rank != MPI_UNDEFINED) {
 
-        //HMPI_Request req = alloca(sizeof(HMPI_Request_info));
-        HMPI_Request req = acquire_req();
-        //req->match = 0;
+        //HMPI_Request req = acquire_req();
+        //TODO - this won't work on x86 with synergistic protocol.
+        HMPI_Request req = alloca(sizeof(HMPI_Request_info));
+        req->match = 0;
 
         //BGQ - if I pass dest instead of dest_node_rank, latency drops
         // from 3.69 to 3.56.. but that's a bug, how can I regain that time?
@@ -1519,49 +1523,35 @@ int HMPI_Send(void* buf, int count, MPI_Datatype datatype, int dest, int tag, HM
             HMPI_Progress(recv_reqs_head, local_list, shared_list);
         } while(HMPI_Progress_send(req) != HMPI_REQ_COMPLETE);
 
-        release_req(req);
+        //release_req(req);
         FULL_PROFILE_STOP(MPI_Send);
         FULL_PROFILE_START(MPI_Other);
         return MPI_SUCCESS;
     } else {
         //As you would hope, blocking send is faster than Isend/Wait on BGQ.
         //TODO - test on x86
-        MPI_Request req;
-        int flag;
-
+#if 0
         MPI_Isend(buf, count, datatype, dest, tag, comm->comm, &req);
-
-        HMPI_Item* recv_reqs_head = &g_recv_reqs_head;
-        HMPI_Request_list* local_list = &g_tl_send_reqs;
-        HMPI_Request_list* shared_list = g_tl_my_send_reqs;
-
-        do {
-            HMPI_Progress(recv_reqs_head, local_list, shared_list);
-                MPI_Test(&req, &flag, MPI_STATUS_IGNORE);
-        } while(flag == 0);
 
         //MPI_Wait(&req, MPI_STATUS_IGNORE);
         return MPI_SUCCESS;
-//        int ret = MPI_Send(buf, count, datatype, dest, tag, comm->comm);
-
-#ifdef HMPI_STATS
-        {
-            int type_size;
-            MPI_Type_size(datatype, &type_size);
-
-            //Two integer size conversions up to 64bit here.
-            HMPI_STATS_ACCUMULATE(send_size, (size_t)count * (size_t)type_size);
-        }
 #endif
+        int ret = MPI_Send(buf, count, datatype, dest, tag, comm->comm);
 
         //Returning separately in each branch resulted in lower netpipe
         // latency on BGQ.
         FULL_PROFILE_STOP(MPI_Send);
         FULL_PROFILE_START(MPI_Other);
-        HMPI_STATS_ACCUMULATE(send_remote, 1);
-        return MPI_SUCCESS;
-    }
+
+#ifdef HMPI_STATS
+        int type_size;
+        MPI_Type_size(datatype, &type_size);
+
+        HMPI_STATS_ACCUMULATE(send_size, (size_t)count * (size_t)type_size);
 #endif
+        HMPI_STATS_ACCUMULATE(send_remote, 1);
+        return ret;
+    }
 }
 
 
@@ -1607,10 +1597,16 @@ int HMPI_Isend(void* buf, int count, MPI_Datatype datatype, int dest, int tag, H
 
         //update_reqstat() has a memory fence on BGQ, avoid it here.
         req->stat = HMPI_REQ_ACTIVE;
+        req->type = MPI_SEND;
         //req->context = comm->context; //Not needed but faster on BGQ
         req->datatype = datatype;
 
-        req->type = MPI_SEND;
+#ifdef HMPI_STATS
+        int type_size;
+        MPI_Type_size(datatype, &type_size);
+
+        HMPI_STATS_ACCUMULATE(send_size, (size_t)count * (size_t)type_size);
+#endif
         HMPI_STATS_ACCUMULATE(send_remote, 1);
     }
 
@@ -1620,9 +1616,13 @@ int HMPI_Isend(void* buf, int count, MPI_Datatype datatype, int dest, int tag, H
 }
 
 
-static void HMPI_Local_irecv(void* buf, int count, MPI_Datatype datatype, int source, int tag, HMPI_Comm comm, HMPI_Request req)
+//This routine takes a WORLD-scope source rank, NOT a node-scope rank!
+static void HMPI_Local_irecv(void* buf, int count, MPI_Datatype datatype,
+        int source, int tag, HMPI_Comm comm, HMPI_Request req)
 {
 #ifdef DEBUG
+    //TODO - Torsten says this is wrong.
+    //We can have extent == size, but the order is non-contiguous
     MPI_Aint extent, lb;
     MPI_Type_get_extent(datatype, &lb, &extent);
     if(extent != size) {
@@ -1637,11 +1637,6 @@ static void HMPI_Local_irecv(void* buf, int count, MPI_Datatype datatype, int so
                 HMPI_COMM_WORLD->comm_rank, buf, req->size);
     }
 #endif
-    //update_reqstat() has a memory fence on BGQ, avoid it here.
-    req->stat = HMPI_REQ_ACTIVE;
-    req->context = comm->context;
-    req->datatype = datatype;
-
 
     if(unlikely(source == MPI_ANY_SOURCE)) {
         MPI_Irecv(buf, count, datatype,
@@ -1649,17 +1644,21 @@ static void HMPI_Local_irecv(void* buf, int count, MPI_Datatype datatype, int so
 
         req->type = HMPI_RECV_ANY_SOURCE;
         HMPI_STATS_ACCUMULATE(recv_anysrc, 1);
-    } else /*if(src_node_rank != MPI_UNDEFINED)*/ {
+    } else  {
         req->type = HMPI_RECV;
     }
 
     int type_size;
     MPI_Type_size(datatype, &type_size);
 
-    req->proc = source; //Always sender's world-level rank
-    req->tag = tag;
+
     req->size = (size_t)count * (size_t)type_size;
     req->buf = buf;
+    req->proc = source;
+    req->tag = tag;
+    req->context = comm->context;
+    req->stat = HMPI_REQ_ACTIVE; //Avoid fence in update_reqstat() on BGQ
+    req->datatype = datatype;
 
     add_recv_req(req);
 }
@@ -1668,18 +1667,10 @@ static void HMPI_Local_irecv(void* buf, int count, MPI_Datatype datatype, int so
 int HMPI_Recv(void* buf, int count, MPI_Datatype datatype, int source, int tag, HMPI_Comm comm, HMPI_Status *status)
 {
     //On the recv side, having this here hurts latency on BGQ
-#if 0
     if(unlikely(source == MPI_PROC_NULL)) { 
         return MPI_SUCCESS;
     }
-#endif
 
-        HMPI_Request req;
-
-        HMPI_Irecv(buf, count, datatype, source, tag, comm, &req);
-        HMPI_Wait(&req, status);
-        return MPI_SUCCESS;
-#if 0
     int src_node_rank;
     HMPI_Comm_node_rank(comm, source, &src_node_rank);
 
@@ -1691,7 +1682,8 @@ int HMPI_Recv(void* buf, int count, MPI_Datatype datatype, int source, int tag, 
         req->do_free = 0;
 #endif
 
-        HMPI_Local_irecv(buf, count, datatype, src_node_rank, tag, comm, req);
+        //Yes, Local_irecv uses source, not src_node_rank.
+        HMPI_Local_irecv(buf, count, datatype, source, tag, comm, req);
         return HMPI_Wait(&req, status);
     } else {
 #ifdef HMPI_STATS
@@ -1699,23 +1691,8 @@ int HMPI_Recv(void* buf, int count, MPI_Datatype datatype, int source, int tag, 
             HMPI_STATS_ACCUMULATE(recv_anysrc, 1);
         }
 #endif
-        //return MPI_Recv(buf, count, datatype, source, tag, comm->comm, MPI_STATUS_IGNORE);
-
-        MPI_Request req;
-        int flag;
-
-        MPI_Irecv(buf, count, datatype, source, tag, comm->comm, &req);
-
-        HMPI_Item* recv_reqs_head = &g_recv_reqs_head;
-        HMPI_Request_list* local_list = &g_tl_send_reqs;
-        HMPI_Request_list* shared_list = g_tl_my_send_reqs;
-
-        do {
-            HMPI_Progress(recv_reqs_head, local_list, shared_list);
-                MPI_Test(&req, &flag, MPI_STATUS_IGNORE);
-        } while(flag == 0);
+        return MPI_Recv(buf, count, datatype, source, tag, comm->comm, MPI_STATUS_IGNORE);
     }
-#endif
 }
 
 
@@ -1740,18 +1717,18 @@ int HMPI_Irecv(void* buf, int count, MPI_Datatype datatype, int source, int tag,
     int src_node_rank;
     HMPI_Comm_node_rank(comm, source, &src_node_rank);
 
-    //update_reqstat() has a memory fence on BGQ, avoid it here.
-    req->stat = HMPI_REQ_ACTIVE;
-    req->context = comm->context;
-    req->datatype = datatype;
-
     if(src_node_rank != MPI_UNDEFINED) {
-        HMPI_Local_irecv(buf, count, datatype, src_node_rank, tag, comm, req);
+        //Yes, Local_irecv uses source, not src_node_rank.
+        HMPI_Local_irecv(buf, count, datatype, source, tag, comm, req);
     } else { //Recv off-node, but not ANY_SOURCE
         MPI_Irecv(buf, count, datatype,
                 source, tag, comm->comm, &req->u.req);
 
+        //update_reqstat() has a memory fence on BGQ, avoid it here.
+        req->stat = HMPI_REQ_ACTIVE;
         req->type = MPI_RECV;
+        req->datatype = datatype;
+
 #ifdef HMPI_STATS
         if(source == MPI_ANY_SOURCE) {
             HMPI_STATS_ACCUMULATE(recv_anysrc, 1);
