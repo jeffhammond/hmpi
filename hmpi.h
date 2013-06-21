@@ -20,11 +20,11 @@ extern "C" {
 
 //BGQ is crazy!  Inserting nop's in some placed reduces NetPIPE latency.
 //Use this macro to insert nop's only on BGQ.
-#ifdef __bg__
-#define BGQ_NOP __asm__("nop\n")
-#else
+//#ifdef __bg__
+//#define BGQ_NOP __asm__("nop\n")
+//#else
 #define BGQ_NOP while(0)
-#endif
+//#endif
 
 
 //These really are internal, but they are used in publicly viewable structs.
@@ -211,7 +211,7 @@ typedef struct HMPI_Request_info {
     MPI_Datatype datatype;      //MPI datatype
     volatile uint32_t match;    //Synchronization for sender/recver copying
 
-    volatile uint32_t lock;
+//    volatile uint32_t lock;
     union {
         struct HMPI_Request_info* match_req; //Use on local send req
         volatile size_t offset;              //Copy offset, used on recv req

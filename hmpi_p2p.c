@@ -126,6 +126,7 @@ HMPI_Comm HMPI_COMM_WORLD;
 
 // Debugging functionality
 
+#if 0
 #include <execinfo.h>
 
 static void show_backtrace(void) __attribute__((unused));
@@ -139,6 +140,7 @@ static void show_backtrace(void)
     backtrace_symbols_fd(buffer, nptrs, STDOUT_FILENO);
     fflush(stdout);
 }
+#endif
 
 
 #ifdef HMPI_CHECKSUM
@@ -677,7 +679,7 @@ static inline void HMPI_Complete_recv(HMPI_Request recv_req, HMPI_Request send_r
         send_req->match = 1;
 
         size_t block_size = BLOCK_SIZE_ONE;
-        if(size >= (size_t)BLOCK_SIZE_TWO <<  1) {
+        if(size >= (size_t)BLOCK_SIZE_TWO << 1) {
             block_size = (size_t)BLOCK_SIZE_TWO;
         }
 
@@ -1522,31 +1524,25 @@ void HMPI_Comm_node_rank(const HMPI_Comm comm, const int rank, int* node_rank)
 static void HMPI_Local_isend(void* buf, int count, MPI_Datatype datatype,
         int dest, int tag, HMPI_Comm comm, HMPI_Request req)
 {
-    //update_reqstat() has a memory fence on BGQ, avoid it here.
-    req->stat = HMPI_REQ_ACTIVE;
-    req->datatype = datatype;
 
-    req->type = HMPI_SEND;
 
     int type_size;
     MPI_Type_size(datatype, &type_size);
 
-#ifdef DEBUG
-    MPI_Aint extent, lb;
-    MPI_Type_get_extent(datatype, &lb, &extent);
-    if(extent != type_size) {
-        ERROR("non-contiguous datatypes are not supported");
-    }
-#endif
-
     size_t size = (size_t)count * (size_t)type_size;
 
     //Maybe this should be the node rank?
-    req->proc = HMPI_COMM_WORLD->comm_rank; // always sender's world-level rank
-    req->tag = tag;
-    req->context = comm->context;
     req->size = size;
     req->buf = buf;
+    req->proc = comm->comm_rank;
+    req->tag = tag;
+    req->context = comm->context;
+
+    //update_reqstat() has a memory fence on BGQ, avoid it here.
+    req->stat = HMPI_REQ_ACTIVE;
+    req->type = HMPI_SEND;
+
+    req->datatype = datatype;
 
 #ifdef HMPI_CHECKSUM
     req->csum = compute_csum((uint8_t*)buf, size);
@@ -1564,8 +1560,6 @@ static void HMPI_Local_isend(void* buf, int count, MPI_Datatype datatype,
 
         HMPI_STATS_ACCUMULATE(send_imm, 1);
     } else if(buf != NULL && !IS_SM_BUF(buf)) {
-        //printf("%d warning, non-SM buf %p size %ld\n",
-        //       HMPI_COMM_WORLD->comm_rank, buf, size);
         //show_backtrace();
         req->do_free = 1;
         req->buf = MALLOC(uint8_t, size);
@@ -1610,8 +1604,6 @@ int HMPI_Send(void* buf, int count, MPI_Datatype datatype, int dest, int tag, HM
     if(dest_node_rank != MPI_UNDEFINED) {
         HMPI_Request req = acquire_req();
 
-        //BGQ - if I pass dest instead of dest_node_rank, latency drops
-        // from 3.69 to 3.56.. but that's a bug, how can I regain that time?
         HMPI_Local_isend(buf, count, datatype, dest_node_rank, tag, comm, req);
 
         HMPI_Item* recv_reqs_head = &g_recv_reqs_head;
@@ -1674,6 +1666,7 @@ int HMPI_Isend(void* buf, int count, MPI_Datatype datatype, int dest, int tag, H
     //Freed when req completion is signaled back to the user.
     HMPI_Request req = *request = acquire_req();
 
+#if 0
     if(unlikely(dest == MPI_PROC_NULL)) { 
         req->type = HMPI_SEND;
         update_reqstat(req, HMPI_REQ_COMPLETE);
@@ -1684,6 +1677,7 @@ int HMPI_Isend(void* buf, int count, MPI_Datatype datatype, int dest, int tag, H
         BGQ_NOP;
         return MPI_SUCCESS;
     }
+#endif
 
     int dest_node_rank;
     HMPI_Comm_node_rank(comm, dest, &dest_node_rank);
@@ -1731,7 +1725,7 @@ static void HMPI_Local_irecv(void* buf, int count, MPI_Datatype datatype,
     }
 #endif
 
-#if 0
+#ifdef DEBUG
     if(buf != NULL && !IS_SM_BUF(buf)) {
         WARNING("%d non-SM buf %p size %ld\n",
                 HMPI_COMM_WORLD->comm_rank, buf, req->size);
@@ -1743,14 +1737,12 @@ static void HMPI_Local_irecv(void* buf, int count, MPI_Datatype datatype,
                 source, tag, comm->comm, &req->u.req);
 
         req->type = HMPI_RECV_ANY_SOURCE;
-        HMPI_STATS_ACCUMULATE(recv_anysrc, 1);
     } else  {
         req->type = HMPI_RECV;
     }
 
     int type_size;
     MPI_Type_size(datatype, &type_size);
-
 
     req->size = (size_t)count * (size_t)type_size;
     req->buf = buf;
@@ -1766,33 +1758,49 @@ static void HMPI_Local_irecv(void* buf, int count, MPI_Datatype datatype,
 
 int HMPI_Recv(void* buf, int count, MPI_Datatype datatype, int source, int tag, HMPI_Comm comm, HMPI_Status *status)
 {
-    //On the recv side, having this here hurts latency on BGQ
-    if(unlikely(source == MPI_PROC_NULL)) { 
-        return MPI_SUCCESS;
-    }
+    FULL_PROFILE_STOP(MPI_Other);
+    FULL_PROFILE_START(MPI_Recv);
 
+    //If source is PROC_NULL, src_node_rank == MPI_UNDEFINED.
+    //MPI will then handle PROC_NULL, so we don't need to check for it.
     int src_node_rank;
     HMPI_Comm_node_rank(comm, source, &src_node_rank);
 
     if(src_node_rank != MPI_UNDEFINED) {
+        //TODO - play with alloca here, since it doesnt need to be in shmem.
         //HMPI_Request req = alloca(sizeof(HMPI_Request_info));
         HMPI_Request req = acquire_req();
 
-#ifndef __bg__
-        req->do_free = 0;
-#endif
-
         //Yes, Local_irecv uses source, not src_node_rank.
         HMPI_Local_irecv(buf, count, datatype, source, tag, comm, req);
-        return HMPI_Wait(&req, status);
+        HMPI_Wait(&req, status);
     } else {
-#ifdef HMPI_STATS
-        if(source == MPI_ANY_SOURCE) {
-            HMPI_STATS_ACCUMULATE(recv_anysrc, 1);
+        MPI_Request req;
+        int flag = 0;
+
+        MPI_Irecv(buf, count, datatype, source, tag, comm->comm, &req);
+
+        HMPI_Item* recv_reqs_head = &g_recv_reqs_head;
+        HMPI_Request_list* local_list = &g_tl_send_reqs;
+        HMPI_Request_list* shared_list = g_tl_my_send_reqs;
+
+        MPI_Test(&req, &flag, MPI_STATUS_IGNORE);
+        while(flag == 0) {
+            HMPI_Progress(recv_reqs_head, local_list, shared_list);
+            MPI_Test(&req, &flag, MPI_STATUS_IGNORE);
         }
-#endif
-        return MPI_Recv(buf, count, datatype, source, tag, comm->comm, MPI_STATUS_IGNORE);
+
     }
+
+#ifdef HMPI_STATS
+    if(source == MPI_ANY_SOURCE) {
+        HMPI_STATS_ACCUMULATE(recv_anysrc, 1);
+    }
+#endif
+
+    FULL_PROFILE_STOP(MPI_Recv);
+    FULL_PROFILE_START(MPI_Other);
+    return MPI_SUCCESS;
 }
 
 
@@ -1806,14 +1814,21 @@ int HMPI_Irecv(void* buf, int count, MPI_Datatype datatype, int source, int tag,
     //Freed when req completion is signaled back to the user.
     HMPI_Request req = *request = acquire_req();
 
+#if 0
     if(unlikely(source == MPI_PROC_NULL)) { 
+        req->size = 0;
+        req->proc = MPI_PROC_NULL;
+        req->tag = MPI_ANY_TAG;
+        req->stat = HMPI_REQ_COMPLETE;
         req->type = HMPI_RECV;
-        update_reqstat(req, HMPI_REQ_COMPLETE);
         FULL_PROFILE_STOP(MPI_Irecv);
         FULL_PROFILE_START(MPI_Other);
         return MPI_SUCCESS;
     }
+#endif
 
+    //If source is PROC_NULL, src_node_rank == MPI_UNDEFINED.
+    //MPI will then handle PROC_NULL, so we don't need to check for it.
     int src_node_rank;
     HMPI_Comm_node_rank(comm, source, &src_node_rank);
 
@@ -1829,12 +1844,13 @@ int HMPI_Irecv(void* buf, int count, MPI_Datatype datatype, int source, int tag,
         req->type = MPI_RECV;
         req->datatype = datatype;
 
-#ifdef HMPI_STATS
-        if(source == MPI_ANY_SOURCE) {
-            HMPI_STATS_ACCUMULATE(recv_anysrc, 1);
-        }
-#endif
     }
+
+#ifdef HMPI_STATS
+    if(source == MPI_ANY_SOURCE) {
+        HMPI_STATS_ACCUMULATE(recv_anysrc, 1);
+    }
+#endif
 
     FULL_PROFILE_STOP(MPI_Irecv);
     FULL_PROFILE_START(MPI_Other);
@@ -1853,14 +1869,8 @@ int OPI_Give(void** ptr, int count, MPI_Datatype datatype, int dest, int tag, HM
     //Freed when req completion is signaled back to the user.
     HMPI_Request req = *request = acquire_req();
 
-    if(unlikely(dest == MPI_PROC_NULL)) { 
-        req->type = OPI_GIVE;
-        update_reqstat(req, HMPI_REQ_COMPLETE);
-        FULL_PROFILE_STOP(OPI_Give);
-        FULL_PROFILE_START(MPI_Other);
-        return MPI_SUCCESS;
-    }
-
+    //If dest is PROC_NULL, dest_node_rank == MPI_UNDEFINED.
+    //MPI will then handle PROC_NULL, so we don't need to check for it.
     int dest_node_rank;
     HMPI_Comm_node_rank(comm, dest, &dest_node_rank);
 
@@ -1871,8 +1881,7 @@ int OPI_Give(void** ptr, int count, MPI_Datatype datatype, int dest, int tag, HM
     //update_reqstat() has a memory fence on BGQ, avoid it here.
     req->stat = HMPI_REQ_ACTIVE;
 
-    req->proc = HMPI_COMM_WORLD->comm_rank; // my local rank
-    //req->proc = comm->comm_rank; // my local rank
+    req->proc = comm->comm_rank;
     req->tag = tag;
     req->size = size;
     req->buf = *ptr; //For OP Give, we store the pointer being shared directly.
@@ -1910,14 +1919,8 @@ int OPI_Take(void** ptr, int count, MPI_Datatype datatype, int source, int tag, 
     //Freed when req completion is signaled back to the user.
     HMPI_Request req = *request = acquire_req();
 
-    if(unlikely(source == MPI_PROC_NULL)) { 
-        req->type = OPI_TAKE;
-        update_reqstat(req, HMPI_REQ_COMPLETE);
-        FULL_PROFILE_STOP(MPI_Irecv);
-        FULL_PROFILE_START(MPI_Other);
-        return MPI_SUCCESS;
-    }
-
+    //If source is PROC_NULL, src_node_rank == MPI_UNDEFINED.
+    //MPI will then handle PROC_NULL, so we don't need to check for it.
     int src_node_rank;
     HMPI_Comm_node_rank(comm, source, &src_node_rank);
 
