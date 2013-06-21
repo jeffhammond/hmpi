@@ -134,13 +134,13 @@ int g_log_fd = -1;
 #include <fcntl.h>
 
 #define LOG_MPI_CALL log_mpi_call
-static void log_mpi_call(char* fmt, ...)
+void log_mpi_call(char* fmt, ...)
 {
     va_list args;
     char str[1024];
 
-    if(g_log_fd) {
-        ERROR("Log file descriptor not initialized");
+    if(g_log_fd == -1) {
+        ERROR("Log file descriptor not initialized %d", g_log_fd);
     }
 
     va_start(args, fmt);
@@ -492,7 +492,10 @@ int HMPI_Init(int *argc, char ***argv)
     {
         char filename[1024];
         snprintf(filename, 1024, "hmpi-%d.log", getpid());
-        g_log_fd = open(filename, O_CREAT|O_DIRECT|O_TRUNC|O_WRONLY);
+        g_log_fd = open(filename, O_CREAT|O_SYNC|O_TRUNC,S_IRUSR|S_IWUSR);
+        if(g_log_fd == -1) {
+            ERROR("Opening log file failed %d %s", errno, strerror(errno));
+        }
     }
 #endif
 

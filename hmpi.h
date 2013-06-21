@@ -41,8 +41,6 @@ typedef struct HMPI_Item {
 
 #define printf(...) printf(__VA_ARGS__); fflush(stdout)
 
-//#define MALLOC(t, s) (t*)__builtin_assume_aligned(memalign(64, sizeof(t) * s), 64)
-//#define MALLOC(t, s) (t*)memalign(64, sizeof(t) * s)
 #ifdef __bg__
 //PPCA2 issues a single load/store for accesses within a 32-byte aligned block.
 #define MALLOC(t, s) (t*)memalign(32, sizeof(t) * s)
@@ -50,7 +48,8 @@ typedef struct HMPI_Item {
 //Aligning to 64 bytes seems to cause some weird latency without adding pad
 // elements to structs.
 //__builtin_assume_aligned is a GCC extension.
-#define MALLOC(t, s) (t*)__builtin_assume_aligned(memalign(8, sizeof(t) * s), 8)
+//#define MALLOC(t, s) (t*)__builtin_assume_aligned(memalign(8, sizeof(t) * s), 8)
+#define MALLOC(t, s) (t*)memalign(8, sizeof(t) * s)
 #endif
 
 
@@ -212,6 +211,7 @@ typedef struct HMPI_Request_info {
     MPI_Datatype datatype;      //MPI datatype
     volatile uint32_t match;    //Synchronization for sender/recver copying
 
+    volatile uint32_t lock;
     union {
         struct HMPI_Request_info* match_req; //Use on local send req
         volatile size_t offset;              //Copy offset, used on recv req

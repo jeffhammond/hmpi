@@ -430,7 +430,7 @@ static void __PROFILE_STOP(const char* name, struct profile_timer_t* v)
 
 #define PROFILE_TIMER_RESULTS(v, result) __PROFILE_TIMER_RESULTS(#v, &_profile_timer_ ## v, result)
 
-static __attribute((unused)) void __PROFILE_TIMER_RESULTS(const char* name, struct profile_timer_t* v, profile_timer_results_t* r)
+static __attribute__((unused)) void __PROFILE_TIMER_RESULTS(const char* name, struct profile_timer_t* v, profile_timer_results_t* r)
 {
     uint64_t r_total;
 #if _PROFILE_MAX_MIN
@@ -530,7 +530,7 @@ static __attribute__((unused)) void __PROFILE_TIMER_SHOW(const char* name, struc
 #define PROFILE_ACCUMULATE(v, a)  \
     __PROFILE_ACCUMULATE(&(_profile_counter_ ## v), (a))
 
-static void __PROFILE_ACCUMULATE(struct profile_counter_t* v, uint64_t amount)
+static __attribute__((unused)) void __PROFILE_ACCUMULATE(struct profile_counter_t* v, uint64_t amount)
 {
     v->total += amount;
     v->count += 1;
@@ -549,7 +549,7 @@ static void __PROFILE_ACCUMULATE(struct profile_counter_t* v, uint64_t amount)
 #define PROFILE_COUNTER_RESULTS(v, result) \
     __PROFILE_COUNTER_RESULTS(#v, &_profile_timer_ ## v, result)
 
-static __attribute((unused)) void __PROFILE_COUNTER_RESULTS(const char* name,
+static __attribute__((unused)) void __PROFILE_COUNTER_RESULTS(const char* name,
         struct profile_counter_t* v, profile_counter_results_t* r)
 {
     MPI_Allreduce(&v->count, &r->count, 1,
@@ -581,7 +581,7 @@ static __attribute__((unused)) void __PROFILE_COUNTER_SHOW(const char* name,
 
     MPI_Comm_rank(MPI_COMM_WORLD, &rank);
 
-    if(rank == 0 && r.count > 0) {
+    if(rank == 0) {
         if(r.count == r.total) {
             //This really was just a simple counter: no need for avg/min/max.
             printf("COUNT %15s cnt %-7lu\n", name, r.count);
