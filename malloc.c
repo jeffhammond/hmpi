@@ -1856,13 +1856,11 @@ static FORCEINLINE int win32munmap(void* ptr, size_t size) {
 /* First, define CAS_LOCK and CLEAR_LOCK on ints */
 /* Note CAS_LOCK defined to return 0 on success */
 
-#warning "gcc spinlock intrinsics"
 #if defined(__GNUC__)&& (__GNUC__ > 4 || (__GNUC__ == 4 && __GNUC_MINOR__ >= 1))
 #define CAS_LOCK(sl)     __sync_lock_test_and_set(sl, 1)
 #define CLEAR_LOCK(sl)   __sync_lock_release(sl)
 
 #elif (defined(__GNUC__) && (defined(__i386__) || defined(__x86_64__)))
-#warning "x86 asm locks"
 /* Custom spin locks for older gcc on x86 */
 static FORCEINLINE int x86_cas_lock(int *sl) {
   int ret;
@@ -1925,7 +1923,6 @@ static int spin_acquire_lock(int *sl) {
 #define ACQUIRE_LOCK(sl)      (CAS_LOCK(sl)? spin_acquire_lock(sl) : 0)
 #define INITIAL_LOCK(sl)      (*sl = 0)
 #define DESTROY_LOCK(sl)      (0)
-#warning "malloc global mutex 1"
 static MLOCK_T malloc_global_mutex = 0;
 
 #else /* USE_RECURSIVE_LOCKS */
@@ -1952,7 +1949,6 @@ struct malloc_recursive_lock {
 };
 
 #define MLOCK_T  struct malloc_recursive_lock
-#warning "malloc global mutex 2"
 static MLOCK_T malloc_global_mutex = { 0, 0, (THREAD_ID_T)0};
 
 static FORCEINLINE void recursive_release_lock(MLOCK_T *lk) {
@@ -2015,7 +2011,6 @@ static FORCEINLINE int recursive_try_lock(MLOCK_T *lk) {
 #define DESTROY_LOCK(lk)      (DeleteCriticalSection(lk), 0)
 #define NEED_GLOBAL_LOCK_INIT
 
-#warning "malloc global mutex 3"
 static MLOCK_T malloc_global_mutex;
 static volatile LONG malloc_global_mutex_status;
 
@@ -2053,7 +2048,6 @@ extern int pthread_mutexattr_setkind_np __P ((pthread_mutexattr_t *__attr,
 #define pthread_mutexattr_settype(x,y) pthread_mutexattr_setkind_np(x,y)
 #endif /* USE_RECURSIVE_LOCKS ... */
 
-#warning "malloc global mutex 4"
 static MLOCK_T malloc_global_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 static int pthread_init_lock (MLOCK_T *lk) {
