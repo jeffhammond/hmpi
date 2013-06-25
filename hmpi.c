@@ -109,22 +109,6 @@ HMPI_STATS_COUNTER(recv_mem);       //Receiver used memcpy
 HMPI_STATS_COUNTER(recv_anysrc);    //Receive ANY_SRC
 
 
-//Pointer to a shared context counter.  This counter is used to obtain new
-// context ID's when communicators are created, so that every communicator
-// used in a node has its own context.  The context is used in matching to
-// differentiate communicators.
-static int* g_comm_context = NULL;
-                            
-#if 0
-extern int g_numa_node=-1;                 //HMPI numa node (compute-node scope)
-extern int g_numa_root=-1;                 //HMPI root rank on same numa node
-extern int g_numa_rank=-1;                 //HMPI rank within numa node
-extern int g_numa_size=-1;                 //HMPI numa node size
-#endif
-
-extern HMPI_Comm HMPI_COMM_WORLD;
-
-
 #ifdef HMPI_LOGCALLS
 int g_log_fd = -1;
 
@@ -160,6 +144,15 @@ void log_mpi_call(char* fmt, ...)
 
 
 // Internal global structures
+
+//Pointer to a shared context counter.  This counter is used to obtain new
+// context ID's when communicators are created, so that every communicator
+// used in a node has its own context.  The context is used in matching to
+// differentiate communicators.
+static int* g_comm_context = NULL;
+                            
+extern HMPI_Comm HMPI_COMM_WORLD;
+
 
 //Each thread has a list of send and receive requests.
 //The receive requests are managed privately by the owning thread.

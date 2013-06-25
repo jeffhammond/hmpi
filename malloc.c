@@ -531,6 +531,7 @@ void* sm_morecore(intptr_t increment);
 void* sm_mmap(void* addr, size_t len, int prot, int flags, int fildes, off_t off);
 int sm_munmap(void* addr, size_t len);
 
+
 #if 0
 #ifdef _DLMALLOC_C_
 #define mmap sm_mmap
@@ -540,21 +541,24 @@ int sm_munmap(void* addr, size_t len);
 
 //#define MALLOC_ALIGNMENT ((size_t)64U)
 
-#define DEBUG 1
+//#define DEBUG 1
 #define INSECURE 0
 #define MSPACES 1
 #define ONLY_MSPACES 1
-#define FOOTERS 1
 #define MORECORE sm_morecore
 //#define MORECORE sbrk
-#define MORECORE_CONTIGUOUS 0
-#define NO_SEGMENT_TRAVERSAL 1
+#define MORECORE_CONTIGUOUS 0   //TODO consider 1 (we are contig now)
+#define NO_SEGMENT_TRAVERSAL 1  //TODO consider 0
 #define HAVE_MORECORE 0
 #define HAVE_MMAP 0
 #define HAVE_MREMAP 0
 #define MMAP_CLEARS 1
 #define DEFAULT_TRIM_THRESHOLD MAX_SIZE_T
 //#define DEFAULT_GRANULARITY (64 * 1024)
+
+//Allow free calls to work on any mspace:
+#define FOOTERS 1
+#define USE_LOCKS 1
 
 //Regular DL malloc stuff starts here
 
@@ -1852,11 +1856,13 @@ static FORCEINLINE int win32munmap(void* ptr, size_t size) {
 /* First, define CAS_LOCK and CLEAR_LOCK on ints */
 /* Note CAS_LOCK defined to return 0 on success */
 
+#warning "gcc spinlock intrinsics"
 #if defined(__GNUC__)&& (__GNUC__ > 4 || (__GNUC__ == 4 && __GNUC_MINOR__ >= 1))
 #define CAS_LOCK(sl)     __sync_lock_test_and_set(sl, 1)
 #define CLEAR_LOCK(sl)   __sync_lock_release(sl)
 
 #elif (defined(__GNUC__) && (defined(__i386__) || defined(__x86_64__)))
+#warning "x86 asm locks"
 /* Custom spin locks for older gcc on x86 */
 static FORCEINLINE int x86_cas_lock(int *sl) {
   int ret;
@@ -1919,6 +1925,7 @@ static int spin_acquire_lock(int *sl) {
 #define ACQUIRE_LOCK(sl)      (CAS_LOCK(sl)? spin_acquire_lock(sl) : 0)
 #define INITIAL_LOCK(sl)      (*sl = 0)
 #define DESTROY_LOCK(sl)      (0)
+#warning "malloc global mutex 1"
 static MLOCK_T malloc_global_mutex = 0;
 
 #else /* USE_RECURSIVE_LOCKS */
@@ -1945,6 +1952,7 @@ struct malloc_recursive_lock {
 };
 
 #define MLOCK_T  struct malloc_recursive_lock
+#warning "malloc global mutex 2"
 static MLOCK_T malloc_global_mutex = { 0, 0, (THREAD_ID_T)0};
 
 static FORCEINLINE void recursive_release_lock(MLOCK_T *lk) {
@@ -2007,6 +2015,7 @@ static FORCEINLINE int recursive_try_lock(MLOCK_T *lk) {
 #define DESTROY_LOCK(lk)      (DeleteCriticalSection(lk), 0)
 #define NEED_GLOBAL_LOCK_INIT
 
+#warning "malloc global mutex 3"
 static MLOCK_T malloc_global_mutex;
 static volatile LONG malloc_global_mutex_status;
 
@@ -2044,6 +2053,7 @@ extern int pthread_mutexattr_setkind_np __P ((pthread_mutexattr_t *__attr,
 #define pthread_mutexattr_settype(x,y) pthread_mutexattr_setkind_np(x,y)
 #endif /* USE_RECURSIVE_LOCKS ... */
 
+#warning "malloc global mutex 4"
 static MLOCK_T malloc_global_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 static int pthread_init_lock (MLOCK_T *lk) {
@@ -2653,6 +2663,17 @@ static struct malloc_params mparams;
 
 /* Ensure mparams initialized */
 #define ensure_initialization() (void)(mparams.magic != 0 || init_mparams())
+
+#if 0
+//Aggregate of per-rank data structures that need to be shared.
+struct sm_local
+{
+    MLOCK_T malloc_global_mutex;
+};
+
+static struct sm_local* g_local_data = NULL;
+#endif
+
 
 #if !ONLY_MSPACES
 

@@ -16,6 +16,7 @@
 //Block size to use when using the accelerated sender-receiver copy.
 #ifdef __bg__
 #define BLOCK_SIZE_ONE 16384
+//#define BLOCK_SIZE_ONE 4096
 #define BLOCK_SIZE_TWO 65536
 #else
 #define BLOCK_SIZE_ONE 4096
@@ -113,14 +114,6 @@ HMPI_STATS_COUNTER_EXTERN(recv_mem);
 HMPI_STATS_COUNTER_EXTERN(recv_anysrc);
 
 
-
-#if 0
-int g_numa_node=-1;                 //HMPI numa node (compute-node scope)
-int g_numa_root=-1;                 //HMPI root rank on same numa node
-int g_numa_rank=-1;                 //HMPI rank within numa node
-int g_numa_size=-1;                 //HMPI numa node size
-#endif
-
 HMPI_Comm HMPI_COMM_WORLD;
 
 
@@ -180,7 +173,7 @@ HMPI_Item* g_recv_reqs_tail = NULL;
 
 
 #ifndef __bg__
-mcs_qnode_t* g_lock_q;                   //Q node for lock
+mcs_qnode_t* g_lock_q;                   //Q node for lock. Used by P2P and OPI!
 #endif
 HMPI_Request_list* g_send_reqs = NULL;   //Shared: Senders add sends here
 HMPI_Request_list* g_tl_my_send_reqs;    //Shortcut to my global send Q
@@ -211,9 +204,8 @@ static inline HMPI_Request acquire_req(void)
         HMPI_Request req = (HMPI_Request)MALLOC(HMPI_Request_info, 1);
         req->match = 0;
 #ifndef __bg__
-        req->do_free = 0;
+        req->do_free = DO_NOT_FREE;
 #endif
-        //req->extra_req = NULL;
         return req;
     } else {
         g_free_reqs = item->next;
@@ -227,27 +219,18 @@ static inline void release_req(HMPI_Request req)
     //Return a req to the pool -- once allocated, a req is never freed.
     HMPI_Item* item = (HMPI_Item*)req;
 
-    //TODO - is there a better place to put this?
 #ifndef __bg__
-    if(req->do_free == 1) {
+    if(req->do_free == DO_FREE) {
         free(req->buf);
-        req->do_free = 0;
+        req->do_free = DO_NOT_FREE;
     }
 #ifdef ENABLE_OPI
-    else if(req->do_free == 2) {
+    else if(req->do_free == DO_OPI_FREE) {
         OPI_Free(&req->buf);
-        req->do_free = 0;
+        req->do_free = DO_NOT_FREE;
     }
 #endif
 #endif //ifndef __bg__
-
-#if 0
-    if(req->extra_req != NULL) {
-        WARNING("extra req %p", req->extra_req);
-        release_req(req->extra_req);
-        req->extra_req = NULL;
-    }
-#endif
 
     item->next = g_free_reqs;
     g_free_reqs = item;
@@ -645,16 +628,14 @@ static inline void HMPI_Complete_recv(HMPI_Request recv_req, HMPI_Request send_r
 
 #ifdef DEBUG
     if(unlikely(send_size > size)) {
-        //printf("%d ERROR recv message from %d of size %ld truncated to %ld\n", HMPI_COMM_WORLD->comm_rank, send_req->proc, send_size, size);
-        //MPI_Abort(MPI_COMM_WORLD, 5);
         ERROR("%d recv message from %d of size %ld truncated to %ld",
                 HMPI_COMM_WORLD->comm_rank, send_req->proc, send_size, size);
     }
 #endif
 
     if(send_size < size) {
-        //Adjust receive count
-        //printf("%d WARNING recv from %d is %d bytes, recv is %d bytes\n",
+        //Adjust receive size if the incoming message is smaller.
+        //WARNING("%d recv from %d is %d bytes, recv is %d bytes",
         //        HMPI_COMM_WORLD->comm_rank, send_req->proc, send_size, size);
         recv_req->size = send_size;
         size = send_size;
@@ -791,6 +772,8 @@ static inline void HMPI_Complete_take(HMPI_Request recv_req, HMPI_Request send_r
 #endif
 
 #if 0
+    //TODO - check this out -- with immediate, the send side doesn't have to
+    // alloc/free, though the receive side still does.
     if(size < 256) {
         //Size is too small - just memcpy the buffer instead of doing OP.
         //But, I have to alloc and free.. blah
@@ -806,27 +789,6 @@ static inline void HMPI_Complete_take(HMPI_Request recv_req, HMPI_Request send_r
     //Mark send and receive requests done
     update_reqstat(send_req, HMPI_REQ_COMPLETE);
     update_reqstat(recv_req, HMPI_REQ_COMPLETE);
-}
-#endif
-
-
-#if 0
-static int HMPI_Type_size(MPI_Datatype dt, int* type_size)
-{
-    switch(dt) {
-        case MPI_BYTE:
-            *type_size = 1;
-            return MPI_SUCCESS;
-        case MPI_INT:
-        case MPI_FLOAT:
-            *type_size = 4;
-            return MPI_SUCCESS;
-        case MPI_DOUBLE:
-            *type_size = 8;
-            return MPI_SUCCESS;
-    }
-
-    return MPI_Type_size(dt, type_size);
 }
 #endif
 
@@ -996,24 +958,21 @@ static int HMPI_Test_internal(HMPI_Request* request, HMPI_Status* status)
 }
 
 
-//TODO - factor the testing part out of HMPI_Test.
-// Design it so we can call progress once, then test all the reqs.
 int HMPI_Test(HMPI_Request *request, int *flag, HMPI_Status *status)
 {
     FULL_PROFILE_STOP(MPI_Other);
     FULL_PROFILE_START(MPI_Test);
-    HMPI_Request req = *request;
+    //HMPI_Request req = *request;
 
     LOG_MPI_CALL("MPI_Test(request=%p, flag=%p, status=%p) type=%d",
             request, flag, status, req);
 
-#if 0
     HMPI_Progress(&g_recv_reqs_head, &g_tl_send_reqs, g_tl_my_send_reqs);
 
     //HMPI req state is chosen to match MPI test flags.
     *flag = HMPI_Test_internal(request, status);
-#endif
 
+#if 0
     if(unlikely(req == HMPI_REQUEST_NULL)) {
         if(status != HMPI_STATUS_IGNORE) {
             //Make Get_count return 0 count
@@ -1060,6 +1019,7 @@ int HMPI_Test(HMPI_Request *request, int *flag, HMPI_Status *status)
     release_req(req);
     *request = HMPI_REQUEST_NULL;
     *flag = 1;
+#endif
 
     FULL_PROFILE_STOP(MPI_Test);
     FULL_PROFILE_START(MPI_Other);
@@ -1084,7 +1044,6 @@ int HMPI_Testall(int count, HMPI_Request *requests, int* flag, HMPI_Status *stat
     for(int i = 0; i < count && *flag; i++) {
         if(requests[i] == HMPI_REQUEST_NULL) {
             continue;
-#if 0
         } else {
             HMPI_Status* status;
 
@@ -1099,8 +1058,8 @@ int HMPI_Testall(int count, HMPI_Request *requests, int* flag, HMPI_Status *stat
                 break;
             }
         }
-#endif
 
+#if 0
         } else if(statuses == HMPI_STATUSES_IGNORE) {
             HMPI_Test(&requests[i], flag, HMPI_STATUS_IGNORE);
         } else {
@@ -1110,6 +1069,7 @@ int HMPI_Testall(int count, HMPI_Request *requests, int* flag, HMPI_Status *stat
         if(!(*flag)) {
             break;
         }
+#endif
     }
 
     FULL_PROFILE_STOP(MPI_Testall);
@@ -1204,6 +1164,8 @@ int HMPI_Wait(HMPI_Request *request, HMPI_Status *status)
         BGQ_NOP;
 
 
+        //TODO - blocking inside MPI can result in deadlocks.
+        // Have to use a test/progress loop.
         //MPI_Wait(&req->u.req, &status);
         //if(req->type == MPI_SEND) {
             MPI_Wait(&req->u.req, MPI_STATUS_IGNORE);
@@ -1227,6 +1189,7 @@ int HMPI_Wait(HMPI_Request *request, HMPI_Status *status)
         //update_reqstat(req, HMPI_REQ_COMPLETE);
 
     } else {
+        //Waiting for all types of local requests.
         HMPI_Item* recv_reqs_head = &g_recv_reqs_head;
         HMPI_Request_list* local_list = &g_tl_send_reqs;
         HMPI_Request_list* shared_list = g_tl_my_send_reqs;
@@ -1466,8 +1429,8 @@ int HMPI_Iprobe(int source, int tag, HMPI_Comm comm, int* flag, HMPI_Status* sta
             status->MPI_TAG = send_req->tag;
             status->MPI_ERROR = MPI_SUCCESS;
         }
-    } else /*if(g_net_size > 1)*/ {
-        //Probe MPI (off-node) layer only if more than one MPI rank
+    } else {
+        //Probe off-node (MPI)
         MPI_Status st;
         MPI_Iprobe(source, tag, comm->comm, flag, &st);
 
@@ -1561,7 +1524,7 @@ static void HMPI_Local_isend(void* buf, int count, MPI_Datatype datatype,
         HMPI_STATS_ACCUMULATE(send_imm, 1);
     } else if(buf != NULL && !IS_SM_BUF(buf)) {
         //show_backtrace();
-        req->do_free = 1;
+        req->do_free = DO_FREE;
         req->buf = MALLOC(uint8_t, size);
         memcpy(req->buf, buf, size);
     } 
@@ -1741,6 +1704,7 @@ static void HMPI_Local_irecv(void* buf, int count, MPI_Datatype datatype,
         req->type = HMPI_RECV;
     }
 
+    //TODO - move some of these assignments out to reduce argument count
     int type_size;
     MPI_Type_size(datatype, &type_size);
 
@@ -1899,7 +1863,7 @@ int OPI_Give(void** ptr, int count, MPI_Datatype datatype, int dest, int tag, HM
         req->type = MPI_SEND;
 
         //OPI_Free will be called when the req is released.
-        req->do_free = 2;
+        req->do_free = DO_OPI_FREE;
     }
 
     //*ptr = NULL;

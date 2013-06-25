@@ -51,6 +51,7 @@ struct sm_region
 {
     intptr_t limit; //End of shared memory region
     intptr_t brk;   //Next available shared memory address.
+
 };
 
 void* sm_lower = NULL;
@@ -282,6 +283,9 @@ static void __attribute__((noinline)) __sm_init(void)
 
     //Set up a temporary area on the stack for malloc() calls during our
     // initialization process.
+    //g_local_data = alloca(sizeof(struct sm_local));
+    //INITIAL_LOCK(&g_local_data->malloc_global_mutex);
+
     void* temp_space = alloca(TEMP_SIZE);
     sm_region = create_mspace_with_base(temp_space, TEMP_SIZE, 0);
 
@@ -352,7 +356,15 @@ static void __attribute__((noinline)) __sm_init(void)
     // forces out subtle OOM issues here instead of later.
     //memset(base, 0, MSPACE_SIZE);
 
-    sm_mspace = create_mspace_with_base(base, MSPACE_SIZE, 0);
+    //Grab space for local shared data structures.
+    //g_local_data = base;
+    //base = (void*)((uintptr_t)base + sizeof(g_local_data));
+    //INITIAL_LOCK(&g_local_data->malloc_global_mutex);
+
+    //Careful to subtract off space for the local data.
+    sm_mspace = create_mspace_with_base(base,
+            MSPACE_SIZE, 1);
+            //MSPACE_SIZE - sizeof(g_local_data), 1);
 
 
     //This should go last so it can use proper malloc and friends.
@@ -363,6 +375,7 @@ static void __attribute__((noinline)) __sm_init(void)
 void* sm_morecore(intptr_t increment)
 {
     abort();
+#if 0
     void* oldbrk = (void*)__sync_fetch_and_add(&sm_region->brk, increment);
 
 /*    printf("%d sm_morecore incr %ld brk %p limit %p\n",
@@ -376,6 +389,7 @@ void* sm_morecore(intptr_t increment)
 
     //memset(oldbrk, 0, increment);
     return oldbrk;
+#endif
 }
 
 

@@ -6,7 +6,7 @@
 #include "hmpi.h"
 #include "lock.h"
 
-#include "profile2.h"
+#include "profile.h"
 
 #ifdef FULL_PROFILE
 #define FULL_PROFILE_TIMER(v) PROFILE_TIMER(v)
@@ -26,6 +26,9 @@ FULL_PROFILE_TIMER_EXTERN(OPI_Alloc);
 FULL_PROFILE_TIMER_EXTERN(OPI_Free);
 FULL_PROFILE_TIMER_EXTERN(OPI_Give);
 FULL_PROFILE_TIMER_EXTERN(OPI_Take);
+
+#define RECVER_POOL 1
+//#define SENDER_POOL 2
 
 #define ALIGNMENT 4096
 
@@ -59,21 +62,33 @@ typedef struct mpool_t {
     opi_hdr_t* head;
     int buf_count;
 
-    //lock_t lock;
+#ifdef SENDER_POOL
+//    lock_t lock;
+    int lock;
+#endif
 } mpool_t;
 
 static mpool_t* g_mpool = NULL;
 
 
+//Reuse the shared lock Q node from the P2P code.
+//Have to make sure not to use the Q node twice -- here, we only use it in
+// alloc and free, and those aren't called from locked P2P code.
+extern mcs_qnode_t* g_lock_q;
+
+
 void OPI_Init(void)
 {
     //Initialize the local memory pool.
-    g_mpool = memalign(128, sizeof(mpool_t));
+    g_mpool = memalign(8, sizeof(mpool_t));
 
     g_mpool->head = NULL;
     //g_mpool.buf_count = 0;
 
+#ifdef SENDER_POOL
     //LOCK_INIT(&g_mpool->lock);
+    g_mpool->lock = 0;
+#endif
 }
 
 
@@ -94,6 +109,9 @@ void OPI_Finalize(void)
 
 int OPI_Alloc(void** ptr, size_t length)
 {
+    *ptr = malloc(length);
+    return MPI_SUCCESS;
+#if 0
     FULL_PROFILE_STOP(MPI_Other);
     FULL_PROFILE_START(OPI_Alloc);
     mpool_t* mp = g_mpool;
@@ -107,7 +125,15 @@ int OPI_Alloc(void** ptr, size_t length)
     opi_hdr_t* cur;
     opi_hdr_t* prev;
 
-    //LOCK_ACQUIRE(&mp->lock);
+#ifdef SENDER_POOL
+#ifdef __bg__
+    LOCK_ACQUIRE(&mp->lock);
+#else
+    //mcs_qnode_t* q = g_lock_q;
+    //__LOCK_ACQUIRE(&mp->lock, q);
+    while(__sync_lock_test_and_set(&mp->lock, 1) != 0);
+#endif //__bg__
+#endif //SENDER_POOL
 
     for(prev = NULL, cur = mp->head; cur != NULL;
             prev = cur, cur = cur->next) {
@@ -120,7 +146,14 @@ int OPI_Alloc(void** ptr, size_t length)
                 prev->next = cur->next;
             }
 
-            //LOCK_RELEASE(&mp->lock);
+#ifdef SENDER_POOL
+#ifdef __bg__
+            LOCK_RELEASE(&mp->lock);
+#else
+            //__LOCK_RELEASE(&mp->lock, q);
+            __sync_lock_release(&mp->lock);
+#endif //__bg__
+#endif //SENDER_POOL
 
             //printf("%p reuse addr %p length %llu\n", mp, cur, (uint64_t)length); fflush(stdout);
 #ifdef MPOOL_CHECK
@@ -132,7 +165,14 @@ int OPI_Alloc(void** ptr, size_t length)
         }
     }
 
-        //LOCK_RELEASE(&mp->lock);
+#ifdef SENDER_POOL
+#ifdef __bg__
+        LOCK_RELEASE(&mp->lock);
+#else
+        //__LOCK_RELEASE(&mp->lock, q);
+        __sync_lock_release(&mp->lock);
+#endif //__bg__
+#endif //SENDER_POOL
 
     //If no existing allocation is found, allocate a new one.
     opi_hdr_t* hdr = (opi_hdr_t*)memalign(ALIGNMENT, length + ALIGNMENT);
@@ -151,16 +191,24 @@ int OPI_Alloc(void** ptr, size_t length)
     FULL_PROFILE_STOP(OPI_Alloc);
     FULL_PROFILE_START(MPI_Other);
     return MPI_SUCCESS;
+#endif
 }
 
 
 int OPI_Free(void** ptr)
 {
+    free(*ptr);
+    return MPI_SUCCESS;
+#if 0
     FULL_PROFILE_STOP(MPI_Other);
     FULL_PROFILE_START(OPI_Free);
+#ifdef RECVER_POOL
     mpool_t* mp = g_mpool;
+#endif
     opi_hdr_t* hdr = PTR_TO_HDR((*ptr));
-    //mpool_t* mp = hdr->mpool;
+#ifdef SENDER_POOL
+    mpool_t* mp = hdr->mpool;
+#endif
 
 //    printf("%p free ptr %p hdr %p length %llu\n", mp, ptr, HDR_TO_PTR(hdr), (uint64_t)hdr->length);
 //    fflush(stdout);
@@ -200,16 +248,32 @@ int OPI_Free(void** ptr)
     }
 #endif
 
-    //LOCK_ACQUIRE(&mp->lock);
+#ifdef SENDER_POOL
+#ifdef __bg__
+    LOCK_ACQUIRE(&mp->lock);
+#else
+    //mcs_qnode_t* q = g_lock_q;
+    //__LOCK_ACQUIRE(&mp->lock, q);
+    while(__sync_lock_test_and_set(&mp->lock, 1) != 0);
+#endif //__bg__
+#endif
 
     hdr->next = mp->head;
     mp->head = hdr;
 
-    //LOCK_RELEASE(&mp->lock);
+#ifdef SENDER_POOL
+#ifdef __bg__
+    LOCK_RELEASE(&mp->lock);
+#else
+        //__LOCK_RELEASE(&mp->lock, q);
+        __sync_lock_release(&mp->lock);
+#endif //__bg__
+#endif
 
     *ptr = NULL;
     FULL_PROFILE_STOP(OPI_Free);
     FULL_PROFILE_START(MPI_Other);
     return MPI_SUCCESS;
+#endif
 }
 

@@ -84,6 +84,11 @@ extern void* sm_upper;
 #define OPI_TAKE 0x40
 #define OPI_TAKE_ANY_SOURCE 0x80
 
+//States for internally allocated message buffers.
+#define DO_NOT_FREE 0
+#define DO_FREE 1
+#define DO_OPI_FREE 2
+
 
 //HMPI request states
 //ACTIVE and COMPLETE specifically chosen to match MPI test flags
@@ -203,7 +208,6 @@ typedef struct HMPI_Request_info {
     uint32_t type;      //Request type
     uint32_t do_free;   //Used for internally-allocated SM regions on send side.
 
-
 #ifdef HMPI_CHECKSUM
     uint32_t csum;
 #endif
@@ -218,7 +222,6 @@ typedef struct HMPI_Request_info {
         MPI_Request req;                     //Off-node send/recv
     } u;
 
-    //struct HMPI_Request_info* extra_req;
 #ifndef __bg__
     char eager[EAGER_LIMIT];
 #endif

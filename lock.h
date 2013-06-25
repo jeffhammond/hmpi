@@ -396,7 +396,9 @@ static inline void __LOCK_ACQUIRE(lock_t* __restrict l, mcs_qnode_t* q) {
 
         *locked = 1;
 
+#ifdef __bg__
         STORE_FENCE();  //Prevent q->locked from being set afer pred->next
+#endif
 
         pred->next = q;
         while(*locked == 1);

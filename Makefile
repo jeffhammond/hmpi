@@ -9,15 +9,16 @@ CFLAGS+=$(WARN) -fno-builtin-malloc -fno-builtin-calloc -fno-builtin-realloc -fn
 LIBS=-lrt -lnuma
 
 INCS=
-#INCS+=-DENABLE_OPI=1
+INCS+=-DENABLE_OPI=1
 #INCS+=-DHMPI_LOGCALLS=1 
 #INCS+=-DHMPI_CHECKSUM=1
-INCS+=-D_PROFILE=1 -D_PROFILE_MPI=1
+#INCS+=-D_PROFILE=1 -D_PROFILE_MPI=1
 #INCS+=-DFULL_PROFILE
-INCS+= -DHMPI_STATS
+#INCS+= -DHMPI_STATS
 #INCS+=-D_PROFILE_PAPI_EVENTS=1
 
 SRCS=hmpi_p2p.c hmpi.c #hmpi_coll.c nbc_op.c #hmpi_opi.c
+SRCS+=hmpi_opi.c
 ASSRCS=hmpi_p2p.s hmpi.s #hmpi_coll.c nbc_op.c #hmpi_opi.c
 MAIN=main.c
 HDRS=hmpi.h barrier.h lock.h profile2.h
