@@ -74,7 +74,9 @@ static mpool_t* g_mpool = NULL;
 //Reuse the shared lock Q node from the P2P code.
 //Have to make sure not to use the Q node twice -- here, we only use it in
 // alloc and free, and those aren't called from locked P2P code.
+#ifndef __bg__
 extern mcs_qnode_t* g_lock_q;
+#endif
 
 
 void OPI_Init(void)
@@ -109,9 +111,10 @@ void OPI_Finalize(void)
 
 int OPI_Alloc(void** ptr, size_t length)
 {
+#if 0
     *ptr = malloc(length);
     return MPI_SUCCESS;
-#if 0
+#endif
     FULL_PROFILE_STOP(MPI_Other);
     FULL_PROFILE_START(OPI_Alloc);
     mpool_t* mp = g_mpool;
@@ -126,13 +129,13 @@ int OPI_Alloc(void** ptr, size_t length)
     opi_hdr_t* prev;
 
 #ifdef SENDER_POOL
-#ifdef __bg__
+/*#ifdef __bg__
     LOCK_ACQUIRE(&mp->lock);
-#else
+#else*/
     //mcs_qnode_t* q = g_lock_q;
     //__LOCK_ACQUIRE(&mp->lock, q);
     while(__sync_lock_test_and_set(&mp->lock, 1) != 0);
-#endif //__bg__
+//#endif //__bg__
 #endif //SENDER_POOL
 
     for(prev = NULL, cur = mp->head; cur != NULL;
@@ -147,12 +150,12 @@ int OPI_Alloc(void** ptr, size_t length)
             }
 
 #ifdef SENDER_POOL
-#ifdef __bg__
+/*#ifdef __bg__
             LOCK_RELEASE(&mp->lock);
-#else
+#else*/
             //__LOCK_RELEASE(&mp->lock, q);
             __sync_lock_release(&mp->lock);
-#endif //__bg__
+//#endif //__bg__
 #endif //SENDER_POOL
 
             //printf("%p reuse addr %p length %llu\n", mp, cur, (uint64_t)length); fflush(stdout);
@@ -166,12 +169,12 @@ int OPI_Alloc(void** ptr, size_t length)
     }
 
 #ifdef SENDER_POOL
-#ifdef __bg__
+/*#ifdef __bg__
         LOCK_RELEASE(&mp->lock);
-#else
+#else*/
         //__LOCK_RELEASE(&mp->lock, q);
         __sync_lock_release(&mp->lock);
-#endif //__bg__
+//#endif //__bg__
 #endif //SENDER_POOL
 
     //If no existing allocation is found, allocate a new one.
@@ -191,15 +194,15 @@ int OPI_Alloc(void** ptr, size_t length)
     FULL_PROFILE_STOP(OPI_Alloc);
     FULL_PROFILE_START(MPI_Other);
     return MPI_SUCCESS;
-#endif
 }
 
 
 int OPI_Free(void** ptr)
 {
+#if 0
     free(*ptr);
     return MPI_SUCCESS;
-#if 0
+#endif
     FULL_PROFILE_STOP(MPI_Other);
     FULL_PROFILE_START(OPI_Free);
 #ifdef RECVER_POOL
@@ -249,31 +252,32 @@ int OPI_Free(void** ptr)
 #endif
 
 #ifdef SENDER_POOL
-#ifdef __bg__
+/*#ifdef __bg__
+    printf("acquire lock\n"); fflush(stdout);
     LOCK_ACQUIRE(&mp->lock);
-#else
+#else*/
     //mcs_qnode_t* q = g_lock_q;
     //__LOCK_ACQUIRE(&mp->lock, q);
     while(__sync_lock_test_and_set(&mp->lock, 1) != 0);
-#endif //__bg__
+//#endif //__bg__
 #endif
 
     hdr->next = mp->head;
     mp->head = hdr;
 
 #ifdef SENDER_POOL
-#ifdef __bg__
+/*#ifdef __bg__
+    printf("release lock %p %p\n", mp, &mp->lock); fflush(stdout);
     LOCK_RELEASE(&mp->lock);
-#else
+#else*/
         //__LOCK_RELEASE(&mp->lock, q);
         __sync_lock_release(&mp->lock);
-#endif //__bg__
+//#endif //__bg__
 #endif
 
     *ptr = NULL;
     FULL_PROFILE_STOP(OPI_Free);
     FULL_PROFILE_START(MPI_Other);
     return MPI_SUCCESS;
-#endif
 }
 

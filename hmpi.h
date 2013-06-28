@@ -20,11 +20,11 @@ extern "C" {
 
 //BGQ is crazy!  Inserting nop's in some placed reduces NetPIPE latency.
 //Use this macro to insert nop's only on BGQ.
-//#ifdef __bg__
-//#define BGQ_NOP __asm__("nop\n")
-//#else
+#ifdef __bg__
+#define BGQ_NOP __asm__("nop\n")
+#else
 #define BGQ_NOP while(0)
-//#endif
+#endif
 
 
 //These really are internal, but they are used in publicly viewable structs.
@@ -109,20 +109,6 @@ typedef struct HMPI_Request_list {
 #endif
 } HMPI_Request_list;
 
-
-//extern int g_rank;                      //HMPI world rank
-//extern int g_size;                      //HMPI world size
-//extern int g_node_rank;                 //HMPI node rank
-//extern int g_node_size;                 //HMPI node size
-//extern int g_net_rank;                  //HMPI net rank
-//extern int g_net_size;                  //HMPI net size
-# if 0
-extern int g_numa_node;                 //HMPI numa node (compute-node scope)
-extern int g_numa_root;                 //HMPI root rank on same numa node
-extern int g_numa_rank;                 //HMPI rank within numa node
-extern int g_numa_size;                 //HMPI numa node size
-#endif
-
 #endif //HMPI_INTERNAL
 
 
@@ -195,7 +181,10 @@ typedef struct HMPI_Status {
 
 //HMPI_Request is later defined as a pointer to this struct.
 typedef struct HMPI_Request_info {
-    HMPI_Item item; //Linked list subtype
+    union {
+        HMPI_Item item; //Linked list subtype
+        MPI_Request req; //Used for non-ANY_SRC MPI sends/receives
+    } ir;
 
     size_t size;        //Message size in bytes
     void* buf;          //User buffer
@@ -219,7 +208,7 @@ typedef struct HMPI_Request_info {
     union {
         struct HMPI_Request_info* match_req; //Use on local send req
         volatile size_t offset;              //Copy offset, used on recv req
-        MPI_Request req;                     //Off-node send/recv
+        MPI_Request req;                     //ANY_SRC receives
     } u;
 
 #ifndef __bg__

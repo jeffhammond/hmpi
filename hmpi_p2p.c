@@ -182,7 +182,6 @@ HMPI_Request_list g_tl_send_reqs;        //Receiver-local send Q
 //Pool of unused reqs to save malloc time.
 static HMPI_Item* g_free_reqs = NULL;
 
-
 #define get_reqstat(req) req->stat
 
 static inline void update_reqstat(HMPI_Request req, int stat) {
@@ -195,7 +194,7 @@ static inline void update_reqstat(HMPI_Request req, int stat) {
 
 
 //TODO - Maybe send reqs should be allocated on the receiver.  How?
-static inline HMPI_Request acquire_req(void)
+HMPI_Request acquire_req(void)
 {
     HMPI_Item* item = g_free_reqs;
 
@@ -324,8 +323,6 @@ static inline void update_send_reqs(HMPI_Request_list* local_list, HMPI_Request_
 #else
         __LOCK_RELEASE(&shared_list->lock, q);
 #endif
-
-        BGQ_NOP;
 
         //This is safe, the pointers involved here are now only accessible by
         // this core.
@@ -889,7 +886,8 @@ static void HMPI_Progress(HMPI_Item* recv_reqs_head,
                 // failed, so we completed the MPI request.
                 remove_recv_req(prev, cur);
                 continue;
-            } else /*if(g_net_size > 1)*/ {
+            } else {
+                //Check MPI-level completion.
                 if(HMPI_Progress_mpi(req)) {
                     remove_recv_req(prev, cur);
                     continue;
@@ -1114,7 +1112,7 @@ int HMPI_Wait(HMPI_Request *request, HMPI_Status *status)
 {
 #if 0
     HMPI_Request req = *request;
-    MPI_Wait(&req->u.req, MPI_STATUS_IGNORE);
+    MPI_Wait(&req->ir.req, MPI_STATUS_IGNORE);
     release_req(req);
     *request = HMPI_REQUEST_NULL;
     return MPI_SUCCESS;
@@ -1144,49 +1142,50 @@ int HMPI_Wait(HMPI_Request *request, HMPI_Status *status)
 //        while(HMPI_Progress_mpi(req) != HMPI_REQ_COMPLETE) {
 //            HMPI_Progress(recv_reqs_head, local_list, shared_list);
 //        }
-        //int flag;
+        int flag;
+        MPI_Status st;
+        MPI_Status* p_st = (status == HMPI_STATUS_IGNORE ? MPI_STATUS_IGNORE : &st);
 
-        //HMPI_Item* recv_reqs_head = &g_recv_reqs_head;
-        //HMPI_Request_list* local_list = &g_tl_send_reqs;
-        //HMPI_Request_list* shared_list = g_tl_my_send_reqs;
+        HMPI_Item* recv_reqs_head = &g_recv_reqs_head;
+        HMPI_Request_list* local_list = &g_tl_send_reqs;
+        HMPI_Request_list* shared_list = g_tl_my_send_reqs;
 
-#if 0
         do {
             HMPI_Progress(recv_reqs_head, local_list, shared_list);
             //for(int i = 0; i < 1000; i++) {
-                MPI_Test(&req->u.req, &flag, &status);
+                MPI_Test(&req->ir.req, &flag, &st);
             //    if(flag) break;
             //}
         } while(flag == 0);
-#endif
-        BGQ_NOP;
-        BGQ_NOP;
-        BGQ_NOP;
 
 
         //TODO - blocking inside MPI can result in deadlocks.
         // Have to use a test/progress loop.
-        //MPI_Wait(&req->u.req, &status);
+        //MPI_Wait(&req->ir.req, &status);
         //if(req->type == MPI_SEND) {
-            MPI_Wait(&req->u.req, MPI_STATUS_IGNORE);
+        //    MPI_Wait(&req->ir.req, MPI_STATUS_IGNORE);
         //} else {
-            MPI_Status status;
-            MPI_Wait(&req->u.req, &status);
+            //MPI_Status status;
+            //MPI_Wait(&req->ir.req, &status);
 
+        if(req->type == MPI_RECV && status != HMPI_STATUS_IGNORE) {
             //Update status
             int count;
             int type_size;
 
-            MPI_Get_count(&status, req->datatype, &count);
+            MPI_Get_count(&st, req->datatype, &count);
             MPI_Type_size(req->datatype, &type_size);
 
-            req->tag = status.MPI_TAG;
+#if 0
+            req->tag = st.MPI_TAG;
             req->size = (size_t)count * (size_t)type_size;
-            BGQ_NOP;
-        //}
+#endif
 
-        //Not needed? we release the req next anyway.
-        //update_reqstat(req, HMPI_REQ_COMPLETE);
+            status->size = (size_t)count * (size_t)type_size;
+            status->MPI_SOURCE = req->proc;
+            status->MPI_TAG = st.MPI_TAG;
+            status->MPI_ERROR = MPI_SUCCESS;
+        }
 
     } else {
         //Waiting for all types of local requests.
@@ -1212,16 +1211,16 @@ int HMPI_Wait(HMPI_Request *request, HMPI_Status *status)
                     HMPI_COMM_WORLD->comm_rank, req->type);
 #endif
         }
+
+        //Req is complete at this point.
+        if(status != HMPI_STATUS_IGNORE) {
+            status->size = req->size;
+            status->MPI_SOURCE = req->proc;
+            status->MPI_TAG = req->tag;
+            status->MPI_ERROR = MPI_SUCCESS;
+        }
     }
 
-
-    //Req is complete at this point.
-    if(status != HMPI_STATUS_IGNORE) {
-        status->size = req->size;
-        status->MPI_SOURCE = req->proc;
-        status->MPI_TAG = req->tag;
-        status->MPI_ERROR = MPI_SUCCESS;
-    }
 
     release_req(req);
     *request = HMPI_REQUEST_NULL;
@@ -1253,7 +1252,7 @@ int HMPI_Waitall(int count, HMPI_Request *requests, HMPI_Status *statuses)
 
             if(req == HMPI_REQUEST_NULL) {
                 done += 1;
-                BGQ_NOP;
+                //BGQ_NOP;
                 continue;
             }
 
@@ -1270,11 +1269,11 @@ int HMPI_Waitall(int count, HMPI_Request *requests, HMPI_Status *statuses)
 #endif
                 } else if(req->type & (MPI_SEND | MPI_RECV)) {
                     if(!HMPI_Progress_mpi(req)) {
-                        BGQ_NOP;
+                        //BGQ_NOP;
                         continue;
                     }
                 } else {
-                    BGQ_NOP;
+                    //BGQ_NOP;
                     continue;
                 }
             }
@@ -1468,7 +1467,7 @@ int HMPI_Probe(int source, int tag, HMPI_Comm comm, HMPI_Status* status)
 //Returns the translation of the world rank to its local node rank,
 // or MPI_UNDEFINED otherwise.  MPI_ANY_SOURCE is translated to itself.
 //Other special values like MPI_PROC_NULL return MPI_UNDEFINED.
-void HMPI_Comm_node_rank(const HMPI_Comm comm, const int rank, int* node_rank)
+static inline void HMPI_Comm_node_rank(const HMPI_Comm comm, const int rank, int* node_rank)
 {
     int diff = rank - comm->node_root;
 
@@ -1627,7 +1626,7 @@ int HMPI_Isend(void* buf, int count, MPI_Datatype datatype, int dest, int tag, H
 #endif
 
     //Freed when req completion is signaled back to the user.
-    HMPI_Request req = *request = acquire_req();
+    HMPI_Request req = acquire_req();
 
 #if 0
     if(unlikely(dest == MPI_PROC_NULL)) { 
@@ -1650,7 +1649,7 @@ int HMPI_Isend(void* buf, int count, MPI_Datatype datatype, int dest, int tag, H
                 dest_node_rank, tag, comm, req);
     } else {
         MPI_Isend(buf, count, datatype,
-                dest, tag, comm->comm, &req->u.req);
+                dest, tag, comm->comm, &req->ir.req);
 
         //update_reqstat() has a memory fence on BGQ, avoid it here.
         req->stat = HMPI_REQ_ACTIVE;
@@ -1667,6 +1666,7 @@ int HMPI_Isend(void* buf, int count, MPI_Datatype datatype, int dest, int tag, H
         HMPI_STATS_ACCUMULATE(send_remote, 1);
     }
 
+    *request = req;
     FULL_PROFILE_STOP(MPI_Isend);
     FULL_PROFILE_START(MPI_Other);
     return MPI_SUCCESS;
@@ -1777,6 +1777,7 @@ int HMPI_Irecv(void* buf, int count, MPI_Datatype datatype, int source, int tag,
 
     //Freed when req completion is signaled back to the user.
     HMPI_Request req = *request = acquire_req();
+    //HMPI_Request req = acquire_req();
 
 #if 0
     if(unlikely(source == MPI_PROC_NULL)) { 
@@ -1801,7 +1802,7 @@ int HMPI_Irecv(void* buf, int count, MPI_Datatype datatype, int source, int tag,
         HMPI_Local_irecv(buf, count, datatype, source, tag, comm, req);
     } else { //Recv off-node, but not ANY_SOURCE
         MPI_Irecv(buf, count, datatype,
-                source, tag, comm->comm, &req->u.req);
+                source, tag, comm->comm, &req->ir.req);
 
         //update_reqstat() has a memory fence on BGQ, avoid it here.
         req->stat = HMPI_REQ_ACTIVE;
@@ -1816,6 +1817,7 @@ int HMPI_Irecv(void* buf, int count, MPI_Datatype datatype, int source, int tag,
     }
 #endif
 
+    //*request = req;
     FULL_PROFILE_STOP(MPI_Irecv);
     FULL_PROFILE_START(MPI_Other);
     return MPI_SUCCESS;

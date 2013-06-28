@@ -40,8 +40,8 @@ udawn: $(SRCS:%.c=%.o)
 	ranlib libhmpi.a
 
 #bgq: CFLAGS=-O3 -qhot=novector -qsimd=auto $(INCLUDE) -qinline=auto:level=5 -qassert=refalign -qlibansi -qlibmpi -qipa -qhot  -qprefetch=aggressive
-bgq: CC=mpixlc
-bgq: CFLAGS=-O3 -qhot=novector -qsimd=auto $(INCLUDE)
+bgq: CC=mpixlc_r
+bgq: CFLAGS=-g -O3 -qhot=novector -qsimd=auto -qlibansi -qlibmpi $(INCLUDE)
 bgq: $(SRCS:%.c=%.o)
 	ar sr libhmpi-bgq.a $(SRCS:%.c=%.o)
 	rm $(SRCS:%.c=%.o)

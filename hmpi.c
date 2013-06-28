@@ -434,12 +434,7 @@ int HMPI_Init(int *argc, char ***argv)
     }
 #endif
 
-    //Set up communicators
-    //TODO - this needs to be pulled out into its own routine.
-    // A lot of the g_* variables should be moved into the comm struct.
-    //MPI_Comm_rank(MPI_COMM_WORLD, &g_rank);
-    //MPI_Comm_size(MPI_COMM_WORLD, &g_size);
-
+    //Set up communicators.
     HMPI_COMM_WORLD = (HMPI_Comm_info*)MALLOC(HMPI_Comm_info, 1);
     HMPI_COMM_WORLD->comm = MPI_COMM_WORLD;
     init_communicator(HMPI_COMM_WORLD);
