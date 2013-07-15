@@ -173,7 +173,7 @@ HMPI_Item* g_recv_reqs_tail = NULL;
 
 
 #ifndef __bg__
-mcs_qnode_t* g_lock_q;                   //Q node for lock. Used by P2P and OPI!
+mcs_qnode_t* g_lock_q;                   //Q node for lock.
 #endif
 HMPI_Request_list* g_send_reqs = NULL;   //Shared: Senders add sends here
 HMPI_Request_list* g_tl_my_send_reqs;    //Shortcut to my global send Q
@@ -202,9 +202,10 @@ HMPI_Request acquire_req(void)
     if(item == NULL) {
         HMPI_Request req = (HMPI_Request)MALLOC(HMPI_Request_info, 1);
         req->match = 0;
-#ifndef __bg__
+        //BGQ is now using SM malloc, use the same non-shared buf tracking.
+//#ifndef __bg__
         req->do_free = DO_NOT_FREE;
-#endif
+//#endif
         return req;
     } else {
         g_free_reqs = item->next;
@@ -234,13 +235,15 @@ static inline void release_req(HMPI_Request req)
 #endif
 
     switch(req->do_free) {
-#ifndef __bg__
+
+//#ifndef __bg__
         //BGQ has MAP_COMMONHEAP, all memory is shared.
+        //Nope, not any more -- do this check on BGQ too.
         case DO_FREE:
             free(req->buf);
             req->do_free = DO_NOT_FREE;
             break;
-#endif
+//#endif
 #ifdef ENABLE_OPI
         case DO_OPI_FREE:
             OPI_Free(&req->buf);
@@ -1273,7 +1276,8 @@ int HMPI_Wait(HMPI_Request *request, HMPI_Status *status)
     //Req is complete at this point.
 
 #ifdef __bg__
-    __fence();
+    //What is this for? I think i was debugging something..
+    //__fence();
 #endif
 
     release_req(req);
@@ -1564,11 +1568,16 @@ static void HMPI_Local_isend(void* buf, int count, MPI_Datatype datatype,
     req->csum = compute_csum((uint8_t*)buf, size);
 #endif
 
-#ifndef __bg__
+//#ifndef __bg__
     //For small messages, copy into the eager buffer.
     //If the user's send buffer is not in the SM region, allocate an SM buf
     // and copy the data over.
     //On BGQ, immediate doesn't help, and the buf is always an SM buf.
+    //Now bug isn't always in SM on BGQ.  immediate doesn't provide speedup,
+    // but it does make a buffer available to use w/o calling malloc.
+
+    //Maybe this logic should be different for BGQ:
+    // Only use eager if < EAGER_LIMIT && not an SM buf.
 
     if(size < EAGER_LIMIT) {
         memcpy(req->eager, buf, size);
@@ -1581,7 +1590,7 @@ static void HMPI_Local_isend(void* buf, int count, MPI_Datatype datatype,
         req->buf = MALLOC(uint8_t, size);
         memcpy(req->buf, buf, size);
     } 
-#endif
+//#endif
 
     add_send_req(&g_send_reqs[dest], req);
 

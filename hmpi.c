@@ -457,12 +457,15 @@ int HMPI_Init(int *argc, char ***argv)
 #endif
 
 #ifdef __bg__
+    //No longer using BG_MAPCOMMONHEAP, and it doesn't matter how it's set.
+#if 0
     //On BG/Q, we rely on BG_MAPCOMMONHEAP=1 to get shared memory.
     //Check that it is set before continuing.
     char* tmp = getenv("BG_MAPCOMMONHEAP");
     if(tmp == NULL || atoi(tmp) != 1) {
         ERROR("BG_MAPCOMMONHEAP not enabled");
     }
+#endif
 #endif
 
     //Set up communicators.

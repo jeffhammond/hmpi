@@ -41,7 +41,7 @@ udawn: $(SRCS:%.c=%.o)
 
 #bgq: CFLAGS=-O3 -qhot=novector -qsimd=auto $(INCLUDE) -qinline=auto:level=5 -qassert=refalign -qlibansi -qlibmpi -qipa -qhot  -qprefetch=aggressive
 bgq: CC=mpixlc_r
-all: SRCS+=sm_malloc.c
+bgq: SRCS+=sm_malloc.c
 bgq: CFLAGS=-O3 -qhot=novector -qsimd=auto -qlibansi -qlibmpi $(INCLUDE)
 bgq: $(SRCS:%.c=%.o) sm_malloc.o
 	ar sr libhmpi-bgq.a $(SRCS:%.c=%.o)
@@ -65,7 +65,8 @@ bgq-gcc: $(SRCS:%.c=%.o)
 bgq_debug: LIBS =
 bgq_debug: CC=mpixlc
 bgq_debug: CFLAGS=-O3 -g -qhot=novector -qsimd=auto $(INCLUDE)
-bgq_debug: $(SRCS:%.c=%.o)
+bgq_debug: SRCS+=sm_malloc.c
+bgq_debug: $(SRCS:%.c=%.o) sm_malloc.o
 	ar sr libhmpi-bgq.a $(SRCS:%.c=%.o)
 	rm $(SRCS:%.c=%.o)
 

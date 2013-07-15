@@ -42,7 +42,7 @@ typedef struct HMPI_Item {
 #define printf(...) printf(__VA_ARGS__); fflush(stdout)
 
 #ifdef __bg__
-//PPCA2 issues a single load/store for accesses within a 32-byte aligned block.
+//PPC A2 issues a single load/store for accesses within a 32-byte aligned block.
 #define MALLOC(t, s) (t*)memalign(32, sizeof(t) * s)
 #else
 //Aligning to 64 bytes seems to cause some weird latency without adding pad
@@ -55,15 +55,15 @@ typedef struct HMPI_Item {
 
 
 //Conditional to check if a pointer points to a SM buffer.
-#ifdef __bg__
+//#ifdef __bg__
 //Everything is shared on BG/Q
-#define IS_SM_BUF(p) (1)
-#else
+//#define IS_SM_BUF(p) (1)
+//#else
 extern void* sm_lower;
 extern void* sm_upper;
 
 #define IS_SM_BUF(p) ((p) >= sm_lower && (p) < sm_upper)
-#endif
+//#endif
 
 
 //Wrappers to GCC/ICC extensions
@@ -211,9 +211,10 @@ typedef struct HMPI_Request_info {
         MPI_Request req;                     //ANY_SRC receives
     } u;
 
-#ifndef __bg__
+//#ifndef __bg__
+    //BGQ will now possibly use this for non-SM message buffers.
     char eager[EAGER_LIMIT];
-#endif
+//#endif
 } HMPI_Request_info;
 
 typedef HMPI_Request_info* HMPI_Request;

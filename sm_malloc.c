@@ -167,8 +167,13 @@ static int __sm_init_region(void)
 
 #ifdef USE_PSHM
 
+#ifdef __bg__
+#define MSPACE_SIZE (1024L * 1024L * 512L * 1L)
+#define DEFAULT_SIZE (MSPACE_SIZE * 16L + (long)getpagesize())
+#else
 #define MSPACE_SIZE (1024L * 1024L * 1024L * 16L)
 #define DEFAULT_SIZE (MSPACE_SIZE * 16L + (long)getpagesize())
+#endif
 
 static char* sm_filename = "hmpismfile";
 
@@ -194,10 +199,12 @@ static int __sm_init_region(void)
         } 
         
         if(fd == -1) {
-            perror("shm_open");
+            //perror("shm_open");
             abort();
         }
     }
+
+
 
     if(ftruncate(fd, DEFAULT_SIZE) == -1) {
         abort();
@@ -283,8 +290,6 @@ static void __attribute__((noinline)) __sm_init(void)
 
     //Set up a temporary area on the stack for malloc() calls during our
     // initialization process.
-    //g_local_data = alloca(sizeof(struct sm_local));
-    //INITIAL_LOCK(&g_local_data->malloc_global_mutex);
 
     void* temp_space = alloca(TEMP_SIZE);
     sm_region = create_mspace_with_base(temp_space, TEMP_SIZE, 0);
@@ -313,6 +318,7 @@ static void __attribute__((noinline)) __sm_init(void)
     do_init = __sm_init_region();
 
 
+
     //Only the process creating the file should initialize.
     if(do_init) {
         //Only the initializing process registers the shutdown handler.
@@ -323,6 +329,11 @@ static void __attribute__((noinline)) __sm_init(void)
         int pagesize = getpagesize();
         int offset = ((sizeof(struct sm_region) / pagesize) + 1) * pagesize;
 
+#ifdef __bg__
+        //Ensure everything above is set before brk below:
+        // setting brk is the synchronization signal.
+        __lwsync();
+#endif
 
         sm_region->brk = (intptr_t)sm_region + offset;
         //printf("SM region %p default size 0x%lx mspace size 0x%lx limit 0x%lx brk 0x%lx\n",
@@ -333,6 +344,11 @@ static void __attribute__((noinline)) __sm_init(void)
         void* volatile * brk_ptr = (void**)&sm_region->brk;
 
         while(*brk_ptr == NULL);
+
+        //Ensure none of the following loads occur during/before the above spin loop.
+#ifdef __bg__
+        __lwsync();
+#endif
 
         //Check that this process' region is mapped to the same address as the
         //process that initialized the region.
@@ -356,16 +372,9 @@ static void __attribute__((noinline)) __sm_init(void)
     // forces out subtle OOM issues here instead of later.
     //memset(base, 0, MSPACE_SIZE);
 
-    //Grab space for local shared data structures.
-    //g_local_data = base;
-    //base = (void*)((uintptr_t)base + sizeof(g_local_data));
-    //INITIAL_LOCK(&g_local_data->malloc_global_mutex);
-
     //Careful to subtract off space for the local data.
     sm_mspace = create_mspace_with_base(base,
             MSPACE_SIZE, 1);
-            //MSPACE_SIZE - sizeof(g_local_data), 1);
-
 
     //This should go last so it can use proper malloc and friends.
     //PROFILE_INIT();
