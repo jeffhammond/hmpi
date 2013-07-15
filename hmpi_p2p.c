@@ -218,6 +218,7 @@ static inline void release_req(HMPI_Request req)
     //Return a req to the pool -- once allocated, a req is never freed.
     HMPI_Item* item = (HMPI_Item*)req;
 
+#if 0
 #ifndef __bg__
     if(req->do_free == DO_FREE) {
         free(req->buf);
@@ -230,6 +231,26 @@ static inline void release_req(HMPI_Request req)
     }
 #endif
 #endif //ifndef __bg__
+#endif
+
+    switch(req->do_free) {
+#ifndef __bg__
+        //BGQ has MAP_COMMONHEAP, all memory is shared.
+        case DO_FREE:
+            free(req->buf);
+            req->do_free = DO_NOT_FREE;
+            break;
+#endif
+#ifdef ENABLE_OPI
+        case DO_OPI_FREE:
+            OPI_Free(&req->buf);
+            req->do_free = DO_NOT_FREE;
+            break;
+#endif
+        default:
+            break;
+    }
+
 
     item->next = g_free_reqs;
     g_free_reqs = item;
@@ -384,7 +405,7 @@ static inline HMPI_Request match_recv(HMPI_Request_list* req_list, HMPI_Request 
             //recv_req->proc = req->proc; //Not necessary, no ANY_SRC
             recv_req->tag = req->tag;
 
-            //WARNING("%d matched recv req %p proc %d tag %d ctx %d to send req %p\n",
+            //WARNING("%d match_recv req %p proc %d tag %d ctx %d send req %p\n",
             //        HMPI_COMM_WORLD->comm_rank, recv_req, proc, tag, context, req);
             return req;
         }
@@ -755,11 +776,11 @@ static inline void HMPI_Complete_take(HMPI_Request recv_req, HMPI_Request send_r
     size_t send_size = send_req->size;
     size_t size = recv_req->size;
 
-    if(send_size < size) {
+    //if(send_size < size) {
         //Adjust receive count
         recv_req->size = send_size;
         size = send_size;
-    }
+    //}
 
 #if DEBUG
     if(unlikely(send_size > size)) {
@@ -796,6 +817,50 @@ static int HMPI_Progress_mpi(HMPI_Request req)
     int flag;
     MPI_Status status;
 
+    MPI_Request mpi_req;
+    if(req->type == HMPI_RECV_ANY_SOURCE) {
+        mpi_req = req->u.req;
+    } else {
+        mpi_req = req->ir.req;
+    }
+
+#if DEBUG
+    if(req->ir.req == MPI_REQUEST_NULL) {
+        ERROR("%d Progress_mpi on null request!", HMPI_COMM_WORLD->comm_rank);
+    }
+#endif
+
+    MPI_Test(&req->ir.req, &flag, &status);
+
+    if(flag) {
+        //Update status
+        int count;
+        int type_size;
+
+        //This isn't necessary for sends:  message size, proc, and tag are
+        // already known, so don't query for them.
+        if(req->type == MPI_RECV) {
+            MPI_Get_count(&status, req->datatype, &count);
+            MPI_Type_size(req->datatype, &type_size);
+
+            req->tag = status.MPI_TAG;
+            req->size = count * type_size;
+        }
+
+        update_reqstat(req, HMPI_REQ_COMPLETE);
+        return HMPI_REQ_COMPLETE;
+    }
+
+    return HMPI_REQ_ACTIVE;
+}
+
+
+//For req->type == HMPI_RECV_ANY_SOURCE
+static int HMPI_Progress_mpi_any(HMPI_Request req)
+{
+    int flag;
+    MPI_Status status;
+
 #if DEBUG
     if(req->u.req == MPI_REQUEST_NULL) {
         ERROR("%d Progress_mpi on null request!", HMPI_COMM_WORLD->comm_rank);
@@ -809,17 +874,13 @@ static int HMPI_Progress_mpi(HMPI_Request req)
         int count;
         int type_size;
 
-        //This isn't necessary for sends:  message size, proc, and tag are
-        // already known, so don't query for them.
-        if(req->type == MPI_RECV) {
-            MPI_Get_count(&status, req->datatype, &count);
-            MPI_Type_size(req->datatype, &type_size);
+        MPI_Get_count(&status, req->datatype, &count);
+        MPI_Type_size(req->datatype, &type_size);
 
-            req->proc = status.MPI_SOURCE;
+        req->proc = status.MPI_SOURCE;
 
-            req->tag = status.MPI_TAG;
-            req->size = count * type_size;
-        }
+        req->tag = status.MPI_TAG;
+        req->size = count * type_size;
 
         update_reqstat(req, HMPI_REQ_COMPLETE);
         return HMPI_REQ_COMPLETE;
@@ -888,7 +949,7 @@ static void HMPI_Progress(HMPI_Item* recv_reqs_head,
                 continue;
             } else {
                 //Check MPI-level completion.
-                if(HMPI_Progress_mpi(req)) {
+                if(HMPI_Progress_mpi_any(req)) {
                     remove_recv_req(prev, cur);
                     continue;
                 }
@@ -960,10 +1021,12 @@ int HMPI_Test(HMPI_Request *request, int *flag, HMPI_Status *status)
 {
     FULL_PROFILE_STOP(MPI_Other);
     FULL_PROFILE_START(MPI_Test);
-    //HMPI_Request req = *request;
+#ifdef HMPI_LOGCALLS
+    HMPI_Request req = *request;
 
     LOG_MPI_CALL("MPI_Test(request=%p, flag=%p, status=%p) type=%d",
-            request, flag, status, req);
+            request, flag, status, req->type);
+#endif
 
     HMPI_Progress(&g_recv_reqs_head, &g_tl_send_reqs, g_tl_my_send_reqs);
 
@@ -1152,21 +1215,8 @@ int HMPI_Wait(HMPI_Request *request, HMPI_Status *status)
 
         do {
             HMPI_Progress(recv_reqs_head, local_list, shared_list);
-            //for(int i = 0; i < 1000; i++) {
-                MPI_Test(&req->ir.req, &flag, &st);
-            //    if(flag) break;
-            //}
+            MPI_Test(&req->ir.req, &flag, p_st);
         } while(flag == 0);
-
-
-        //TODO - blocking inside MPI can result in deadlocks.
-        // Have to use a test/progress loop.
-        //MPI_Wait(&req->ir.req, &status);
-        //if(req->type == MPI_SEND) {
-        //    MPI_Wait(&req->ir.req, MPI_STATUS_IGNORE);
-        //} else {
-            //MPI_Status status;
-            //MPI_Wait(&req->ir.req, &status);
 
         if(req->type == MPI_RECV && status != HMPI_STATUS_IGNORE) {
             //Update status
@@ -1186,7 +1236,6 @@ int HMPI_Wait(HMPI_Request *request, HMPI_Status *status)
             status->MPI_TAG = st.MPI_TAG;
             status->MPI_ERROR = MPI_SUCCESS;
         }
-
     } else {
         //Waiting for all types of local requests.
         HMPI_Item* recv_reqs_head = &g_recv_reqs_head;
@@ -1212,7 +1261,6 @@ int HMPI_Wait(HMPI_Request *request, HMPI_Status *status)
 #endif
         }
 
-        //Req is complete at this point.
         if(status != HMPI_STATUS_IGNORE) {
             status->size = req->size;
             status->MPI_SOURCE = req->proc;
@@ -1221,6 +1269,12 @@ int HMPI_Wait(HMPI_Request *request, HMPI_Status *status)
         }
     }
 
+
+    //Req is complete at this point.
+
+#ifdef __bg__
+    __fence();
+#endif
 
     release_req(req);
     *request = HMPI_REQUEST_NULL;
@@ -1467,7 +1521,7 @@ int HMPI_Probe(int source, int tag, HMPI_Comm comm, HMPI_Status* status)
 //Returns the translation of the world rank to its local node rank,
 // or MPI_UNDEFINED otherwise.  MPI_ANY_SOURCE is translated to itself.
 //Other special values like MPI_PROC_NULL return MPI_UNDEFINED.
-static inline void HMPI_Comm_node_rank(const HMPI_Comm comm, const int rank, int* node_rank)
+inline void HMPI_Comm_node_rank(const HMPI_Comm comm, const int rank, int* node_rank)
 {
     int diff = rank - comm->node_root;
 
@@ -1704,7 +1758,7 @@ static void HMPI_Local_irecv(void* buf, int count, MPI_Datatype datatype,
         req->type = HMPI_RECV;
     }
 
-    //TODO - move some of these assignments out to reduce argument count
+    //TODO - move some of these assignments out to reduce argument count?
     int type_size;
     MPI_Type_size(datatype, &type_size);
 
@@ -1731,13 +1785,28 @@ int HMPI_Recv(void* buf, int count, MPI_Datatype datatype, int source, int tag, 
     HMPI_Comm_node_rank(comm, source, &src_node_rank);
 
     if(src_node_rank != MPI_UNDEFINED) {
-        //TODO - play with alloca here, since it doesnt need to be in shmem.
-        //HMPI_Request req = alloca(sizeof(HMPI_Request_info));
         HMPI_Request req = acquire_req();
 
         //Yes, Local_irecv uses source, not src_node_rank.
         HMPI_Local_irecv(buf, count, datatype, source, tag, comm, req);
-        HMPI_Wait(&req, status);
+        //HMPI_Wait(&req, status);
+
+        HMPI_Item* recv_reqs_head = &g_recv_reqs_head;
+        HMPI_Request_list* local_list = &g_tl_send_reqs;
+        HMPI_Request_list* shared_list = g_tl_my_send_reqs;
+
+        do {
+            HMPI_Progress(recv_reqs_head, local_list, shared_list);
+        } while(get_reqstat(req) != HMPI_REQ_COMPLETE);
+
+        if(status != HMPI_STATUS_IGNORE) {
+            status->size = req->size;
+            status->MPI_SOURCE = req->proc;
+            status->MPI_TAG = req->tag;
+            status->MPI_ERROR = MPI_SUCCESS;
+        }
+
+        release_req(req);
     } else {
         MPI_Request req;
         int flag = 0;
@@ -1753,7 +1822,6 @@ int HMPI_Recv(void* buf, int count, MPI_Datatype datatype, int source, int tag, 
             HMPI_Progress(recv_reqs_head, local_list, shared_list);
             MPI_Test(&req, &flag, MPI_STATUS_IGNORE);
         }
-
     }
 
 #ifdef HMPI_STATS
@@ -1833,42 +1901,59 @@ int OPI_Give(void** ptr, int count, MPI_Datatype datatype, int dest, int tag, HM
             ptr, count, datatype, dest, tag, comm, request);
 
     //Freed when req completion is signaled back to the user.
-    HMPI_Request req = *request = acquire_req();
+    HMPI_Request req = acquire_req();
+
+    if(*ptr == NULL) {
+        ERROR("Take got a null pointer ptr %p\n", ptr);
+    }
 
     //If dest is PROC_NULL, dest_node_rank == MPI_UNDEFINED.
     //MPI will then handle PROC_NULL, so we don't need to check for it.
     int dest_node_rank;
     HMPI_Comm_node_rank(comm, dest, &dest_node_rank);
 
-    int type_size;
-    MPI_Type_size(datatype, &type_size);
-    uint64_t size = (uint64_t)count * (uint64_t)type_size;
-
-    //update_reqstat() has a memory fence on BGQ, avoid it here.
-    req->stat = HMPI_REQ_ACTIVE;
-
-    req->proc = comm->comm_rank;
-    req->tag = tag;
-    req->size = size;
-    req->buf = *ptr; //For OP Give, we store the pointer being shared directly.
-    req->context = comm->context;
-    req->datatype = datatype;
+    void* buf = *ptr;
 
     if(dest_node_rank != MPI_UNDEFINED) {
+
+        int type_size;
+        MPI_Type_size(datatype, &type_size);
+        uint64_t size = (uint64_t)count * (uint64_t)type_size;
+
+        req->size = size;
+        req->buf = buf; //We store the pointer being shared directly.
+        req->proc = comm->comm_rank;
+        req->tag = tag;
+        req->context = comm->context;
+
+        req->stat = HMPI_REQ_ACTIVE;
         req->type = OPI_GIVE;
+
+        req->datatype = datatype;
 
         add_send_req(&g_send_reqs[dest_node_rank], req);
     } else {
         //This is easy, just convert to a send.
-        MPI_Isend(*ptr, count, datatype,
-                dest, tag, comm->comm, &req->u.req);
+        MPI_Isend(buf, count, datatype,
+                dest, tag, comm->comm, &req->ir.req);
+
+        //Although normal MPI sends don't need the buf to be set, Give does!
+        // The buffer will be freed later, so we need the ptr to free it.
+        req->buf = buf;
+
+        req->stat = HMPI_REQ_ACTIVE;
         req->type = MPI_SEND;
 
-        //OPI_Free will be called when the req is released.
+        //OPI_Free should be called when the req is released.
         req->do_free = DO_OPI_FREE;
+
+        req->datatype = datatype;
     }
 
+    //OPI was defined so that Give and Free clear the pointer, but it's
+    // disabled to provide a slight performance edge.
     //*ptr = NULL;
+    *request = req;
     FULL_PROFILE_STOP(OPI_Give);
     FULL_PROFILE_START(MPI_Other);
     return MPI_SUCCESS;
@@ -1890,17 +1975,18 @@ int OPI_Take(void** ptr, int count, MPI_Datatype datatype, int source, int tag, 
     int src_node_rank;
     HMPI_Comm_node_rank(comm, source, &src_node_rank);
 
-    int type_size;
-    MPI_Type_size(datatype, &type_size);
+    //int type_size;
+    //MPI_Type_size(datatype, &type_size);
+
+    //req->size = count * type_size;
+
+    req->proc = source;
+    req->tag = tag;
+    req->context = comm->context;
 
     //update_reqstat() has a memory fence on BGQ, avoid it here.
     req->stat = HMPI_REQ_ACTIVE;
 
-    req->proc = source;
-    req->tag = tag;
-    req->size = count * type_size;
-    req->buf = ptr;
-    req->context = comm->context;
     req->datatype = datatype;
 
     if(unlikely(source == MPI_ANY_SOURCE)) {
@@ -1910,18 +1996,23 @@ int OPI_Take(void** ptr, int count, MPI_Datatype datatype, int source, int tag, 
         abort();
 
         // test both layers and pick first 
+        req->buf = ptr;
         req->type = OPI_TAKE_ANY_SOURCE;
 
         add_recv_req(req);
     } else if(src_node_rank != MPI_UNDEFINED) {
         //Recv on-node, but not ANY_SOURCE
+        req->buf = ptr;
         req->type = OPI_TAKE;
 
         add_recv_req(req);
     } else { //Recv off-node, but not ANY_SOURCE
-        OPI_Alloc(ptr, req->size);
+        int type_size;
+        MPI_Type_size(datatype, &type_size);
+
+        OPI_Alloc(ptr, (uint64_t)type_size * (uint64_t)count);
         MPI_Irecv(*ptr, count, datatype,
-                source, tag, comm->comm, &req->u.req);
+                source, tag, comm->comm, &req->ir.req);
         req->buf = *ptr;
         req->type = MPI_RECV;
     }

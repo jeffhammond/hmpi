@@ -136,7 +136,8 @@ void log_mpi_call(char* fmt, ...)
     }
 
     strcat(str, "\n");
-    write(g_log_fd, str, len + 1);
+    //write(g_log_fd, str, len + 1);
+    write(stdout, str, len + 1);
 }
 #else
 #define LOG_MPI_CALL(fmt, ...)
@@ -174,6 +175,32 @@ extern HMPI_Request_list g_tl_send_reqs;        //Receiver-local send Q
 //Pool of unused reqs to save malloc time.
 extern HMPI_Item* g_free_reqs;
 
+
+#ifdef __bg__
+#include <spi/include/kernel/memory.h>
+
+void print_bgq_mem(void)
+{
+    uint64_t shared, persist, heapavail, stackavail, stack, heap, guard, mmap;
+
+    Kernel_GetMemorySize(KERNEL_MEMSIZE_SHARED, &shared);
+    Kernel_GetMemorySize(KERNEL_MEMSIZE_PERSIST, &persist);
+    Kernel_GetMemorySize(KERNEL_MEMSIZE_HEAPAVAIL, &heapavail);
+    Kernel_GetMemorySize(KERNEL_MEMSIZE_STACKAVAIL, &stackavail);
+    Kernel_GetMemorySize(KERNEL_MEMSIZE_STACK, &stack);
+    Kernel_GetMemorySize(KERNEL_MEMSIZE_HEAP, &heap);
+    Kernel_GetMemorySize(KERNEL_MEMSIZE_GUARD, &guard);
+    Kernel_GetMemorySize(KERNEL_MEMSIZE_MMAP, &mmap);
+
+    //if(heap >= heapavail >> 1) {
+    //if(HMPI_COMM_WORLD->node_rank = 1) {
+        printf("Allocated heap: %.2f MB, avail. heap: %.2f MB\n", (double)heap/(1024*1024), (double)heapavail/(1024*1024));
+        printf("Allocated stack: %.2f MB, avail. stack: %.2f MB\n", (double)stack/(1024*1024), (double)stackavail/(1024*1024));
+        printf("Memory: shared: %.2f MB, persist: %.2f MB, guard: %.2f MB, mmap: %.2f MB\n", (double)shared/(1024*1024), (double)persist/(1024*1024), (double)guard/(1024*1024), (double)mmap/(1024*1024));
+        fflush(stdout);
+    //}
+}
+#endif
 
 //#ifndef __bg__
 #if 0
@@ -424,6 +451,10 @@ int HMPI_Init(int *argc, char ***argv)
     MPI_Init(argc, argv);
     FULL_PROFILE_INIT();
     HMPI_STATS_INIT();
+
+#ifdef __bg__
+    print_bgq_mem();
+#endif
 
 #ifdef __bg__
     //On BG/Q, we rely on BG_MAPCOMMONHEAP=1 to get shared memory.

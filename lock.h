@@ -2,6 +2,7 @@
 #define _LOCK_H_
 #include <stdio.h>
 #include <stdlib.h>
+#include "error.h"
 
 
 //AWF - I made my own primitives for several reasons:
@@ -105,9 +106,7 @@ static void LOCK_INIT(lock_t* __restrict l) __attribute__((unused));
 
 static void LOCK_INIT(lock_t* __restrict l) {
     if(Kernel_L2AtomicsAllocate(l, sizeof(lock_t))) {
-        printf("ERROR Unable to allocate L2 atomic memory\n");
-        fflush(stdout);
-        abort();
+        ERROR("Unable to allocate L2 atomic memory");
     }
 
     L2_LockInit(l);
