@@ -453,7 +453,7 @@ int HMPI_Init(int *argc, char ***argv)
     HMPI_STATS_INIT();
 
 #ifdef __bg__
-    print_bgq_mem();
+    //print_bgq_mem();
 #endif
 
 #ifdef __bg__
@@ -566,7 +566,8 @@ int HMPI_Finalize(void)
     HMPI_STATS_COUNTER_SHOW(recv_anysrc);
 
 #ifdef ENABLE_OPI
-    OPI_Finalize();
+    //Doesn't do anything now.
+//    OPI_Finalize();
 #endif
 
     //Seems to prevent a segfault in MPI_Finalize()

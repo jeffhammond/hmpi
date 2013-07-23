@@ -12,6 +12,7 @@ static void __ERROR(const char* file, const int line, const char* fmt, ...)
     fprintf(stderr, "ERROR %s:%d ", file, line);
     vfprintf(stderr, fmt, args);
     va_end(args);
+    fflush(stderr);
     abort();
 }
 

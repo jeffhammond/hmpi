@@ -15,7 +15,6 @@
 //#include "profile2.h"
 
 
-//#define USE_MMAP 1
 #define USE_PSHM 1
 //#define USE_SYSV 1
 
@@ -62,117 +61,34 @@ static struct sm_region* sm_region = NULL;
 static mspace sm_mspace = NULL;
 
 
-#define TEMP_SIZE (1024 * 1024 * 2L) //Temporary mspace capacity
+#define TEMP_SIZE (1024 * 1024 * 16L) //Temporary mspace capacity
 
 //Keep this around for use with valgrind.
 //static char sm_temp[TEMP_SIZE] = {0};
 
 
-#ifdef USE_MMAP
-//MMAP and SYSV have different space capabilities.
-
-#define MSPACE_SIZE (1024L * 1024L * 896) //Use with file in /tmp
-//#define MSPACE_SIZE (1024L * 1024L * 1536) //Use with file in /p/lscratchX
-#define DEFAULT_SIZE (MSPACE_SIZE * 16L + (long)getpagesize()) //Default shared heap size
-
-//On the LC machines, /tmp is a tmpfs, limiting us to half of the free memory.
-static char* sm_filename = "/tmp/friedley/sm_file";
-//static char sm_filename[256] = {0};
-
-
-static void __sm_destroy(void)
-{
-    unlink(sm_filename);
-}
-
-
-static int __sm_init_region(void)
-{
-    int fd;
-    int do_init = 1; //Whether to do initialization
-    //size_t size;
-
-    //Find a filename.
-#if 0
-    char* tmp = getenv("SM_FILE");
-    if(tmp == NULL) {
-        tmp = getenv("TMP");
-        if(tmp == NULL) {
-            printf("ERROR neither SM_FILE nor TMP are set\n");
-            exit(-1);
-        }
-
-        snprintf(sm_filename, 255, "%s/sm_file", tmp);
-    } else {
-        strncpy(sm_filename, tmp, 255);
-    }
-#endif
-
-    //printf("SM filename %s\n", sm_filename);
-    //fflush(stdout);
-
-    //Find the SM region size.
-#if 0
-    tmp = getenv("SM_SIZE");
-    if(tmp == NULL) {
-        size = DEFAULT_SIZE;
-    } else {
-        size = atol(tmp) * 1024L * 1024L;
-    }
-#endif
-
-#if 0
-    char host[128] = {0};
-    if(gethostname(host, 127) != 0) {
-        abort();
-    }
-
-    sprintf(sm_filename, "/p/lscratchd/friedley/sm.%s\n", host);
-#endif
-
-    //printf("SM size %lx\n", size);
-    //fflush(stdout);
-
-    //Open the SM region file.
-    fd = open(sm_filename, O_RDWR|O_CREAT|O_EXCL|O_TRUNC, S_IRUSR|S_IWUSR); 
-    if(fd == -1) {
-        do_init = 0;
-
-        if(errno == EEXIST) {
-            //Another process has already created the file.
-            fd = open(sm_filename, O_RDWR, S_IRUSR|S_IWUSR);
-        } 
-        
-        if(fd == -1) {
-            abort();
-        }
-    }
-
-    if(ftruncate(fd, DEFAULT_SIZE) == -1) {
-        abort();
-    }
-
-    //Map the SM region.
-    sm_region = mmap(NULL, DEFAULT_SIZE, PROT_READ|PROT_WRITE, MAP_SHARED, fd, 0);
-    if(sm_region == (void*)MAP_FAILED) {
-        abort();
-    }
-
-    close(fd);
-
-    return do_init;
-}
-
-#endif
 
 #ifdef USE_PSHM
 
+//Set up new default parameters, and use env vars to override.
 #ifdef __bg__
-#define MSPACE_SIZE (1024L * 1024L * 512L * 1L)
-#define DEFAULT_SIZE (MSPACE_SIZE * 16L + (long)getpagesize())
+
+//Total shared memory space to mmap.
+#define DEFAULT_TOTAL_SIZE ((1024L*1024L*1024L * 12))
+
+//How many pieces the available SM memory should be divided into.
+// Each rank/process will get one piece.
+#define DEFAULT_RANK_DIVIDER (64)
+
 #else
-#define MSPACE_SIZE (1024L * 1024L * 1024L * 16L)
-#define DEFAULT_SIZE (MSPACE_SIZE * 16L + (long)getpagesize())
+
+//Total shared memory space to mmap.
+#define DEFAULT_TOTAL_SIZE ((1024L*1024L*1024L * 256))
+
+//How many pieces the available SM memory should be divided into.
+// Each rank/process will get one piece.
+#define DEFAULT_RANK_DIVIDER (16)
+
 #endif
 
 static char* sm_filename = "hmpismfile";
@@ -184,7 +100,7 @@ static void __sm_destroy(void)
 }
 
 
-static int __sm_init_region(void)
+static int __sm_init_region(size_t size)
 {
     int do_init = 1; //Whether to do initialization
 
@@ -199,20 +115,24 @@ static int __sm_init_region(void)
         } 
         
         if(fd == -1) {
-            //perror("shm_open");
+            perror("shm_open");
+            fflush(stderr);
             abort();
         }
     }
 
 
-
-    if(ftruncate(fd, DEFAULT_SIZE) == -1) {
+    if(ftruncate(fd, size) == -1) {
+        perror("ftruncate");
+        fflush(stderr);
         abort();
     }
 
     //Map the SM region.
-    sm_region = mmap(NULL, DEFAULT_SIZE, PROT_READ|PROT_WRITE, MAP_SHARED, fd, 0);
+    sm_region = mmap(NULL, size, PROT_READ|PROT_WRITE, MAP_SHARED, fd, 0);
     if(sm_region == (void*)MAP_FAILED) {
+        perror("mmap");
+        fflush(stderr);
         abort();
     }
 
@@ -224,6 +144,7 @@ static int __sm_init_region(void)
 #endif
 
 #ifdef USE_SYSV
+#error "not updated"
 //MMAP and SYSV have different space capabilities.
 //LC machines are configured for 12gb of sysv memory (768mb for 16 ranks)
 #define MSPACE_SIZE (1024L * 1024L * 700L)
@@ -286,37 +207,80 @@ static int __sm_init_region(void)
 
 static void __attribute__((noinline)) __sm_init(void)
 {
+    char* tmp;
+    size_t total_size;
+    size_t rank_divider;
+    size_t pagesize = (size_t)getpagesize();
     int do_init; //Whether to do initialization
 
     //Set up a temporary area on the stack for malloc() calls during our
     // initialization process.
 
-    void* temp_space = alloca(TEMP_SIZE);
-    sm_region = create_mspace_with_base(temp_space, TEMP_SIZE, 0);
+    uint64_t* temp_space = alloca(TEMP_SIZE);
+    sm_mspace = create_mspace_with_base(temp_space, TEMP_SIZE, 0);
 
     //Keep this for use with valgrind.
-    //sm_region = create_mspace_with_base(sm_temp, TEMP_SIZE, 0);
-    //sm_region->brk = (intptr_t)sm_region + sizeof(struct sm_region);
+    //sm_mspace = create_mspace_with_base(sm_temp, TEMP_SIZE, 0);
 
-    sm_region->limit = (intptr_t)sm_region + TEMP_SIZE;
+    //sm_region->limit = (intptr_t)sm_region + TEMP_SIZE;
 
 
-    //Find the SM region size.
-    //SM_SIZE environment variable is size per proc in megabytes.
-    //We assume 16 procs per node.
-#if 0
-    char* tmp = getenv("SM_SIZE");
+    //Query environment variables to figure out how much size is available.
+    //The value of SM_SIZE is always expected to be megabytes.
+    tmp = getenv("SM_SIZE");
     if(tmp == NULL) {
-        size = DEFAULT_SIZE;
+        //On BGQ, the size var MUST be set.
+        //If it is not, there probably is only enough shared memory for the
+        // system reservation.  Can't assume there's usable SM, so abort.
+#ifdef __bg__
+        ERROR("SM_SIZE env var not set (make sure BG_SHAREDMEMSIZE is set too");
+#else
+        total_size = DEFAULT_TOTAL_SIZE;
+#endif
     } else {
-        size = atol(tmp) * 1024L * 1024L * 16 + getpagesize();
+        total_size = atol(tmp) * 1024L * 1024L;
+    }
+
+    //SM_RANKS and DEFAULT_RANK_DIVIDER indicate how many regions to break the
+    //SM region into -- one region per rank/process.
+    tmp = getenv("SM_RANKS");
+    if(tmp == NULL) {
+        rank_divider = DEFAULT_RANK_DIVIDER;
+    } else {
+        rank_divider = atol(tmp);
+    }
+
+
+    //TESTING: output /proc/maps info.
+//#ifndef __bg__
+#if 0
+    {
+        char line[1024];
+        char map_path[256];
+        FILE* map_fd;
+        int pid = getpid();
+
+        sprintf(map_path, "/proc/%d/maps", pid);
+        map_fd = fopen(map_path, "r");
+        if(map_fd == NULL) {
+            perror("fopen /proc/pid/maps");
+            fflush(stdout);
+            abort();
+        }
+
+        while(fgets(line, 1024, map_fd) != NULL) {
+            printf("%d: %s", pid, line);
+        }
+
+        fclose(map_fd);
     }
 #endif
 
+    //offset is the size taken by sm_region at the beginning of the space.
+    size_t offset = ((sizeof(struct sm_region) / pagesize) + 1) * pagesize;
 
     //Set up the SM region using one of mmap/sysv/pshm
-    do_init = __sm_init_region();
-
+    do_init = __sm_init_region(total_size + offset);
 
 
     //Only the process creating the file should initialize.
@@ -324,10 +288,7 @@ static void __attribute__((noinline)) __sm_init(void)
         //Only the initializing process registers the shutdown handler.
         atexit(__sm_destroy);
 
-        sm_region->limit = (intptr_t)sm_region + DEFAULT_SIZE;
-
-        int pagesize = getpagesize();
-        int offset = ((sizeof(struct sm_region) / pagesize) + 1) * pagesize;
+        sm_region->limit = (intptr_t)sm_region + total_size + offset;
 
 #ifdef __bg__
         //Ensure everything above is set before brk below:
@@ -336,48 +297,52 @@ static void __attribute__((noinline)) __sm_init(void)
 #endif
 
         sm_region->brk = (intptr_t)sm_region + offset;
-        //printf("SM region %p default size 0x%lx mspace size 0x%lx limit 0x%lx brk 0x%lx\n",
-        //        sm_region, DEFAULT_SIZE, MSPACE_SIZE, sm_region->limit, sm_region->brk);
-        //fflush(stdout);
     } else {
         //Wait for another process to finish initialization.
         void* volatile * brk_ptr = (void**)&sm_region->brk;
 
         while(*brk_ptr == NULL);
 
-        //Ensure none of the following loads occur during/before the above spin loop.
+        //Ensure none of the following loads occur during/before the spin loop.
 #ifdef __bg__
         __lwsync();
 #endif
+    }
 
-        //Check that this process' region is mapped to the same address as the
-        //process that initialized the region.
-        if(sm_region->limit != (intptr_t)sm_region + DEFAULT_SIZE) {
-            abort();
-        }
+    //Check that this process' region is mapped to the same address as the
+    //process that initialized the region.
+    if(sm_region->limit != (intptr_t)sm_region + total_size + offset) {
+        ERROR("sm_region limit %lx doesn't match computed limit %lx",
+                sm_region->limit, (intptr_t)sm_region + total_size + offset);
     }
 
     sm_lower = sm_region;
     sm_upper = (void*)sm_region->limit;
 
     //Create my own mspace.
-    //void* base = sm_morecore(MSPACE_SIZE);
-    void* base = (void*)__sync_fetch_and_add(&sm_region->brk, MSPACE_SIZE);
-    //if(base == (void*)-1) {
+    size_t local_size = total_size / rank_divider;
+
+    //void* base = sm_morecore(local_size);
+    void* base = (void*)__sync_fetch_and_add(&sm_region->brk, local_size);
     if(base < sm_lower || base >= sm_upper) {
-        abort();
+        ERROR("Got local base %p outside of range %p -> %p",
+                base, sm_lower, sm_upper);
     }
 
     //Clearing the memory seems to avoid some bugs and
     // forces out subtle OOM issues here instead of later.
-    //memset(base, 0, MSPACE_SIZE);
+    //memset(base, 0, local_size);
+
+    //WARNING("%d sm_region %p base %p total_size %lx local_size %lx\n",
+    //        getpid(), sm_region, base, total_size, local_size);
+    //fflush(stderr);
 
     //Careful to subtract off space for the local data.
-    sm_mspace = create_mspace_with_base(base,
-            MSPACE_SIZE, 1);
+    sm_mspace = create_mspace_with_base(base, local_size, 1);
 
     //This should go last so it can use proper malloc and friends.
     //PROFILE_INIT();
+
 }
 
 
@@ -444,7 +409,7 @@ int is_sm_buf(void* mem) {
 
 
 void* malloc(size_t bytes) {
-    if(unlikely(sm_region == NULL)) __sm_init();
+    if(unlikely(sm_mspace == NULL)) __sm_init();
     //PROFILE_START(malloc);
 
     void* ptr = mspace_malloc(sm_mspace, bytes);
@@ -462,14 +427,14 @@ void free(void* mem) {
         return;
     }
 
-    if(unlikely(sm_region == NULL)) return;
+    if(unlikely(sm_mspace == NULL)) return;
 
     mspace_free(sm_mspace, mem);
     //PROFILE_STOP(free);
 }
 
 void* realloc(void* mem, size_t newsize) {
-    if(unlikely(sm_region == NULL)) __sm_init();
+    if(unlikely(sm_mspace == NULL)) __sm_init();
 
     //PROFILE_START(realloc);
     void* ptr = mspace_realloc(sm_mspace, mem, newsize);
@@ -479,7 +444,7 @@ void* realloc(void* mem, size_t newsize) {
 }
 
 void* calloc(size_t n_elements, size_t elem_size) {
-    if(unlikely(sm_region == NULL)) __sm_init();
+    if(unlikely(sm_mspace == NULL)) __sm_init();
 
     //PROFILE_START(calloc);
     void* ptr = mspace_calloc(sm_mspace, n_elements, elem_size);
@@ -489,7 +454,7 @@ void* calloc(size_t n_elements, size_t elem_size) {
 }
 
 void* memalign(size_t alignment, size_t bytes) {
-    if(unlikely(sm_region == NULL)) __sm_init();
+    if(unlikely(sm_mspace == NULL)) __sm_init();
 
     //PROFILE_START(memalign);
     void* ptr = mspace_memalign(sm_mspace, alignment, bytes);

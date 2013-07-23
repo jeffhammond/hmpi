@@ -30,8 +30,8 @@ FULL_PROFILE_TIMER_EXTERN(OPI_Take);
 
 #ifdef __bg__
 //BGQ needs sender side pools.. weird crashes occur otherwise.
-//#define RECVER_POOL 1
-#define SENDER_POOL 2
+#define RECVER_POOL 1
+//#define SENDER_POOL 2
 #else
 //#define SENDER_POOL 2
 #define RECVER_POOL 1
@@ -39,7 +39,7 @@ FULL_PROFILE_TIMER_EXTERN(OPI_Take);
 
 //BGQ L2 atomics should be better, but cause segfaults?
 //#define USE_BGQ_LOCKS 1
-#define USE_LOCK_FREE 2
+//#define USE_LOCK_FREE 2
 
 #define ALIGNMENT 4096
 
@@ -88,13 +88,6 @@ typedef struct mpool_t {
 static mpool_t* g_mpool = NULL;
 
 
-//Reuse the shared lock Q node from the P2P code.
-//Have to make sure not to use the Q node twice -- here, we only use it in
-// alloc and free, and those aren't called from locked P2P code.
-#ifndef __bg__
-extern mcs_qnode_t* g_lock_q;
-#endif
-
 
 void OPI_Init(void)
 {
@@ -118,6 +111,9 @@ void OPI_Init(void)
 
 void OPI_Finalize(void)
 {
+    //On BGQ, apparently a free call generates a bcast.. wtf?
+    // It was causing hangs and observed with STAT in miniMD
+#if 0
     opi_hdr_t* cur;
 
     while(g_mpool->head != NULL) {
@@ -128,6 +124,7 @@ void OPI_Finalize(void)
 
     free(g_mpool);
     g_mpool = NULL;
+#endif
 }
 
 
@@ -197,9 +194,6 @@ int OPI_Alloc(void** ptr, size_t length)
             mp->buf_count--;
 #endif
             *ptr = HDR_TO_PTR(cur);
-            if(*ptr == NULL) {
-                ERROR("OPI Alloc giving back NULL size %lu\n", length);
-            }
             return MPI_SUCCESS;
         }
     }
@@ -314,7 +308,7 @@ int OPI_Free(void** ptr)
 #endif //__bg__
 #endif
 
-    *ptr = NULL;
+    //*ptr = NULL;
     FULL_PROFILE_STOP(OPI_Free);
     FULL_PROFILE_START(MPI_Other);
     return MPI_SUCCESS;
