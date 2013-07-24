@@ -210,7 +210,9 @@ int OPI_Alloc(void** ptr, size_t length)
     opi_hdr_t* hdr = (opi_hdr_t*)memalign(ALIGNMENT, length + ALIGNMENT);
 
     hdr->length = length;
+#ifdef SENDER_POOL
     hdr->mpool = mp;
+#endif
 
 #ifdef MPOOL_CHECK
     hdr->magic = MAGIC_VAL;

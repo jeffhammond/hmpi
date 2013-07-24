@@ -61,11 +61,80 @@ static struct sm_region* sm_region = NULL;
 static mspace sm_mspace = NULL;
 
 
-#define TEMP_SIZE (1024 * 1024 * 16L) //Temporary mspace capacity
+#define TEMP_SIZE (1024 * 1024 * 4L) //Temporary mspace capacity
 
 //Keep this around for use with valgrind.
 //static char sm_temp[TEMP_SIZE] = {0};
 
+
+#define USE_PROC_MAPS 1
+
+#ifdef USE_PROC_MAPS
+//Some systems randomize the address returned by mmap(), so it won't be the
+// same on all processes.  Instead, parse /proc/<pid>/maps to find a hole and
+// hope all processes pick the same hole.
+
+//$ cat /proc/1180/maps
+//00400000-005c2000 r-xp 00000000 08:03 76344697                           /usr/bin/vim
+//007c1000-007d7000 rw-p 001c1000 08:03 76344697                           /usr/bin/vim
+//007d7000-008e9000 rw-p 00000000 00:00 0                                  [heap]
+//2aaaaaaab000-2aaaaaacb000 r-xp 00000000 08:03 36945932                   /lib64/ld-2.12.so
+//2aaaaaacb000-2aaaaaacc000 r-xp 00000000 00:00 0                          [vdso]
+//2aaaaaacc000-2aaaaaacd000 rw-p 00000000 00:00 0 
+//2aaaaacca000-2aaaaaccb000 r--p 0001f000 08:03 36945932                   /lib64/ld-2.12.so
+//2aaaaaccb000-2aaaaaccc000 rw-p 00020000 08:03 36945932                   /lib64/ld-2.12.so
+
+//Find an address to map a region of size bytes.
+//If none is found or some error occurs, aborts.
+void* find_map_address(size_t size)
+{
+    char line[1024];
+    char filename[64];
+    FILE* map_fd;
+    uintptr_t low_addr = 0;
+    uintptr_t high_addr= 0;
+    uintptr_t prev_addr = 0;
+
+    sprintf(filename, "/proc/%d/maps", getpid());
+    map_fd = fopen(filename, "r");
+    if(map_fd == NULL) {
+        perror("fopen /proc/pid/maps");
+        abort();
+    }
+
+    while(fgets(line, 1024, map_fd) != NULL) {
+        if(sscanf(line, "%lx-%lx", &low_addr, &high_addr)) {
+            //printf("%d low %lx high %lx\n", getpid(), low_addr, high_addr);
+
+            if(low_addr - prev_addr >= size) {
+                //double dsize = (double)low_addr - (double)prev_addr;
+                //dsize = dsize / (1024 * 1024 * 1024);
+                //printf("found opening %lx %lx %lf gb\n", prev_addr, low_addr, dsize);
+                return (void*)prev_addr;
+            }
+        }
+
+        prev_addr = high_addr;
+    }
+#if 0
+    while(fscanf(map_fd, "%lx-%lx %*s %*s %*s %*s %*s\n",
+                &low_addr, &high_addr) ||
+            fscanf(map_fd, "%lx-%lx %*s %*s %*s %*s\n",
+                &low_addr, &high_addr) ||
+            ) {
+        printf("%d low %lx high %lx\n", getpid(), low_addr, high_addr);
+        if(low_addr - prev_addr >= size) {
+            printf("found opening %lx %lx\n", prev_addr, low_addr);
+            //return (void*)low_addr;
+        }
+
+        prev_addr = high_addr;
+    }
+#endif
+    ERROR("Did not find large enough whole in mapping for SM region");
+    return NULL;
+}
+#endif
 
 
 #ifdef USE_PSHM
@@ -83,7 +152,7 @@ static mspace sm_mspace = NULL;
 #else
 
 //Total shared memory space to mmap.
-#define DEFAULT_TOTAL_SIZE ((1024L*1024L*1024L * 256))
+#define DEFAULT_TOTAL_SIZE ((1024L*1024L*1024L * 512))
 
 //How many pieces the available SM memory should be divided into.
 // Each rank/process will get one piece.
@@ -100,7 +169,7 @@ static void __sm_destroy(void)
 }
 
 
-static int __sm_init_region(size_t size)
+static int __sm_init_region(void* map_addr, size_t size)
 {
     int do_init = 1; //Whether to do initialization
 
@@ -128,8 +197,13 @@ static int __sm_init_region(size_t size)
         abort();
     }
 
+    int flags = MAP_SHARED;
+    if(map_addr != NULL) {
+        flags |= MAP_FIXED;
+    }
+
     //Map the SM region.
-    sm_region = mmap(NULL, size, PROT_READ|PROT_WRITE, MAP_SHARED, fd, 0);
+    sm_region = mmap(map_addr, size, PROT_READ|PROT_WRITE, flags, fd, 0);
     if(sm_region == (void*)MAP_FAILED) {
         perror("mmap");
         fflush(stderr);
@@ -279,8 +353,14 @@ static void __attribute__((noinline)) __sm_init(void)
     //offset is the size taken by sm_region at the beginning of the space.
     size_t offset = ((sizeof(struct sm_region) / pagesize) + 1) * pagesize;
 
+#ifdef USE_PROC_MAPS
+    void* map_addr = find_map_address(total_size + offset);
+#else
+    void* map_addr = NULL;
+#endif
+
     //Set up the SM region using one of mmap/sysv/pshm
-    do_init = __sm_init_region(total_size + offset);
+    do_init = __sm_init_region(map_addr, total_size + offset);
 
 
     //Only the process creating the file should initialize.
@@ -333,8 +413,8 @@ static void __attribute__((noinline)) __sm_init(void)
     // forces out subtle OOM issues here instead of later.
     //memset(base, 0, local_size);
 
-    //WARNING("%d sm_region %p base %p total_size %lx local_size %lx\n",
-    //        getpid(), sm_region, base, total_size, local_size);
+    WARNING("%d sm_region %p base %p total_size %lx local_size %lx\n",
+            getpid(), sm_region, base, total_size, local_size);
     //fflush(stderr);
 
     //Careful to subtract off space for the local data.

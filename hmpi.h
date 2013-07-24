@@ -461,8 +461,18 @@ int OPI_Take(void** ptr, int count, MPI_Datatype datatype, int rank, int tag, HM
 
 #define MPI_Barrier(c) MPI_Barrier((c)->comm)
 
+//#define MPI_Node_barrier(c) MPI_Barrier((c)->node_comm)
+
+static inline int MPI_Node_bcast(void* buffer, int count, MPI_Datatype datatype, int root, MPI_Comm c)
+{
+    return MPI_Bcast(buffer, count, datatype, root, (c)->node_comm);
+}
+
 #define MPI_Bcast(buffer, count, datatype, root, c) \
     MPI_Bcast(buffer, count, datatype, root, (c)->comm)
+
+//#define MPI_Node_bcast(buffer, count, datatype, root, c) \
+//    MPI_Bcast(buffer, count, datatype, root, (c)->node_comm)
 
 #define MPI_Reduce(sendbuf, recvbuf, count, datatype, op, root, c) \
     MPI_Reduce(sendbuf, recvbuf, count, datatype, op, root, (c)->comm)
