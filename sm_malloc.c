@@ -67,7 +67,7 @@ static mspace sm_mspace = NULL;
 //static char sm_temp[TEMP_SIZE] = {0};
 
 
-#define USE_PROC_MAPS 1
+//#define USE_PROC_MAPS 1
 
 #ifdef USE_PROC_MAPS
 //Some systems randomize the address returned by mmap(), so it won't be the
@@ -131,7 +131,7 @@ void* find_map_address(size_t size)
         prev_addr = high_addr;
     }
 #endif
-    ERROR("Did not find large enough whole in mapping for SM region");
+    ERROR("Did not find large enough hole in mapping for SM region");
     return NULL;
 }
 #endif
@@ -413,9 +413,8 @@ static void __attribute__((noinline)) __sm_init(void)
     // forces out subtle OOM issues here instead of later.
     //memset(base, 0, local_size);
 
-    WARNING("%d sm_region %p base %p total_size %lx local_size %lx\n",
-            getpid(), sm_region, base, total_size, local_size);
-    //fflush(stderr);
+    //WARNING("%d sm_region %p base %p total_size %lx local_size %lx\n",
+    //        getpid(), sm_region, base, total_size, local_size);
 
     //Careful to subtract off space for the local data.
     sm_mspace = create_mspace_with_base(base, local_size, 1);

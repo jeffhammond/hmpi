@@ -1311,6 +1311,7 @@ int HMPI_Waitall(int count, HMPI_Request *requests, HMPI_Status *statuses)
             if(get_reqstat(req) != HMPI_REQ_COMPLETE) {
                 //For some types, we can make progress and maybe complete the
                 // request, so try doing that.  Other types, just continue.
+#if 0
                 switch(req->type) {
                 case HMPI_SEND:
                     if(HMPI_Progress_send(req) != HMPI_REQ_COMPLETE) {
@@ -1325,8 +1326,8 @@ int HMPI_Waitall(int count, HMPI_Request *requests, HMPI_Status *statuses)
                 default: //(HMPI_RECV|HMPI_RECV_ANY_SOURCE|OPI_GIVE|OPI_TAKE)
                     continue;
                 }
+#endif
 
-#if 0
                 if(req->type == HMPI_SEND) {
                     if(HMPI_Progress_send(req) != HMPI_REQ_COMPLETE) {
                         continue;
@@ -1346,7 +1347,6 @@ int HMPI_Waitall(int count, HMPI_Request *requests, HMPI_Status *statuses)
                     //BGQ_NOP;
                     continue;
                 }
-#endif
             }
 
             //req is complete but status not handled
