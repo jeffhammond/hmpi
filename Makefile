@@ -59,7 +59,7 @@ all: $(SRCS:%.c=%.o) sm_malloc.o
 	rm $(SRCS:%.c=%.o)
 
 #bgq: CFLAGS=-O3 -qhot=novector -qsimd=auto $(INCLUDE) -qinline=auto:level=5 -qassert=refalign -qlibansi -qlibmpi -qipa -qhot  -qprefetch=aggressive
-bgq: CC=mpixlc_r
+bgq: CC=mpixlc
 bgq: SRCS+=sm_malloc.c
 bgq: CFLAGS=-Os -qhot=novector -qsimd=auto -qlibansi -qlibmpi $(INCLUDE)
 bgq: $(SRCS:%.c=%.o) sm_malloc.o
