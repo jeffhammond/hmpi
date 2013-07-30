@@ -40,36 +40,10 @@
 #include <sys/stat.h>
 #include <fcntl.h>
 #include "error.h"
-//#include "hmpi.h"
-//#include "profile2.h"
 
 
 #define USE_PSHM 1
 //#define USE_SYSV 1
-
-
-#if 0
-PROFILE_DECLARE();
-PROFILE_TIMER(malloc);
-PROFILE_TIMER(calloc);
-PROFILE_TIMER(free);
-PROFILE_TIMER(realloc);
-PROFILE_TIMER(memalign);
-PROFILE_TIMER(mmap);
-
-void sm_profile_show(void)
-{
-#if 0
-    PROFILE_TIMER_SHOW(malloc);
-    PROFILE_TIMER_SHOW(calloc);
-    PROFILE_TIMER_SHOW(free);
-    PROFILE_TIMER_SHOW(realloc);
-    PROFILE_TIMER_SHOW(memalign);
-    PROFILE_TIMER_SHOW(mmap);
-#endif
-}
-#endif
-
 
 
 #define unlikely(x)     __builtin_expect((x),0)
@@ -145,21 +119,7 @@ void* find_map_address(size_t size)
 
         prev_addr = high_addr;
     }
-#if 0
-    while(fscanf(map_fd, "%lx-%lx %*s %*s %*s %*s %*s\n",
-                &low_addr, &high_addr) ||
-            fscanf(map_fd, "%lx-%lx %*s %*s %*s %*s\n",
-                &low_addr, &high_addr) ||
-            ) {
-        printf("%d low %lx high %lx\n", getpid(), low_addr, high_addr);
-        if(low_addr - prev_addr >= size) {
-            printf("found opening %lx %lx\n", prev_addr, low_addr);
-            //return (void*)low_addr;
-        }
 
-        prev_addr = high_addr;
-    }
-#endif
     ERROR("Did not find large enough hole in mapping for SM region");
     return NULL;
 }
@@ -354,31 +314,6 @@ static void __attribute__((noinline)) __sm_init(void)
     }
 
 
-    //TESTING: output /proc/maps info.
-//#ifndef __bg__
-#if 0
-    {
-        char line[1024];
-        char map_path[256];
-        FILE* map_fd;
-        int pid = getpid();
-
-        sprintf(map_path, "/proc/%d/maps", pid);
-        map_fd = fopen(map_path, "r");
-        if(map_fd == NULL) {
-            perror("fopen /proc/pid/maps");
-            fflush(stdout);
-            abort();
-        }
-
-        while(fgets(line, 1024, map_fd) != NULL) {
-            printf("%d: %s", pid, line);
-        }
-
-        fclose(map_fd);
-    }
-#endif
-
     //offset is the size taken by sm_region at the beginning of the space.
     size_t offset = ((sizeof(struct sm_region) / pagesize) + 1) * pagesize;
 
@@ -447,10 +382,6 @@ static void __attribute__((noinline)) __sm_init(void)
 
     //Careful to subtract off space for the local data.
     sm_mspace = create_mspace_with_base(base, local_size, 1);
-
-    //This should go last so it can use proper malloc and friends.
-    //PROFILE_INIT();
-
 }
 
 
@@ -478,9 +409,7 @@ void* sm_morecore(intptr_t increment)
 #if 0
 void* sm_mmap(void* addr, size_t len, int prot, int flags, int fildes, off_t off)
 {
-    //PROFILE_START(mmap);
     void* ptr = sm_morecore(len);
-    //PROFILE_STOP(mmap);
     return ptr;
 }
 
@@ -518,19 +447,11 @@ int is_sm_buf(void* mem) {
 
 void* malloc(size_t bytes) {
     if(unlikely(sm_mspace == NULL)) __sm_init();
-    //PROFILE_START(malloc);
 
-    void* ptr = mspace_malloc(sm_mspace, bytes);
-
-    //PROFILE_STOP(malloc);
-    return ptr;
+    return mspace_malloc(sm_mspace, bytes);
 }
 
 void free(void* mem) {
-    //if(unlikely(sm_region == NULL)) __sm_init();
-
-    //PROFILE_START(free);
-
     if(mem < sm_lower || mem >= sm_upper) {
         return;
     }
@@ -538,36 +459,23 @@ void free(void* mem) {
     if(unlikely(sm_mspace == NULL)) return;
 
     mspace_free(sm_mspace, mem);
-    //PROFILE_STOP(free);
 }
 
 void* realloc(void* mem, size_t newsize) {
     if(unlikely(sm_mspace == NULL)) __sm_init();
 
-    //PROFILE_START(realloc);
-    void* ptr = mspace_realloc(sm_mspace, mem, newsize);
-    //PROFILE_STOP(realloc);
-
-    return ptr;
+    return mspace_realloc(sm_mspace, mem, newsize);
 }
 
 void* calloc(size_t n_elements, size_t elem_size) {
     if(unlikely(sm_mspace == NULL)) __sm_init();
 
-    //PROFILE_START(calloc);
-    void* ptr = mspace_calloc(sm_mspace, n_elements, elem_size);
-    //PROFILE_STOP(calloc);
-
-    return ptr;
+    return mspace_calloc(sm_mspace, n_elements, elem_size);
 }
 
 void* memalign(size_t alignment, size_t bytes) {
     if(unlikely(sm_mspace == NULL)) __sm_init();
 
-    //PROFILE_START(memalign);
-    void* ptr = mspace_memalign(sm_mspace, alignment, bytes);
-    //PROFILE_STOP(memalign);
-
-    return ptr;
+    return mspace_memalign(sm_mspace, alignment, bytes);
 }
 
