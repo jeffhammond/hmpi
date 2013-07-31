@@ -231,10 +231,7 @@ HMPI_Request acquire_req(void)
     if(item == NULL) {
         HMPI_Request req = (HMPI_Request)MALLOC(HMPI_Request_info, 1);
         req->match = 0;
-        //BGQ is now using SM malloc, use the same non-shared buf tracking.
-//#ifndef __bg__
         req->do_free = DO_NOT_FREE;
-//#endif
         return req;
     } else {
         g_free_reqs = item->next;
@@ -248,31 +245,11 @@ static inline void release_req(HMPI_Request req)
     //Return a req to the pool -- once allocated, a req is never freed.
     HMPI_Item* item = (HMPI_Item*)req;
 
-#if 0
-#ifndef __bg__
-    if(req->do_free == DO_FREE) {
-        free(req->buf);
-        req->do_free = DO_NOT_FREE;
-    }
-#ifdef ENABLE_OPI
-    else if(req->do_free == DO_OPI_FREE) {
-        OPI_Free(&req->buf);
-        req->do_free = DO_NOT_FREE;
-    }
-#endif
-#endif //ifndef __bg__
-#endif
-
     switch(req->do_free) {
-
-//#ifndef __bg__
-        //BGQ has MAP_COMMONHEAP, all memory is shared.
-        //Nope, not any more -- do this check on BGQ too.
         case DO_FREE:
             free(req->buf);
             req->do_free = DO_NOT_FREE;
             break;
-//#endif
 #ifdef ENABLE_OPI
         case DO_OPI_FREE:
             OPI_Free(&req->buf);
@@ -546,7 +523,7 @@ static inline HMPI_Request match_recv_any(HMPI_Request_list* req_list, HMPI_Requ
 }
 
 
-static inline int match_probe(int source, int tag, int context, HMPI_Request* send_req) {
+static /*inline*/ int match_probe(int source, int tag, int context, HMPI_Request* send_req) {
     HMPI_Item* cur;
     HMPI_Request req;
     HMPI_Request_list* req_list = &g_tl_send_reqs;
@@ -873,7 +850,8 @@ static int HMPI_Progress_mpi(HMPI_Request req)
             req->size = count * type_size;
         }
 
-        update_reqstat(req, HMPI_REQ_COMPLETE);
+        //Not necessary: req will always be completed and free'd upon return.
+        //update_reqstat(req, HMPI_REQ_COMPLETE);
         return HMPI_REQ_COMPLETE;
     }
 
@@ -1059,55 +1037,6 @@ int HMPI_Test(HMPI_Request *request, int *flag, HMPI_Status *status)
     //HMPI req state is chosen to match MPI test flags.
     *flag = HMPI_Test_internal(request, status);
 
-#if 0
-    if(unlikely(req == HMPI_REQUEST_NULL)) {
-        if(status != HMPI_STATUS_IGNORE) {
-            //Make Get_count return 0 count
-            status->size = 0;
-        }
-
-        *flag = 1;
-        return MPI_SUCCESS;
-    } else if(get_reqstat(req) != HMPI_REQ_COMPLETE) {
-        int f;
-
-        HMPI_Progress(&g_recv_reqs_head, &g_tl_send_reqs, g_tl_my_send_reqs);
-
-        if(req->type == HMPI_SEND) {
-            f = HMPI_Progress_send(req);
-        //OPI GIVE/TAKE will need an entry here; just check its stat
-#ifdef ENABLE_OPI
-        } else if(req->type == HMPI_RECV || req->type == OPI_GIVE || req->type == OPI_TAKE) {
-#else
-        } else if(req->type == HMPI_RECV) {
-#endif
-            f = get_reqstat(req);
-        } else if(req->type == MPI_SEND || req->type == MPI_RECV) {
-            f = HMPI_Progress_mpi(req);
-        } else { //req->type == HMPI_RECV_ANY_SOURCE
-            f = get_reqstat(req);
-        }
-
-        if(f != HMPI_REQ_COMPLETE) {
-            *flag = 0;
-            FULL_PROFILE_STOP(MPI_Test);
-            FULL_PROFILE_START(MPI_Other);
-            return MPI_SUCCESS;
-        }
-    }
-
-    if(status != HMPI_STATUS_IGNORE) {
-        status->size = req->size;
-        status->MPI_SOURCE = req->proc;
-        status->MPI_TAG = req->tag;
-        status->MPI_ERROR = MPI_SUCCESS;
-    }
-
-    release_req(req);
-    *request = HMPI_REQUEST_NULL;
-    *flag = 1;
-#endif
-
     FULL_PROFILE_STOP(MPI_Test);
     FULL_PROFILE_START(MPI_Other);
     return MPI_SUCCESS;
@@ -1145,18 +1074,6 @@ int HMPI_Testall(int count, HMPI_Request *requests, int* flag, HMPI_Status *stat
                 break;
             }
         }
-
-#if 0
-        } else if(statuses == HMPI_STATUSES_IGNORE) {
-            HMPI_Test(&requests[i], flag, HMPI_STATUS_IGNORE);
-        } else {
-            HMPI_Test(&requests[i], flag, &statuses[i]);
-        }
-
-        if(!(*flag)) {
-            break;
-        }
-#endif
     }
 
     FULL_PROFILE_STOP(MPI_Testall);
@@ -1227,6 +1144,10 @@ int HMPI_Wait(HMPI_Request *request, HMPI_Status *status)
         return MPI_SUCCESS;
     }
 
+    HMPI_Item* recv_reqs_head = &g_recv_reqs_head;
+    HMPI_Request_list* local_list = &g_tl_send_reqs;
+    HMPI_Request_list* shared_list = g_tl_my_send_reqs;
+
     if(req->type & (MPI_RECV | MPI_SEND)) {
 //        while(HMPI_Progress_mpi(req) != HMPI_REQ_COMPLETE) {
 //            HMPI_Progress(recv_reqs_head, local_list, shared_list);
@@ -1234,10 +1155,6 @@ int HMPI_Wait(HMPI_Request *request, HMPI_Status *status)
         int flag;
         MPI_Status st;
         MPI_Status* p_st = (status == HMPI_STATUS_IGNORE ? MPI_STATUS_IGNORE : &st);
-
-        HMPI_Item* recv_reqs_head = &g_recv_reqs_head;
-        HMPI_Request_list* local_list = &g_tl_send_reqs;
-        HMPI_Request_list* shared_list = g_tl_my_send_reqs;
 
         do {
             HMPI_Progress(recv_reqs_head, local_list, shared_list);
@@ -1264,9 +1181,9 @@ int HMPI_Wait(HMPI_Request *request, HMPI_Status *status)
         }
     } else {
         //Waiting for all types of local requests.
-        HMPI_Item* recv_reqs_head = &g_recv_reqs_head;
-        HMPI_Request_list* local_list = &g_tl_send_reqs;
-        HMPI_Request_list* shared_list = g_tl_my_send_reqs;
+        //HMPI_Item* recv_reqs_head = &g_recv_reqs_head;
+        //HMPI_Request_list* local_list = &g_tl_send_reqs;
+        //HMPI_Request_list* shared_list = g_tl_my_send_reqs;
 
         if(req->type == HMPI_SEND) {
             do {
@@ -1319,11 +1236,18 @@ int HMPI_Waitall(int count, HMPI_Request *requests, HMPI_Status *statuses)
     LOG_MPI_CALL("MPI_Waitall(count=%d, requests=%p, statuses=%p)",
             count, requests, statuses);
 
+    for(int i = 0; i < count; i++) {
+        HMPI_Status* p_st = (statuses == HMPI_STATUSES_IGNORE ? HMPI_STATUS_IGNORE : &statuses[i]);
+        HMPI_Wait(&requests[i], p_st);
+    }
+
+#if 0
     HMPI_Item* recv_reqs_head = &g_recv_reqs_head;
     HMPI_Request_list* local_list = &g_tl_send_reqs;
     HMPI_Request_list* shared_list = g_tl_my_send_reqs;
     int done;
 
+    //TODO - try doing a simple wait on each req in succession.
     do {
         HMPI_Progress(recv_reqs_head, local_list, shared_list);
         done = 0;
@@ -1333,47 +1257,21 @@ int HMPI_Waitall(int count, HMPI_Request *requests, HMPI_Status *statuses)
 
             if(req == HMPI_REQUEST_NULL) {
                 done += 1;
-                //BGQ_NOP;
                 continue;
             }
 
             if(get_reqstat(req) != HMPI_REQ_COMPLETE) {
                 //For some types, we can make progress and maybe complete the
                 // request, so try doing that.  Other types, just continue.
-#if 0
-                switch(req->type) {
-                case HMPI_SEND:
-                    if(HMPI_Progress_send(req) != HMPI_REQ_COMPLETE) {
-                        continue;
-                    }
-                    break;
-                case (MPI_SEND | MPI_RECV):
-                    if(!HMPI_Progress_mpi(req)) {
-                        continue;
-                    }
-                    break;
-                default: //(HMPI_RECV|HMPI_RECV_ANY_SOURCE|OPI_GIVE|OPI_TAKE)
-                    continue;
-                }
-#endif
-
                 if(req->type == HMPI_SEND) {
                     if(HMPI_Progress_send(req) != HMPI_REQ_COMPLETE) {
                         continue;
                     }
-#if 0
-                } else if(req->type & (HMPI_RECV | OPI_GIVE | OPI_TAKE)) {
-                    //If OPI isn't enabled, the constants are still present.
-                    //It doesn't cost anything to always check them here.
-                    continue;
-#endif
                 } else if(req->type & (MPI_SEND | MPI_RECV)) {
                     if(!HMPI_Progress_mpi(req)) {
-                        //BGQ_NOP;
                         continue;
                     }
                 } else {
-                    //BGQ_NOP;
                     continue;
                 }
             }
@@ -1392,7 +1290,7 @@ int HMPI_Waitall(int count, HMPI_Request *requests, HMPI_Status *statuses)
             done += 1;
         }
     } while(done < count);
-
+#endif
     FULL_PROFILE_STOP(MPI_Waitall);
     FULL_PROFILE_START(MPI_Other);
     return MPI_SUCCESS;
@@ -1435,35 +1333,10 @@ int HMPI_Waitany(int count, HMPI_Request* requests, int* index, HMPI_Status *sta
             if(get_reqstat(req) != HMPI_REQ_COMPLETE) {
                 //For some types, we can make progress and maybe complete the
                 // request, so try doing that.  Other types, just continue.
-                switch(req->type) {
-                case HMPI_SEND:
-                    if(HMPI_Progress_send(req) != HMPI_REQ_COMPLETE) {
-                        continue;
-                    }
-                    break;
-                case (MPI_SEND | MPI_RECV):
-                    if(!HMPI_Progress_mpi(req)) {
-                        continue;
-                    }
-                    break;
-                default: //(HMPI_RECV|HMPI_RECV_ANY_SOURCE|OPI_GIVE|OPI_TAKE)
-                    continue;
-                }
-
-
-#if 0
                 if(req->type == HMPI_SEND) {
                     if(HMPI_Progress_send(req) != HMPI_REQ_COMPLETE) {
                         continue;
                     }
-                //OPI GIVE/TAKE will need an entry here; just continue
-#ifdef ENABLE_OPI
-                } else if(req->type == HMPI_RECV || req->type == OPI_GIVE || req->type == OPI_TAKE) {
-#else
-                } else if(req->type == HMPI_RECV) {
-#endif
-                    continue;
-                //} else if(req->type == MPI_SEND || req->type == MPI_RECV) {
                 } else if(req->type & (MPI_SEND | MPI_RECV)) {
                     if(!HMPI_Progress_mpi(req)) {
                         continue;
@@ -1471,7 +1344,6 @@ int HMPI_Waitany(int count, HMPI_Request* requests, int* index, HMPI_Status *sta
                 } else {
                     continue;
                 }
-#endif
             }
 
             //req is complete, handle status.
@@ -1612,7 +1484,6 @@ static void HMPI_Local_isend(void* buf, int count, MPI_Datatype datatype,
 
     size_t size = (size_t)count * (size_t)type_size;
 
-    //Maybe this should be the node rank?
     req->size = size;
     req->buf = buf;
     req->proc = comm->comm_rank;
@@ -1629,13 +1500,6 @@ static void HMPI_Local_isend(void* buf, int count, MPI_Datatype datatype,
     req->csum = compute_csum((uint8_t*)buf, size);
 #endif
 
-//#ifndef __bg__
-    //On BGQ, immediate doesn't help, and the buf is always an SM buf.
-    //Now buf isn't always in SM on BGQ.  immediate doesn't provide speedup,
-    // but it does make a buffer available to use w/o calling malloc.
-
-    //Maybe this logic should be different for BGQ:
-    // Only use eager if < EAGER_LIMIT && not an SM buf.
 #ifdef __bg__
     //On BGQ, immediate doesn't provide a performance speedup.  But, the inline
     // buffer is still useful if the user's buf isn't in SM -- malloc/free can
@@ -1647,7 +1511,6 @@ static void HMPI_Local_isend(void* buf, int count, MPI_Datatype datatype,
 
             HMPI_STATS_ACCUMULATE(send_imm, 1);
         } else {
-            //show_backtrace();
             req->do_free = DO_FREE;
             req->buf = MALLOC(uint8_t, size);
             memcpy(req->buf, buf, size);
@@ -1663,7 +1526,6 @@ static void HMPI_Local_isend(void* buf, int count, MPI_Datatype datatype,
 
         HMPI_STATS_ACCUMULATE(send_imm, 1);
     } else if(buf != NULL && !IS_SM_BUF(buf)) {
-        //show_backtrace();
         req->do_free = DO_FREE;
         req->buf = MALLOC(uint8_t, size);
         memcpy(req->buf, buf, size);
@@ -1730,11 +1592,10 @@ int HMPI_Send(void* buf, int count, MPI_Datatype datatype, int dest, int tag, HM
         HMPI_Request_list* local_list = &g_tl_send_reqs;
         HMPI_Request_list* shared_list = g_tl_my_send_reqs;
 
-        MPI_Test(&req, &flag, MPI_STATUS_IGNORE);
-        while(flag == 0) {
+        do {
             HMPI_Progress(recv_reqs_head, local_list, shared_list);
             MPI_Test(&req, &flag, MPI_STATUS_IGNORE);
-        }
+        } while(flag == 0);
 
 #ifdef HMPI_STATS
         int type_size;
