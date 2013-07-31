@@ -1848,10 +1848,14 @@ int HMPI_Sendrecv(void *sendbuf, int sendcount, MPI_Datatype sendtype,
 {
     HMPI_Request req;
 
-    HMPI_Isend(sendbuf, sendcount, sendtype, dest, sendtag, comm, &req);
-    HMPI_Recv(recvbuf, recvcount, recvtype, source, recvtag, comm, status);
+    //Irecv/Send/Wait is chosen intentionally: this creates the possibility
+    // for sender-side acceleration in the synergistic protocol.  Doing
+    // Isend/Recv/Wait would be less likely to do so since it'll only poll
+    // the recv until that completes, then the send.  Irecv/Send polls both.
+    HMPI_Irecv(recvbuf, recvcount, recvtype, source, recvtag, comm, &req);
+    HMPI_Send(sendbuf, sendcount, sendtype, dest, sendtag, comm);
 
-    HMPI_Wait(&req, HMPI_STATUS_IGNORE);
+    HMPI_Wait(&req, status);
 }
 
 
