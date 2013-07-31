@@ -1856,6 +1856,7 @@ int HMPI_Sendrecv(void *sendbuf, int sendcount, MPI_Datatype sendtype,
     HMPI_Send(sendbuf, sendcount, sendtype, dest, sendtag, comm);
 
     HMPI_Wait(&req, status);
+    return MPI_SUCCESS;
 }
 
 
