@@ -1840,6 +1840,21 @@ int HMPI_Irecv(void* buf, int count, MPI_Datatype datatype, int source, int tag,
 }
 
 
+int HMPI_Sendrecv(void *sendbuf, int sendcount, MPI_Datatype sendtype, 
+                int dest, int sendtag,
+                void *recvbuf, int recvcount, MPI_Datatype recvtype, 
+                int source, int recvtag,
+                HMPI_Comm comm, HMPI_Status *status)
+{
+    HMPI_Request req;
+
+    HMPI_Isend(sendbuf, sendcount, sendtype, dest, sendtag, comm, &req);
+    HMPI_Recv(recvbuf, recvcount, recvtype, source, recvtag, comm, status);
+
+    HMPI_Wait(&req, HMPI_STATUS_IGNORE);
+}
+
+
 #ifdef ENABLE_OPI
 int OPI_Give(void** ptr, int count, MPI_Datatype datatype, int dest, int tag, HMPI_Comm comm, HMPI_Request* request)
 {

@@ -295,6 +295,8 @@ int HMPI_Recv(void *buf, int count, MPI_Datatype datatype, int source, int tag, 
 int HMPI_Isend(void *buf, int count, MPI_Datatype datatype, int dest, int tag, HMPI_Comm comm, HMPI_Request *req );
 int HMPI_Irecv(void *buf, int count, MPI_Datatype datatype, int source, int tag, HMPI_Comm comm, HMPI_Request *req );
 
+int HMPI_Sendrecv(void *sendbuf, int sendcount, MPI_Datatype sendtype, int dest, int sendtag, void *recvbuf, int recvcount, MPI_Datatype recvtype, int source, int recvtag, HMPI_Comm comm, HMPI_Status *status);
+
 int HMPI_Iprobe(int source, int tag, HMPI_Comm comm, int* flag, HMPI_Status* status);
 int HMPI_Probe(int source, int tag, HMPI_Comm comm, HMPI_Status* status);
 
@@ -442,6 +444,8 @@ int OPI_Take(void** ptr, int count, MPI_Datatype datatype, int rank, int tag, HM
 
 #define MPI_Isend HMPI_Isend
 #define MPI_Irecv HMPI_Irecv
+
+#define MPI_Sendrecv HMPI_Sendrecv
 
 #define MPI_Iprobe HMPI_Iprobe
 #define MPI_Probe HMPI_Probe
