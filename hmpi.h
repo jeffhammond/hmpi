@@ -240,10 +240,7 @@ typedef struct HMPI_Request_info {
         MPI_Request req;                     //ANY_SRC receives
     } u;
 
-//#ifndef __bg__
-    //BGQ will now possibly use this for non-SM message buffers.
     char eager[EAGER_LIMIT];
-//#endif
 } HMPI_Request_info;
 
 typedef HMPI_Request_info* HMPI_Request;

@@ -644,6 +644,12 @@ static inline void PROFILE_FINALIZE(void) {}
 #define PROFILE_STOP(var)
 #define PROFILE_TIMER_RESULTS(var)
 #define PROFILE_TIMER_SHOW(var)
+
+#define PROFILE_COUNTER(var)
+#define PROFILE_COUNTER_EXTERN(var)
+#define PROFILE_ACCUMULATE(var, c)
+#define PROFILE_COUNTER_RESULTS(var)
+#define PROFILE_COUNTER_SHOW(var)
 //#warning "PROFILING OFF"
 #endif
 

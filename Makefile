@@ -40,7 +40,7 @@ INCS=
 INCS+=-DENABLE_OPI=1
 #INCS+=-DHMPI_LOGCALLS=1 
 #INCS+=-DHMPI_CHECKSUM=1
-#INCS+=-D_PROFILE=1 -D_PROFILE_MPI=1
+#INCS+=-D_PROFILE=1
 #INCS+=-DFULL_PROFILE
 #INCS+= -DHMPI_STATS
 #INCS+=-D_PROFILE_PAPI_EVENTS=1
@@ -61,7 +61,7 @@ all: $(SRCS:%.c=%.o) sm_malloc.o
 #bgq: CFLAGS=-O3 -qhot=novector -qsimd=auto $(INCLUDE) -qinline=auto:level=5 -qassert=refalign -qlibansi -qlibmpi -qipa -qhot  -qprefetch=aggressive
 bgq: CC=mpixlc
 bgq: SRCS+=sm_malloc.c
-bgq: CFLAGS=-Os -qhot=novector -qsimd=auto -qlibansi -qlibmpi $(INCLUDE)
+bgq: CFLAGS=-O3 -qcompact -qhot=novector -qsimd=auto -qlibansi -qlibmpi $(INCLUDE)
 bgq: $(SRCS:%.c=%.o) sm_malloc.o
 	ar sr libhmpi-bgq.a $(SRCS:%.c=%.o)
 	rm $(SRCS:%.c=%.o)

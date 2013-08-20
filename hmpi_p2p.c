@@ -61,10 +61,8 @@
 #include "error.h"
 #include "lock.h"
 
-#ifdef USE_NUMA
-#include <numa.h>
-#endif
 
+#include "profile.h"
 
 #ifdef FULL_PROFILE
 #define FULL_PROFILE_INIT() PROFILE_INIT()
@@ -782,21 +780,14 @@ static inline void HMPI_Complete_recv(HMPI_Request recv_req, HMPI_Request send_r
 //For req->type == OPI_TAKE
 static inline void HMPI_Complete_take(HMPI_Request recv_req, HMPI_Request send_req)
 {
-    size_t send_size = send_req->size;
-    size_t size = recv_req->size;
-
-    //if(send_size < size) {
-        //Adjust receive count
-        recv_req->size = send_size;
-        size = send_size;
-    //}
-
 #if DEBUG
-    if(unlikely(send_size > size)) {
-        printf("%d ERROR recv message from %d of size %ld truncated to %ld\n", HMPI_COMM_WORLD->comm_rank, send_req->proc, send_size, size);
-        MPI_Abort(MPI_COMM_WORLD, 5);
+    if(unlikely(send_req->size > recv_req->size)) {
+        ERROR("%d recv message from %d of size %ld truncated to %ld\n",
+                HMPI_COMM_WORLD->comm_rank, send_req->proc, send_size, size);
     }
 #endif
+
+    recv_req->size = send_req->size;
 
 #if 0
     //TODO - check this out -- with immediate, the send side doesn't have to
@@ -847,7 +838,9 @@ static int HMPI_Progress_mpi(HMPI_Request req)
             MPI_Type_size(req->datatype, &type_size);
 
             req->tag = status.MPI_TAG;
-            req->size = count * type_size;
+
+            //This cast is costly but important for msgs >2/4gb
+            req->size = (size_t)count * (size_t)type_size;
         }
 
         //Not necessary: req will always be completed and free'd upon return.
@@ -1236,12 +1229,13 @@ int HMPI_Waitall(int count, HMPI_Request *requests, HMPI_Status *statuses)
     LOG_MPI_CALL("MPI_Waitall(count=%d, requests=%p, statuses=%p)",
             count, requests, statuses);
 
+#if 0
     for(int i = 0; i < count; i++) {
         HMPI_Status* p_st = (statuses == HMPI_STATUSES_IGNORE ? HMPI_STATUS_IGNORE : &statuses[i]);
         HMPI_Wait(&requests[i], p_st);
     }
+#endif
 
-#if 0
     HMPI_Item* recv_reqs_head = &g_recv_reqs_head;
     HMPI_Request_list* local_list = &g_tl_send_reqs;
     HMPI_Request_list* shared_list = g_tl_my_send_reqs;
@@ -1290,11 +1284,149 @@ int HMPI_Waitall(int count, HMPI_Request *requests, HMPI_Status *statuses)
             done += 1;
         }
     } while(done < count);
-#endif
+
     FULL_PROFILE_STOP(MPI_Waitall);
     FULL_PROFILE_START(MPI_Other);
     return MPI_SUCCESS;
 }
+
+
+#if 0
+int HMPI_Waitall(int count, HMPI_Request *requests, HMPI_Status *statuses)
+{
+    FULL_PROFILE_STOP(MPI_Other);
+    FULL_PROFILE_START(MPI_Waitall);
+    LOG_MPI_CALL("MPI_Waitall(count=%d, requests=%p, statuses=%p)",
+            count, requests, statuses);
+
+    //Split the request list into local and remote reqs.
+    //Strategy:
+    //Use a similar loop to complete all the local reqs.
+    // Don't progress MPI reqs, but do call a dummy Iprobe so MPI progresses.
+    //When all local reqs are complete, waitall on the MPI requests.
+    // Do the necessary completion work for all of these.
+    MPI_Request* remote_reqs = alloca(sizeof(MPI_Request) * count);
+    HMPI_Request* local_reqs = alloca(sizeof(HMPI_Request) * 128);
+    int num_remote_reqs = 0;
+    int num_local_reqs = 0;
+
+    for(int i = 0; i < count; i++) {
+        HMPI_Request req = requests[i];
+
+        if(req->type & (MPI_SEND | MPI_RECV)) {
+            remote_reqs[num_remote_reqs++] = req->ir.req;
+            //requests[i] = HMPI_REQUEST_NULL;
+        } else {
+            local_reqs[num_local_reqs++] = req;
+        }
+    }
+
+    HMPI_Item* recv_reqs_head = &g_recv_reqs_head;
+    HMPI_Request_list* local_list = &g_tl_send_reqs;
+    HMPI_Request_list* shared_list = g_tl_my_send_reqs;
+    int done;
+
+    //TODO - try doing a simple wait on each req in succession.
+        //MPI_Iprobe(MPI_ANY_SOURCE, MPI_ANY_TAG, MPI_COMM_WORLD,
+        //        &done, MPI_STATUS_IGNORE);
+    do {
+        HMPI_Progress(recv_reqs_head, local_list, shared_list);
+        done = 0;
+
+        //for(int i = 0; i < count; i++) {
+        for(int i = 0; i < num_local_reqs; i++) {
+            //HMPI_Request req = requests[i];
+            HMPI_Request req = local_reqs[i];
+
+            if(req == HMPI_REQUEST_NULL) {
+                done += 1;
+                continue;
+            }
+
+            if(get_reqstat(req) != HMPI_REQ_COMPLETE) {
+                //For some types, we can make progress and maybe complete the
+                // request, so try doing that.  Other types, just continue.
+                if(req->type == HMPI_SEND) {
+                    if(HMPI_Progress_send(req) != HMPI_REQ_COMPLETE) {
+                        continue;
+                    }
+#if 0
+                } else if(req->type & (MPI_SEND | MPI_RECV)) {
+                    if(!HMPI_Progress_mpi(req)) {
+                        continue;
+                    }
+#endif
+                } else {
+                    continue;
+                }
+            }
+
+            //req is complete but status not handled
+            if(statuses != HMPI_STATUSES_IGNORE) {
+                HMPI_Status* st = &statuses[i];
+                st->size = req->size;
+                st->MPI_SOURCE = req->proc;
+                st->MPI_TAG = req->tag;
+                st->MPI_ERROR = MPI_SUCCESS;
+            }
+
+            release_req(req);
+            //requests[i] = HMPI_REQUEST_NULL;
+            local_reqs[i] = HMPI_REQUEST_NULL;
+            done += 1;
+        }
+    //} while(done < count);
+    } while(done < num_local_reqs);
+
+
+    //Now, wait on all the MPI-level reqs.
+#if 0
+    MPI_Status* mpi_statuses = MPI_STATUSES_IGNORE;
+    if(statuses != HMPI_STATUSES_IGNORE) {
+        mpi_statuses = alloca(sizeof(MPI_Status) * count);
+    }
+#endif
+
+    //MPI_Waitall(count, remote_reqs, mpi_statuses);
+    MPI_Waitall(num_remote_reqs, remote_reqs, MPI_STATUSES_IGNORE);
+
+
+#if 0
+    //Now all the requests are done -- but need to update status for MPI reqs.
+    if(statuses != HMPI_STATUSES_IGNORE) {
+        for(int i = 0; i < count; i++) {
+            HMPI_Request req = requests[i];
+
+            if(req->type & (MPI_SEND | MPI_RECV)) {
+                HMPI_Status* st = &statuses[i];
+                MPI_Status* mpi_st = &mpi_statuses[i];
+
+                if(req->type == MPI_RECV) {
+                    int count;
+                    int type_size;
+
+                    MPI_Get_count(mpi_st, req->datatype, &count);
+                    MPI_Type_size(req->datatype, &type_size);
+
+                    st->size = (size_t)count * (size_t)type_size;
+                } else {
+                    st->size = req->size;
+                }
+
+                st->MPI_SOURCE = req->proc;
+                st->MPI_TAG = mpi_st->MPI_TAG;
+                st->MPI_ERROR = MPI_SUCCESS;
+            }
+        }
+    }
+#endif
+
+    //memset(requests, 0, sizeof(HMPI_Request) * count);
+    FULL_PROFILE_STOP(MPI_Waitall);
+    FULL_PROFILE_START(MPI_Other);
+    return MPI_SUCCESS;
+}
+#endif
 
 
 int HMPI_Waitany(int count, HMPI_Request* requests, int* index, HMPI_Status *status)
@@ -1719,6 +1851,12 @@ static void HMPI_Local_irecv(void* buf, int count, MPI_Datatype datatype,
     req->datatype = datatype;
 
     add_recv_req(req);
+
+    HMPI_Item* recv_reqs_head = &g_recv_reqs_head;
+    HMPI_Request_list* local_list = &g_tl_send_reqs;
+    HMPI_Request_list* shared_list = g_tl_my_send_reqs;
+
+    HMPI_Progress(recv_reqs_head, local_list, shared_list);
 }
 
 
@@ -1824,7 +1962,6 @@ int HMPI_Irecv(void* buf, int count, MPI_Datatype datatype, int source, int tag,
         req->stat = HMPI_REQ_ACTIVE;
         req->type = MPI_RECV;
         req->datatype = datatype;
-
     }
 
 #ifdef HMPI_STATS
@@ -1970,6 +2107,12 @@ int OPI_Take(void** ptr, int count, MPI_Datatype datatype, int source, int tag, 
         req->type = OPI_TAKE;
 
         add_recv_req(req);
+
+        HMPI_Item* recv_reqs_head = &g_recv_reqs_head;
+        HMPI_Request_list* local_list = &g_tl_send_reqs;
+        HMPI_Request_list* shared_list = g_tl_my_send_reqs;
+
+        HMPI_Progress(recv_reqs_head, local_list, shared_list);
     } else { //Recv off-node, but not ANY_SOURCE
         int type_size;
         MPI_Type_size(datatype, &type_size);

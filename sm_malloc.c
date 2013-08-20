@@ -70,7 +70,7 @@ static mspace sm_mspace = NULL;
 //static char sm_temp[TEMP_SIZE] = {0};
 
 
-//#define USE_PROC_MAPS 1
+#define USE_PROC_MAPS 1
 
 #ifdef USE_PROC_MAPS
 //Some systems randomize the address returned by mmap(), so it won't be the
