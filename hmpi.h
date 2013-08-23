@@ -196,6 +196,9 @@ typedef HMPI_Comm_info* HMPI_Comm;
 
 extern HMPI_Comm HMPI_COMM_WORLD;
 extern HMPI_Comm HMPI_COMM_NODE;
+//extern HMPI_Comm HMPI_COMM_CACHE;
+extern HMPI_Comm HMPI_COMM_NETWORK;
+
 
 #define HMPI_STATUS_IGNORE NULL
 #define HMPI_STATUSES_IGNORE NULL
@@ -396,6 +399,18 @@ int OPI_Take(void** ptr, int count, MPI_Datatype datatype, int rank, int tag, HM
 
 #define MPI_COMM_WORLD HMPI_COMM_WORLD
 
+#ifdef MPI_COMM_NODE
+#undef MPI_COMM_NODE
+#endif
+
+#define MPI_COMM_NODE HMPI_COMM_NODE
+
+#ifdef MPI_COMM_NETWORK
+#undef MPI_COMM_NETWORK
+#endif
+
+#define MPI_COMM_NETWORK HMPI_COMM_NETWORK
+
 #ifdef MPI_INFO_NULL
 #undef MPI_INFO_NULL
 #endif
@@ -431,11 +446,6 @@ int OPI_Take(void** ptr, int count, MPI_Datatype datatype, int rank, int tag, HM
 #define MPI_Comm_rank HMPI_Comm_rank
 #define MPI_Comm_size HMPI_Comm_size
 
-//These are HMPI specific routines, we define for consistency
-#define MPI_Comm_local HMPI_Comm_local
-#define MPI_Comm_thread HMPI_Comm_thread
-#define MPI_Barrier_local HMPI_Barrier_local
-
 #define MPI_Send HMPI_Send
 #define MPI_Recv HMPI_Recv
 
@@ -461,18 +471,6 @@ int OPI_Take(void** ptr, int count, MPI_Datatype datatype, int rank, int tag, HM
 #define MPI_Comm_dup HMPI_Comm_dup
 #define MPI_Comm_free HMPI_Comm_free
 
-//#define MPI_Barrier HMPI_Barrier
-//#define MPI_Reduce HMPI_Reduce
-//#define MPI_Allreduce HMPI_Allreduce
-//#define MPI_Scan HMPI_Scan
-//#define MPI_Bcast HMPI_Bcast
-//#define MPI_Scatter HMPI_Scatter
-//#define MPI_Gather HMPI_Gather
-//#define MPI_Gatherv HMPI_Gatherv
-//#define MPI_Allgather HMPI_Allgather
-//#define MPI_Allgatherv HMPI_Allgatherv
-//#define MPI_Alltoall HMPI_Alltoall
-
 #define MPI_Cart_coords(comm, rank, maxdims, coords) \
     MPI_Cart_coords((comm)->comm, rank, maxdims, coords)
 
@@ -491,18 +489,8 @@ int OPI_Take(void** ptr, int count, MPI_Datatype datatype, int rank, int tag, HM
 
 #define MPI_Barrier(c) MPI_Barrier((c)->comm)
 
-//#define MPI_Node_barrier(c) MPI_Barrier((c)->node_comm)
-
-static inline int MPI_Node_bcast(void* buffer, int count, MPI_Datatype datatype, int root, MPI_Comm c)
-{
-    return MPI_Bcast(buffer, count, datatype, root, (c)->node_comm);
-}
-
 #define MPI_Bcast(buffer, count, datatype, root, c) \
     MPI_Bcast(buffer, count, datatype, root, (c)->comm)
-
-//#define MPI_Node_bcast(buffer, count, datatype, root, c) \
-//    MPI_Bcast(buffer, count, datatype, root, (c)->node_comm)
 
 #define MPI_Reduce(sendbuf, recvbuf, count, datatype, op, root, c) \
     MPI_Reduce(sendbuf, recvbuf, count, datatype, op, root, (c)->comm)
@@ -542,10 +530,6 @@ static inline int MPI_Node_bcast(void* buffer, int count, MPI_Datatype datatype,
 
 #define MPI_Alltoallw(sbuf, scnts, sdispls, stypes, rbuf, rcnts, rdispls, rtypes, c) \
     MPI_Alltoallw(sbuf, scnts, sdispls, stypes, rbuf, rcnts, rdispls, rtypes, (c)->comm)
-
-//These are HMPI specific routines, we define for consistency
-//#define MPI_Alltoall_local HMPI_Alltoall_local
-//#define MPI_Alltoall_local2 HMPI_Alltoall_local2
 
 #define MPI_Abort HMPI_Abort
 #define MPI_Finalize HMPI_Finalize

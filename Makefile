@@ -52,7 +52,7 @@ MAIN=main.c
 HDRS=hmpi.h barrier.h lock.h profile2.h
 
 
-all: INCS+=-DUSE_NUMA=1 
+all: INCS+=-DUSE_NUMA=1 -DUSE_MCS=1
 all: SRCS+=sm_malloc.c
 all: $(SRCS:%.c=%.o) sm_malloc.o
 	ar sr libhmpi.a $(SRCS:%.c=%.o)

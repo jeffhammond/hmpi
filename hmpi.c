@@ -1,5 +1,7 @@
 /* Copyright (c) 2010-2013 The Trustees of Indiana University.
- * All rights reserved.
+ *                         All rights reserved.
+ * Copyright (c) 2010-2013 Lawrence Livermore National Security, LLC.
+ *                         All rights reserved. LLNL-CODE-642002
  * 
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions are met:
@@ -11,9 +13,9 @@
  *   this list of conditions and the following disclaimer in the documentation
  *   and/or other materials provided with the distribution.
  * 
- * - Neither the Indiana University nor the names of its contributors may be
- *   used to endorse or promote products derived from this software without
- *   specific prior written permission.
+ * - Neither the Indiana University, LLNS/LLNL, nor the names of its
+ *   contributors may be used to endorse or promote products derived from this
+ *   software without specific prior written permission.
  * 
  * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
  * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
@@ -26,6 +28,31 @@
  * CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
  * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
  * POSSIBILITY OF SUCH DAMAGE.
+ * 
+ * Additional BSD Notice
+ * 
+ * 1. This notice is required to be provided under our contract with the U.S.
+ *    Department of Energy (DOE). This work was supported in part by the
+ *    Department of Energy X-Stack program and the Early Career award program.
+ *    It was partially performed under the auspices of the U.S. Department of
+ *    Energy by Lawrence Livermore National Laboratory under Contract
+ *    DE-AC52-07NA27344.
+ * 
+ * 2. Neither the United States Government nor Lawrence Livermore National
+ *    Security, LLC nor any of their employees, makes any warranty, express
+ *    or implied, or assumes any liability or responsibility for the accuracy,
+ *    completeness, or usefulness of any information, apparatus, product, or
+ *    process disclosed, or represents that its use would not infringe
+ *    privately-owned rights.
+ * 
+ * 3. Also, reference herein to any specific commercial products, process, or
+ *    services by trade name, trademark, manufacturer or otherwise does not
+ *    necessarily constitute or imply its endorsement, recommendation, or
+ *    favoring by the United States Government or Lawrence Livermore National
+ *    Security, LLC. The views and opinions of authors expressed herein do not
+ *    necessarily state or reflect those of the United States Government or
+ *    Lawrence Livermore National Security, LLC, and shall not be used for
+ *    advertising or product endorsement purposes.
  */
 #ifdef MPI
 #define MPI_FOO
@@ -173,6 +200,12 @@ void log_mpi_call(char* fmt, ...)
 #endif
 
 
+HMPI_Comm HMPI_COMM_WORLD;
+HMPI_Comm HMPI_COMM_NODE;
+HMPI_Comm HMPI_COMM_CACHE;
+HMPI_Comm HMPI_COMM_NETWORK;
+
+
 // Internal global structures
 
 //Pointer to a shared context counter.  This counter is used to obtain new
@@ -181,8 +214,6 @@ void log_mpi_call(char* fmt, ...)
 // differentiate communicators.
 static int* g_comm_context = NULL;
                             
-extern HMPI_Comm HMPI_COMM_WORLD;
-
 
 //Each thread has a list of send and receive requests.
 //The receive requests are managed privately by the owning thread.
@@ -194,7 +225,7 @@ extern HMPI_Item g_recv_reqs_head;
 extern HMPI_Item* g_recv_reqs_tail;
 
 
-#ifndef __bg__
+#ifdef USE_MCS
 extern mcs_qnode_t* g_lock_q;                   //Q node for lock
 #endif
 extern HMPI_Request_list* g_send_reqs;   //Shared: Senders add sends here
@@ -296,6 +327,78 @@ void print_numa(void)
     free(data);
 }
 #endif
+
+
+#if 0
+#include <hwloc.h>
+
+void print_hwloc(void)
+{
+    hwloc_topology_t topology;
+
+    hwloc_topology_init(&topology);
+    hwloc_topology_load(topology);
+
+    int numcores = hwloc_get_nbobjs_by_type(topology, HWLOC_OBJ_CORE);
+    int numpus = hwloc_get_nbobjs_by_type(topology, HWLOC_OBJ_PU);
+    int numsockets = hwloc_get_nbobjs_by_type(topology, HWLOC_OBJ_SOCKET);
+    int numnumas = hwloc_get_nbobjs_by_type(topology, HWLOC_OBJ_NODE);
+
+    //WARNING("numcores %d numpus %d numsockets %d numnumas %d",
+    //        numcores, numpus, numsockets, numnumas);
+
+    char str[1024] = {0};
+    hwloc_cpuset_t cpuset = hwloc_bitmap_alloc();
+
+    //This gives the core this rank is pinned to.
+    hwloc_get_cpubind(topology, cpuset, HWLOC_CPUBIND_PROCESS);
+    int ret = hwloc_bitmap_snprintf(str, 1023, cpuset);
+
+    WARNING("rank %d bitmap %s (%d)", HMPI_COMM_WORLD->comm_rank, str, ret);
+
+    hwloc_obj_t obj;
+#if 0
+    hwloc_obj_t obj = hwloc_get_obj_covering_cpuset(topology, cpuset);
+
+    while(obj != NULL) {
+
+        memset(str, 1024, 0);
+        hwloc_obj_type_snprintf(str, 1023, obj, 1);
+
+        WARNING("rank %d obj type %s", HMPI_COMM_WORLD->comm_rank, str);
+
+
+        memset(str, 1024, 0);
+        hwloc_obj_attr_snprintf(str, 1024, obj, "@", 1);
+
+        WARNING("rank %d obj attr %s", HMPI_COMM_WORLD->comm_rank, str);
+        obj = hwloc_get_child_covering_cpuset(topology, cpuset, obj);
+    }
+#endif
+
+    hwloc_topology_restrict(topology, cpuset, 0);
+
+    obj = hwloc_get_next_obj_by_type(topology, HWLOC_OBJ_PU, NULL);
+
+    if(obj == NULL) {
+        WARNING("get next obj by type was NULL");
+    } else {
+        WARNING("%d PU obj name %s logical_index %d depth %d",
+            HMPI_COMM_WORLD->comm_rank, obj->name, obj->logical_index, obj->depth);
+    }
+
+    //OK, should be able to use this to get a numa node ID.
+    obj = hwloc_get_next_obj_by_type(topology, HWLOC_OBJ_NODE, NULL);
+
+    if(obj == NULL) {
+        WARNING("get next obj by type was NULL");
+    } else {
+        WARNING("%d NODE obj name %s logical_index %d os_index %d depth %d",
+            HMPI_COMM_WORLD->comm_rank, obj->name, obj->logical_index, obj->os_index, obj->depth);
+    }
+}
+#endif
+
 
 
 //Initialize a new communicator structure.
@@ -502,6 +605,18 @@ int HMPI_Init(int *argc, char ***argv)
     HMPI_COMM_WORLD->comm = MPI_COMM_WORLD;
     init_communicator(HMPI_COMM_WORLD);
 
+    //Borrow HMPI_COMM_WORLD's node_comm.
+    HMPI_COMM_NODE = (HMPI_Comm_info*)MALLOC(HMPI_Comm_info, 1);
+    //HMPI_COMM_NODE->comm = HMPI_COMM_WORLD->node_comm;
+    MPI_Comm_dup(HMPI_COMM_WORLD->node_comm, &HMPI_COMM_NODE->comm);
+    init_communicator(HMPI_COMM_NODE);
+    
+    //Borrow HMPI_COMM_WORLD's net_comm.
+    HMPI_COMM_NETWORK = (HMPI_Comm_info*)MALLOC(HMPI_Comm_info, 1);
+    //HMPI_COMM_NETWORK->comm = HMPI_COMM_WORLD->node_comm;
+    MPI_Comm_dup(HMPI_COMM_WORLD->net_comm, &HMPI_COMM_NETWORK->comm);
+    init_communicator(HMPI_COMM_NODE);
+
 
     //Set up intra-node shared memory structures.
     if(HMPI_COMM_WORLD->node_rank == 0) {
@@ -515,7 +630,7 @@ int HMPI_Init(int *argc, char ***argv)
     // Initialize request lists and lock
     g_recv_reqs_tail = &g_recv_reqs_head;
 
-#ifndef __bg__
+#ifdef USE_MCS
     //Except on BGQ, allocate a SHARED lock Q for use with MCS locks.
     //Used in Qing sends on the receiver and clearing that Q.
     g_lock_q = MALLOC(mcs_qnode_t, 1);

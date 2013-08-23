@@ -70,7 +70,9 @@ static mspace sm_mspace = NULL;
 //static char sm_temp[TEMP_SIZE] = {0};
 
 
+#ifndef __APPLE__ //OSX doesn't have /proc at all
 #define USE_PROC_MAPS 1
+#endif
 
 #ifdef USE_PROC_MAPS
 //Some systems randomize the address returned by mmap(), so it won't be the

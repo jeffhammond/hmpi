@@ -1,6 +1,6 @@
-CC=mpicc -std=gnu99 
+CC=mpixlc
 
-WARN=-Wall -Wuninitialized -Winline #-Wno-unused-function
+WARN=#-Wall -Wuninitialized -Winline #-Wno-unused-function
 CFLAGS+=$(WARN) -O0 -g
 
 HMPI=..
@@ -19,10 +19,10 @@ all: test_comm_dup test_get_count
 
 
 test_comm_dup: test_comm_dup.c
-	$(CC) test_comm_dup.c -o test_comm_dup $(CFLAGS) $(INCS) -I$(HMPI) -L$(HMPI) -lhmpi
+	$(CC) test_comm_dup.c -o test_comm_dup $(CFLAGS) $(INCS) -I$(HMPI) -L$(HMPI) -lhmpi-bgq -Wl,--allow-multiple-definition
 
 test_get_count: test_get_count.c
-	$(CC) test_get_count.c -o test_get_count $(CFLAGS) $(INCS) -I$(HMPI) -L$(HMPI) -lhmpi
+	$(CC) test_get_count.c -o test_get_count $(CFLAGS) $(INCS) -I$(HMPI) -L$(HMPI) -lhmpi-bgq -Wl,--allow-multiple-definition
 
 clean:
 	rm -f test_comm_dup test_get_count

@@ -141,7 +141,6 @@ HMPI_STATS_COUNTER_EXTERN(recv_mem);
 HMPI_STATS_COUNTER_EXTERN(recv_anysrc);
 
 
-HMPI_Comm HMPI_COMM_WORLD;
 
 
 // Debugging functionality
@@ -199,7 +198,7 @@ HMPI_Item g_recv_reqs_head = {NULL};
 HMPI_Item* g_recv_reqs_tail = NULL;
 
 
-#ifndef __bg__
+#ifdef USE_MCS
 mcs_qnode_t* g_lock_q;                   //Q node for lock.
 #endif
 HMPI_Request_list* g_send_reqs = NULL;   //Shared: Senders add sends here
@@ -273,11 +272,11 @@ static inline void add_send_req(HMPI_Request_list* req_list,
     item->next = NULL;
 #endif
 
-#ifdef __bg__
-    LOCK_ACQUIRE(&req_list->lock);
-#else
+#ifdef USE_MCS
     mcs_qnode_t* q = g_lock_q;  //Could fold this back into macros..
     __LOCK_ACQUIRE(&req_list->lock, q);
+#else
+    LOCK_ACQUIRE(&req_list->lock);
 #endif
 
     //NOTE -- On BG/Q other cores can see these two writes in a different order
@@ -286,10 +285,10 @@ static inline void add_send_req(HMPI_Request_list* req_list,
     req_list->tail->next = item;
     req_list->tail = item;
 
-#ifdef __bg__
-    LOCK_RELEASE(&req_list->lock);
-#else
+#ifdef USE_MCS
     __LOCK_RELEASE(&req_list->lock, q);
+#else
+    LOCK_RELEASE(&req_list->lock);
 #endif
 }
 
@@ -330,11 +329,11 @@ static inline void update_send_reqs(HMPI_Request_list* local_list, HMPI_Request_
         local_list->tail->next = shared_list->head.next;
 #endif
 
-#ifdef __bg__
-        LOCK_ACQUIRE(&shared_list->lock);
-#else
+#ifdef USE_MCS
         mcs_qnode_t* q = g_lock_q; //Could fold this back into macros..;
         __LOCK_ACQUIRE(&shared_list->lock, q);
+#else
+        LOCK_ACQUIRE(&shared_list->lock);
 #endif
 
 #ifndef __x86_64__ //NOT x86
@@ -346,10 +345,10 @@ static inline void update_send_reqs(HMPI_Request_list* local_list, HMPI_Request_
         tail = shared_list->tail;
         shared_list->tail = &shared_list->head;
 
-#ifdef __bg__
-        LOCK_RELEASE(&shared_list->lock);
-#else
+#ifdef USE_MCS
         __LOCK_RELEASE(&shared_list->lock, q);
+#else
+        LOCK_RELEASE(&shared_list->lock);
 #endif
 
         //This is safe, the pointers involved here are now only accessible by
