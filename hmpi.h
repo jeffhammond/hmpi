@@ -470,6 +470,7 @@ int OPI_Take(void** ptr, int count, MPI_Datatype datatype, int rank, int tag, HM
 #define MPI_Comm_create HMPI_Comm_create
 #define MPI_Comm_dup HMPI_Comm_dup
 #define MPI_Comm_free HMPI_Comm_free
+#define MPI_Comm_split HMPI_Comm_split
 
 #define MPI_Cart_coords(comm, rank, maxdims, coords) \
     MPI_Cart_coords((comm)->comm, rank, maxdims, coords)

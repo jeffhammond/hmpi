@@ -804,3 +804,18 @@ int HMPI_Comm_free(HMPI_Comm* comm)
     return MPI_SUCCESS;
 }
 
+
+int HMPI_Comm_split(HMPI_Comm comm, int color, int key, HMPI_Comm* newcomm)
+{
+    HMPI_Comm c = MALLOC(HMPI_Comm_info, 1);
+
+    //Split the old comm's MPI comm into the new HMPI comm.
+    MPI_Comm_split(comm->comm, color, key, &c->comm);
+
+    //Initialize the rest of hte HMPI comm.
+    init_communicator(c);
+
+    *newcomm = c;
+    return MPI_SUCCESS;
+}
+

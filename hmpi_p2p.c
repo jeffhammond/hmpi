@@ -1002,6 +1002,7 @@ static int HMPI_Test_internal(HMPI_Request* request, HMPI_Status* status)
             status->size = req->size;
             status->MPI_SOURCE = req->proc;
             status->MPI_TAG = req->tag;
+            //MPI 1.1 sec 3.2.5: Set MPI_ERROR only in multi-completion fns.
             status->MPI_ERROR = MPI_SUCCESS;
         }
 
@@ -1169,7 +1170,8 @@ int HMPI_Wait(HMPI_Request *request, HMPI_Status *status)
             status->size = (size_t)count * (size_t)type_size;
             status->MPI_SOURCE = req->proc;
             status->MPI_TAG = st.MPI_TAG;
-            status->MPI_ERROR = MPI_SUCCESS;
+            //MPI 1.1 sec 3.2.5: Set MPI_ERROR only in multi-completion fns.
+            //status->MPI_ERROR = MPI_SUCCESS;
         }
     } else {
         //Waiting for all types of local requests.
@@ -1200,7 +1202,8 @@ int HMPI_Wait(HMPI_Request *request, HMPI_Status *status)
             status->size = req->size;
             status->MPI_SOURCE = req->proc;
             status->MPI_TAG = req->tag;
-            status->MPI_ERROR = MPI_SUCCESS;
+            //MPI 1.1 sec 3.2.5: Set MPI_ERROR only in multi-completion fns.
+            //status->MPI_ERROR = MPI_SUCCESS;
         }
     }
 
@@ -1550,7 +1553,8 @@ int HMPI_Iprobe(int source, int tag, HMPI_Comm comm, int* flag, HMPI_Status* sta
             status->size = send_req->size;
             status->MPI_SOURCE = send_req->proc;
             status->MPI_TAG = send_req->tag;
-            status->MPI_ERROR = MPI_SUCCESS;
+            //MPI 1.1 sec 3.2.5: Set MPI_ERROR only in multi-completion fns.
+            //status->MPI_ERROR = MPI_SUCCESS;
         }
     } else {
         //Probe off-node (MPI)
@@ -1563,7 +1567,8 @@ int HMPI_Iprobe(int source, int tag, HMPI_Comm comm, int* flag, HMPI_Status* sta
             status->size = count;
             status->MPI_SOURCE = st.MPI_SOURCE;
             status->MPI_TAG = st.MPI_TAG;
-            status->MPI_ERROR = st.MPI_ERROR;
+            //MPI 1.1 sec 3.2.5: Set MPI_ERROR only in multi-completion fns.
+            //status->MPI_ERROR = st.MPI_ERROR;
         }
     }
 
@@ -1888,7 +1893,8 @@ int HMPI_Recv(void* buf, int count, MPI_Datatype datatype, int source, int tag, 
             status->size = req->size;
             status->MPI_SOURCE = req->proc;
             status->MPI_TAG = req->tag;
-            status->MPI_ERROR = MPI_SUCCESS;
+            //MPI 1.1 sec 3.2.5: Set MPI_ERROR only in multi-completion fns.
+            //status->MPI_ERROR = MPI_SUCCESS;
         }
 
         release_req(req);
