@@ -886,6 +886,55 @@ static int HMPI_Progress_mpi_any(HMPI_Request req)
 }
 
 
+//#define HMPI_PRINTQUEUE 1
+#ifdef HMPI_PRINTQUEUE
+#include <time.h>
+
+void printqueue(HMPI_Item* recv_reqs_head, HMPI_Request_list* local_list)
+{
+    static time_t last_time = 0;
+    time_t cur_time = time(NULL);
+
+    //Don't print more than once every 3 seconds.
+    if(cur_time - last_time < 3) {
+        return;
+    }
+
+    last_time = cur_time;
+
+    HMPI_Item* cur;
+
+    WARNING("%d printing reqs", HMPI_COMM_WORLD->comm_rank);
+
+    //Print the receive requests, if any.
+    if(recv_reqs_head->next == NULL) {
+        WARNING("%d no recv reqs", HMPI_COMM_WORLD->comm_rank);
+    } else {
+        for(cur = recv_reqs_head->next; cur != NULL; cur = cur->next) {
+            HMPI_Request req = (HMPI_Request)cur;
+
+            WARNING("%d recv req proc %d tag %d context %d size %ld",
+                    HMPI_COMM_WORLD->comm_rank, req->proc,
+                    req->tag, req->context, req->size);
+        }
+    }
+
+    //Print the incoming send requests, if any.
+    if(local_list->head.next == NULL) {
+        WARNING("%d no send reqs", HMPI_COMM_WORLD->comm_rank);
+    } else {
+        for(cur = local_list->head.next; cur != NULL; cur = cur->next) {
+            HMPI_Request req = (HMPI_Request)cur;
+
+            WARNING("%d send req proc %d tag %d context %d size %ld",
+                    HMPI_COMM_WORLD->comm_rank, req->proc,
+                    req->tag, req->context, req->size);
+        }
+    }
+}
+#endif
+
+
 //Progress local receive requests.
 //TODO - this could benefit from BGQ nops.
 static void HMPI_Progress(HMPI_Item* recv_reqs_head,
@@ -897,6 +946,10 @@ static void HMPI_Progress(HMPI_Item* recv_reqs_head,
     //TODO - poll MPI here?
 
     update_send_reqs(local_list, shared_list);
+
+#ifdef HMPI_PRINTQUEUE
+    printqueue(recv_reqs_head, local_list);
+#endif
 
     //Progress receive requests.
     //We remove items from the list, but they are still valid; nothing in this

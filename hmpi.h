@@ -359,6 +359,7 @@ int HMPI_Cart_sub(HMPI_Comm comm, int* remain_dims, HMPI_Comm* newcomm);
 int HMPI_Comm_create(HMPI_Comm comm, MPI_Group group, HMPI_Comm* newcomm);
 int HMPI_Comm_dup(HMPI_Comm comm, HMPI_Comm* newcomm);
 int HMPI_Comm_free(HMPI_Comm* comm);
+int HMPI_Comm_split(HMPI_Comm comm, int color, int key, HMPI_Comm* newcomm);
 
 //TODO NOT IMPLEMENTED YET
 // Added to catch apps that call these routines.
