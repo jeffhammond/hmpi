@@ -15,7 +15,7 @@ INCS=#-D_PROFILE=1 -D_PROFILE_MPI=1 -D_PROFILE_PAPI_EVENTS=1 #-DFULL_PROFILE
 
 #all: INCS+=-DUSE_NUMA=1 
 #all: SRCS+=sm_malloc.c
-all: test_comm_dup test_get_count test_comm_split
+all: test_comm_dup test_get_count test_comm_split test_comm_node
 
 
 test_comm_dup: test_comm_dup.c
@@ -27,6 +27,9 @@ test_comm_split: test_comm_split.c
 test_get_count: test_get_count.c
 	$(CC) test_get_count.c -o test_get_count $(CFLAGS) $(INCS) -I$(HMPI) -L$(HMPI) -lhmpi
 
+test_comm_node: test_comm_node.c
+	$(CC) test_comm_node.c -o test_comm_node $(CFLAGS) $(INCS) -I$(HMPI) -L$(HMPI) -lhmpi
+
 clean:
-	rm -f test_comm_dup test_get_count test_comm_split
+	rm -f test_comm_dup test_get_count test_comm_split test_comm_node
 

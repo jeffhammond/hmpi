@@ -1651,14 +1651,31 @@ int HMPI_Probe(int source, int tag, HMPI_Comm comm, HMPI_Status* status)
 //Other special values like MPI_PROC_NULL return MPI_UNDEFINED.
 inline void HMPI_Comm_node_rank(const HMPI_Comm comm, const int rank, int* node_rank)
 {
-    int diff = rank - comm->node_root;
+    if(comm == HMPI_COMM_WORLD) {
+        int diff = rank - comm->node_root;
 
-    if(diff >= 0 && diff < comm->node_size) {
-        *node_rank = diff;
-    } else if(unlikely(rank == MPI_ANY_SOURCE)) {
-        *node_rank = MPI_ANY_SOURCE;
+        if(diff >= 0 && diff < comm->node_size) {
+            *node_rank = diff;
+        } else if(unlikely(rank == MPI_ANY_SOURCE)) {
+            *node_rank = MPI_ANY_SOURCE;
+        } else {
+            *node_rank = MPI_UNDEFINED;
+        }
     } else {
-        *node_rank = MPI_UNDEFINED;
+        if(unlikely(rank == MPI_ANY_SOURCE)) {
+            *node_rank = MPI_ANY_SOURCE;
+        } else if(unlikely(rank == MPI_PROC_NULL)) {
+            *node_rank = MPI_UNDEFINED;
+        } else {
+            MPI_Group node_grp;
+            MPI_Group comm_grp;
+            int trans_rank;
+
+            MPI_Comm_group(HMPI_COMM_NODE->comm, &node_grp);
+            MPI_Comm_group(comm->comm, &comm_grp);
+
+            MPI_Group_translate_ranks(comm_grp, 1, &rank, node_grp, node_rank);
+        }
     }
 }
 

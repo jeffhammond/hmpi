@@ -37,18 +37,18 @@ int main(int argc, char** argv)
 
     int rank;
     int size;
+    int dup_rank;
+    int dup_size;
 
     MPI_Comm_rank(MPI_COMM_WORLD, &rank);
     MPI_Comm_size(MPI_COMM_WORLD, &size);
 
     MPI_Comm dup;
 
-    //Split COMM_WORLD into two halves, with the first size/2 ranks in a comm.
+    //Split COMM_WORLD into halves, with the first size/2 ranks in a comm.
     int color = rank < (size / 2);
     MPI_Comm_split(MPI_COMM_WORLD, color, 0, &dup);
 
-    int dup_rank;
-    int dup_size;
 
     MPI_Comm_rank(dup, &dup_rank);
     MPI_Comm_size(dup, &dup_size);
@@ -106,9 +106,52 @@ int main(int argc, char** argv)
         }
     }
 
-    //if(rank == 0) {
-        WARNING("%d PASS!", rank);
-    //}
+
+    MPI_Comm_free(&dup);
+    MPI_Barrier(MPI_COMM_WORLD);
+    WARNING("%d second phase!", rank);
+
+    //Split COMM_WORLD into even/odd halves.
+    MPI_Comm_split(MPI_COMM_WORLD, rank % 2, 0, &dup);
+
+    MPI_Comm_rank(dup, &dup_rank);
+    MPI_Comm_size(dup, &dup_size);
+
+    //Check that the rank in the split comm is correct.
+    if(rank / 2 != dup_rank) {
+            ERROR("WORLD rank %d dup rank %d should be %d", rank, dup_rank, rank / 2);
+    }
+
+
+    for(int i = 1; i <= dup_size; i++) {
+        int sbuf[2] = {17, 29};
+        int rbuf[2] = {-1, -1};
+
+        int send_rank = (dup_rank + i) % dup_size;
+        int recv_rank = ((dup_rank - i) + dup_size) % dup_size;
+
+        WARNING("WORLD rank %d dup rank %d send %d recv %d",
+                rank, dup_rank, send_rank, recv_rank);
+
+        MPI_Isend(sbuf, 2, MPI_INT, 
+                (dup_rank + i) % dup_size, i, dup, &sreq);
+
+        MPI_Recv(rbuf, 2, MPI_INT, 
+                ((dup_rank - i) + dup_size) % dup_size, i, dup,
+                MPI_STATUS_IGNORE);
+
+        MPI_Wait(&sreq, MPI_STATUS_IGNORE);
+
+        if(rbuf[0] != 17 || rbuf[1] != 29) {
+            ERROR("%d dup_rank %d received %d %d should be %d %d",
+                    rank, dup_rank, rbuf[0], rbuf[1], 17, 29);
+        }
+    }
+
+
+    MPI_Comm_free(&dup);
+
+    WARNING("%d PASS!", rank);
     MPI_Finalize();
     return 0;
 }

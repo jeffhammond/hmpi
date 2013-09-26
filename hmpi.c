@@ -454,12 +454,7 @@ void init_communicator(HMPI_Comm comm)
     {
         MPI_Group node_group;
         MPI_Group comm_group;
-        //MPI_Comm_group(comm->node_comm, &node_group);
-        //Yes, this really should be HMPI_COMM_WORLD!
-        //HMPI_Comm_node_rank uses node_root to translate a comm rank into a
-        // node rank.  Regardless of how ranks are mapped in the source comm,
-        // the node ranks do not change.
-        MPI_Comm_group(HMPI_COMM_WORLD->node_comm, &node_group);
+        MPI_Comm_group(comm->node_comm, &node_group);
         MPI_Comm_group(comm->comm, &comm_group);
 
         int base_rank = 0;
