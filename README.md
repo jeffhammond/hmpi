@@ -4,7 +4,7 @@ To get started with using HMPI, see the guide on the wiki.
 
 A description of the research that has gone into HMPI is available in several publications. Most recently is Andrew Friedley's Ph.D. thesis:
 
-[Shared Memory Optimizations for Distributed Memory Programming Models](https://hmpi.googlecode.com/svn/afriedle-thesis.pdf)
+[Shared Memory Optimizations for Distributed Memory Programming Models](https://github.com/jeffhammond/hmpi/blob/master/afriedle-thesis.pdf)
 
 Publications include:
 
